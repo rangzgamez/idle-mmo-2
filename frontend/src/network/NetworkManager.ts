@@ -79,7 +79,11 @@ export class NetworkManager {
             console.log('NetworkManager: Received "playerLeft"', data);
             EventBus.emit('player-left', data);
         });
-
+        // --- Make sure chat listener is present ---
+        this.socket.on('chatMessage', (data: { senderName: string, message: string, timestamp?: number }) => {
+            console.log('NetworkManager: Received "chatMessage"', data);
+            EventBus.emit('chat-message-received', data); // Emit local event
+        });
         // Entity Updates (receives batched updates)
         this.socket.on('entityUpdate', (data: { updates: EntityUpdateData[] }) => {
             // console.log('NetworkManager: Received "entityUpdate"', data); // Can be very noisy!

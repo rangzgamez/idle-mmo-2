@@ -64,6 +64,10 @@ export default class GameScene extends Phaser.Scene {
         EventBus.on('player-left', this.handlePlayerLeft, this);
         EventBus.on('entity-update', this.handleEntityUpdate, this);
 
+        // --- Launch UI Scene ---
+        // Use scene.launch to run it in parallel with this scene
+        console.log('Launching UIScene...');
+        this.scene.launch('UIScene');
 
         // --- Send 'enterZone' request ---
         const zoneId = 'startZone'; // Or determine dynamically
@@ -313,11 +317,14 @@ export default class GameScene extends Phaser.Scene {
        this.clickMarker = null;
        this.markerFadeTween = null;
        this.lastMarkerTarget = null;
-         // Destroy all character sprites
-         this.playerCharacters.forEach(sprite => sprite.destroy());
-         this.otherCharacters.forEach(sprite => sprite.destroy());
-         this.playerCharacters.clear();
-         this.otherCharacters.clear();
+        // Destroy all character sprites
+        this.playerCharacters.forEach(sprite => sprite.destroy());
+        this.otherCharacters.forEach(sprite => sprite.destroy());
+        this.playerCharacters.clear();
+        this.otherCharacters.clear();
+        // --- Stop the UI Scene when GameScene stops ---
+        console.log('Stopping UIScene...');
+        this.scene.stop('UIScene');
     }
 
     // Called automatically when the scene is shut down

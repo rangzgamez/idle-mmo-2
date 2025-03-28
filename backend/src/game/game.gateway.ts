@@ -17,6 +17,7 @@ import { User } from '../user/user.entity'; // Import User entity
 import { CharacterService } from '../character/character.service'; // Import CharacterService
 import { Character } from '../character/character.entity'; // Import Character entity
 import { ZoneService, ZoneCharacterState } from './zone.service'; // Import ZoneService
+import * as sanitizeHtml from 'sanitize-html';
 @WebSocketGateway({
   cors: { /* ... */ },
 })
@@ -26,7 +27,7 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
   private gameLoopInterval: NodeJS.Timeout | null = null;
   private readonly TICK_RATE = 100; // ms (10 FPS)
   private readonly MOVEMENT_SPEED = 150; // Pixels per second
-  
+
   constructor(
     private jwtService: JwtService, // Inject JwtService
     private userService: UserService, // Inject UserService
@@ -157,7 +158,7 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     const user = client.data.user as User;
     const username = user?.username || 'Unknown';
     this.logger.log(`Client disconnected: ${client.id} (${username})`);
-
+    delete client.data.currentZoneId;
     // Remove player from zone and notify others
     const removalInfo = this.zoneService.removePlayerFromZone(client);
     if (removalInfo) {
@@ -175,6 +176,67 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     // Proceed with game logic like adding to a lobby or requesting zone entry
   }
 
+  // --- Chat Handler ---
+  @SubscribeMessage('sendMessage')
+  handleSendMessage(
+      @MessageBody() data: { message: string },
+      @ConnectedSocket() client: Socket,
+  ): void { // No explicit return needed, just broadcast
+      const user = client.data.user as User;
+      const currentZoneId = client.data.currentZoneId as string;
+
+      // Basic validation
+      if (!user) {
+          this.logger.warn(`sendMessage rejected: User not authenticated on socket ${client.id}`);
+          return; // Or send error ack to client
+      }
+      if (!currentZoneId) {
+          this.logger.warn(`sendMessage rejected: User ${user.username} not in a zone.`);
+          return; // Or send error ack to client
+      }
+      if (!data || typeof data.message !== 'string' || data.message.trim().length === 0) {
+          this.logger.warn(`sendMessage rejected: Invalid message data from ${user.username}.`);
+          return; // Or send error ack to client
+      }
+
+      const rawMessage = data.message;
+      // Limit message length
+      const MAX_MSG_LENGTH = 200;
+      if (rawMessage.length > MAX_MSG_LENGTH) {
+            this.logger.warn(`sendMessage rejected: Message too long from ${user.username}.`);
+            // Optionally send an error back to the client here
+            return;
+      }
+
+      // --- Sanitize Message ---
+      const sanitizedMessage = sanitizeHtml(rawMessage.trim(), {
+          allowedTags: [], // No HTML tags allowed
+          allowedAttributes: {}, // No attributes allowed
+      });
+
+      if (sanitizedMessage.length === 0) {
+            this.logger.warn(`sendMessage rejected: Message empty after sanitization from ${user.username}.`);
+            return;
+      }
+      // -----------------------
+
+
+      const payload = {
+          senderName: user.username, // Use username for now
+          // senderCharacterName: client.data.selectedCharacters[0]?.name, // Or primary character name
+          message: sanitizedMessage,
+          timestamp: Date.now(),
+      };
+
+      // Broadcast to the specific zone room
+      this.logger.log(`>>> Broadcasting chatMessage to zone ${currentZoneId} with payload:`, payload); // Log BEFORE emit
+
+      this.server.to(currentZoneId).emit('chatMessage', payload);
+      
+      this.logger.log(`>>> Broadcast COMPLETE for message from ${user.username}`); // Log AFTER emit
+
+      this.logger.log(`[Chat][${currentZoneId}] ${user.username}: ${sanitizedMessage}`);
+  }
   // Example message handler accessing authenticated user
   @SubscribeMessage('messageToServer')
   handleMessage(
@@ -250,6 +312,7 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
           return { success: false, message: 'No character party selected.' };
       }
 
+      client.data.currentZoneId = zoneId;
       // TODO: Add validation if player is already in another zone?
 
       this.logger.log(`User ${user.username} attempting to enter zone ${zoneId}`);

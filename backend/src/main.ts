@@ -4,6 +4,9 @@ import { AppModule } from './app.module';
 import { ValidationPipe } from '@nestjs/common'; // Import ValidationPipe
 
 async function bootstrap() {
+  console.error("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+  console.error("!!! BACKEND BOOTSTRAP FUNCTION STARTED !!!"); // Use error to make it stand out
+  console.error("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
   const app = await NestFactory.create(AppModule);
 
   // Enable CORS if your frontend is on a different origin (likely)
@@ -21,7 +24,11 @@ async function bootstrap() {
   }));
   app.enableShutdownHooks()
 
-  await app.listen(3000); // Backend runs on port 3000 by default
+  await app.listen(3000); // Backend runs on port 3000 by defaul
   console.log(`Application is running on: ${await app.getUrl()}`);
+  const url = await app.getUrl();
+  console.error("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+  console.error(`!!! BACKEND LISTENING ON: ${url} !!!`);
+  console.error("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
 }
 bootstrap();

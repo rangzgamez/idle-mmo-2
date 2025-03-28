@@ -31,6 +31,6 @@ import { CharacterModule } from './character/character.module';
     // AuthModule, UserModule, CharacterModule, GameModule, etc.
   ],
   controllers: [AppController],
-  providers: [AppService, GameGateway],
+  providers: [AppService],
 })
 export class AppModule {}
