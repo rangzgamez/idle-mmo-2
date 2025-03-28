@@ -1,7 +1,7 @@
 ## **Idle Browser MMO - Project Documentation**
 
-**Version:** 0.3 (Refined for Extensibility)
-**Date:** 2023-10-28 (Adjust date)
+Version: 0.4 (Includes Testing Strategy)
+Date: 2023-10-28 (Adjust date)
 
 **1. Overview**
 
@@ -148,7 +148,28 @@ This section highlights established patterns intended for reuse across different
     *   Their positions are updated relative to the sprite's interpolated `x`, `y` within the sprite's `update` method.
     *   *Extension:* Add Health Bars to `CharacterSprite` and `EnemySprite`. `EnemySprite` might have different label styling.
 
-**10. Core Real-time Update Flow (e.g., Movement - Refined)**
+**⭐ 10. Testing Strategy (NEW SECTION) ⭐**
+
+This project utilizes a multi-layered testing approach primarily focused on the backend, with unit tests for the frontend utilities.
+
+*   **Backend (NestJS):**
+    *   **Framework:** Jest (`ts-jest` for TypeScript).
+    *   **Unit Tests (`*.spec.ts` in `src/`):** Focus on isolating individual Services (e.g., `AuthService`, `ZoneService`, `CharacterService`). Dependencies (other services, repositories) are mocked using `jest.fn()` and NestJS testing utilities (`Test.createTestingModule`, `provide`/`useValue`). Goal: Verify the logic within each service class independently. Run via `npm run test`.
+    *   **Integration Tests (`*.spec.ts` in `src/`):** Focus on testing the interaction between Controllers and Services, or Gateways and Services. Deeper dependencies (like database access via Repositories) are typically mocked. Goal: Verify that controllers/gateways correctly invoke service methods and handle responses/events. Often grouped with unit tests, run via `npm run test`. Guards might be mocked using `overrideGuard`.
+    *   **E2E Tests (`*.e2e-spec.ts` in `test/`):** Test the application as a whole from the outside. Starts a full NestJS application instance connected to a **test database**. Uses `supertest` to make real HTTP requests to REST endpoints. Goal: Verify the complete request/response cycle for critical API flows (auth, character management). Run via `npm run test:e2e`. *Requires careful test database setup/teardown.*
+    *   **WebSocket Gateway Tests (`*.spec.ts` in `src/`):** Can be unit/integration tests. Require mocking WebSocket server interactions (`gateway.server.to(...).emit(...)`) or using a `socket.io-client` instance to connect to a test NestJS app hosting the gateway. Goal: Verify connection logic, message handlers (`@SubscribeMessage`), broadcasts, and acknowledgments.
+    *   **Configuration:** `jest.config.js` (unit/integration), `test/jest-e2e.json` (e2e).
+
+*   **Frontend (Phaser/Vite):**
+    *   **Framework:** Vitest (Recommended due to Vite integration) or Jest (`ts-jest`, `jsdom`).
+    *   **Unit Tests (`*.spec.ts` in `src/`):** Focus on testing non-Phaser utility classes like `NetworkManager`, `EventBus`, or potentially complex UI logic classes if separated. Dependencies (`socket.io-client`, other classes) are mocked using `jest.mock` (or Vitest equivalents). Goal: Verify logic of utility components in isolation. Run via `npm run test` (or `yarn test`).
+    *   **Component/Scene Tests:** Testing Phaser Scenes directly with unit test frameworks is complex due to reliance on the Phaser lifecycle and canvas rendering. This is currently **out of scope** for automated testing. Manual testing is the primary method for scene interactions.
+    *   **E2E Tests (Manual):** End-to-end testing involving Phaser rendering and interaction is primarily done through manual gameplay testing across different browsers. Automated tools like Cypress/Playwright have difficulty reliably interacting with the Phaser canvas.
+    *   **Configuration:** `vite.config.ts` (for Vitest) or `jest.config.js` (for Jest). `tsconfig.json` updated with relevant test types (`"vitest/globals"` or `"jest"`).
+
+*   **Coverage:** Code coverage reports can be generated for backend tests using `npm run test:cov`. Aim for reasonable coverage on core services and logic.
+
+**11. Core Real-time Update Flow (e.g., Movement - Refined)**
 
 1.  **Input/Trigger:** `GameScene` detects player input OR `GameGateway` loop triggers AI decision.
 2.  **Command/Intent:** `GameScene` sends command (`moveCommand`) OR `GameGateway` determines AI intent (e.g., move enemy X towards player Y).
@@ -159,48 +180,57 @@ This section highlights established patterns intended for reuse across different
 7.  **Client State Update:** `GameScene` listener receives event data. Finds corresponding Sprite (Player, Enemy) by ID. Calls method on sprite (e.g., `sprite.updateTargetPosition(x, y)`, `sprite.setHealth(h)`).
 8.  **Client Rendering (`update`):** Sprite's `update` method interpolates its visual `x, y` towards its `targetX, targetY`. Attached components (labels, health bars, bubbles) update their positions relative to the sprite's interpolated `x, y`.
 
-**11. TODO List / Roadmap (Updated with Refinements)**
+**12. TODO List / Roadmap (Updated with Refinements)**
 
 **Phase 0-3 (Complete)**
 
 **➡️ Phase 4: Basic Combat & Enemies (Next Steps)**
-1.  [ ] Backend: Define `EnemyTemplate` interface/object (stats, behavior flags, loot ref).
-2.  [ ] Backend: Enhance `ZoneService` to manage `EnemyInstance` state *similarly to PlayerInZone* (Map keyed by instanceId, holding runtime data: templateId, health, pos, target, AI state).
-3.  [ ] Backend: Implement basic enemy spawning logic (timed/location based) in `ZoneService` or `EnemyService`. Broadcast spawn (`enemySpawned` event or use `entityUpdate` with type field).
-4.  [ ] Frontend: Create `EnemySprite` class *similar to CharacterSprite*, handling interpolation, maybe different visual style/label.
-5.  [ ] Frontend: Handle enemy spawn/update events in `GameScene` to manage `EnemySprite` instances *like other entities*. Add an `enemySprites` Map.
-6.  [ ] Backend: Implement basic `CombatService` (e.g., `calculateDamage(attackerStats, defenderStats)`).
-7.  [ ] Backend: Enhance `AIService` or `tickGameLoop`:
-    *   Enemy Aggro logic (distance check).
-    *   Enemy Movement *using target updates via ZoneService*.
-    *   Enemy Attack logic (trigger `CombatService` on timer/cooldown if in range). Define basic AI states (Idle, Chasing, Attacking).
-8.  [ ] Backend: Handle `attackCommand` from client -> set player character's target/state via `ZoneService`.
-9.  [ ] Backend: Implement Character Auto-Attack AI -> check state/target, trigger `CombatService`, update target/position via `ZoneService`.
-10. [ ] Backend: Broadcast `combatAction` (attackerId, targetId, damage) & health updates (`entityUpdate`). Handle death via `entityDied` (entityId, type).
-11. [ ] Frontend: Handle `attackCommand` input (click on enemy sprite).
-12. [ ] Frontend: Implement/Add Health Bars to `CharacterSprite` and `EnemySprite`, updated via `entityUpdate`.
-13. [ ] Frontend: Show basic attack visuals on `combatAction`.
-14. [ ] Frontend: Handle `entityDied` (remove sprite, show effect).
+1.  [ ] Backend: Define `EnemyTemplate` interface/object. **Test:** (N/A - Definition only).
+2.  [ ] Backend: Enhance `ZoneService` for `EnemyInstance` state. **Test:** Unit test `ZoneService` methods for adding/removing/updating enemies (mock data).
+3.  [ ] Backend: Implement enemy spawning logic. **Test:** Unit test spawning logic; Integration/E2E test might check if enemies appear in zone state after time.
+4.  [ ] Frontend: Create `EnemySprite` class. **Test:** (Manual) Visual inspection.
+5.  [ ] Frontend: Handle enemy spawn/update events in `GameScene`. **Test:** (Manual) Verify sprites appear/move.
+6.  [ ] Backend: Implement basic `CombatService`. **Test:** Unit test `calculateDamage` logic with mock stats.
+7.  [ ] Backend: Enhance `AIService`/`tickGameLoop` (Aggro, Move, Attack). **Test:** Unit test specific AI decision logic; Integration test `tickGameLoop` to see if state changes correctly (mock dependencies).
+8.  [ ] Backend: Handle `attackCommand`. **Test:** Integration test `GameGateway` handler (mock services).
+9.  [ ] Backend: Implement Character Auto-Attack AI. **Test:** Unit test AI logic; Integration test `tickGameLoop`.
+10. [ ] Backend: Broadcast combat/death events. **Test:** Integration test gateway handlers ensure correct events are emitted (mock `server.emit`).
+11. [ ] Frontend: Handle `attackCommand` input. **Test:** (Manual).
+12. [ ] Frontend: Implement/Add Health Bars. **Test:** Unit test Health Bar component logic (if complex); (Manual) visual inspection.
+13. [ ] Frontend: Show basic attack visuals. **Test:** (Manual).
+14. [ ] Frontend: Handle `entityDied`. **Test:** (Manual).
 
 **Phase 5: Inventory, Loot & Equipment (Was Phase 5)**
-*   [...] Define Item entities, LootService, pickup command/logic, basic UI.
+47. [ ] Backend: Define `ItemTemplate` and `InventoryItem` entities & migrations.
+48. [ ] Backend: Implement `InventoryModule` and `InventoryService` (add/remove items).
+49. [ ] Backend: Implement `LootService` and configure basic loot tables.
+50. [ ] Backend: Trigger loot drops on enemy death (`LootService`). Add `DroppedItem` state to `ZoneService`. Broadcast `itemDropped`.
+51. [ ] Backend: Implement `pickupItemCommand` handler (validate range, add to inventory via `InventoryService`, remove from zone). Broadcast `itemPickedUp` and `inventoryUpdate`.
+52. [ ] Frontend: Display dropped item sprites based on `itemDropped`.
+53. [ ] Frontend: Handle clicking items -> send `pickupItemCommand`. Remove sprite on `itemPickedUp`.
+54. [ ] Frontend: Basic Inventory UI (in `UIScene`) to display items from `inventoryUpdate`.
+55. [ ] Backend: Add `equippedWeapon`, `equippedArmor` to `Character` entity.
+56. [ ] Backend: Implement `equipItem` / `unequipItem` logic in `InventoryService`/`CharacterService`. Broadcast `equipmentUpdate`.
+57. [ ] Frontend: Basic Equipment UI (in `UIScene`). Allow equipping/unequipping via drag/drop or buttons. Send commands. Update UI on `equipmentUpdate`.
 
 **Phase 6: Pets (Was Phase 6)**
 *   [...] Define Pet entity, AI Service logic, feeding command.
 
 **Refinement / Future TODOs:**
-*   [ ] Refactor game loop out of `GameGateway` into a dedicated service.
-*   [ ] Persist character position/zone periodically or on logout/zone change.
-*   [ ] Implement proper Tilemaps and Collision on frontend & backend validation.
-*   [ ] More sophisticated movement (Pathfinding using libraries like `easystarjs`).
-*   [ ] Add character stats (HP, Attack, Defense, Speed etc.) to entities and combat calculations.
-*   [ ] Add different character types/classes (Melee, Ranged, Healer AI).
+*   [ ] Refactor game loop out of `GameGateway`. **Test:** Unit test the new service.
+*   [ ] Persist character position/zone. **Test:** Unit test saving logic; E2E test data persistence.
+*   [ ] Implement proper Tilemaps and Collision. **Test:** Backend validation unit tests; Frontend manual tests.
+*   [ ] Add character stats. **Test:** Update CombatService/AI unit tests.
+*   [ ] Add different character types/classes. **Test:** Update AI/Combat unit tests.
+*   [ ] More sophisticated movement (Pathfinding using libraries like `easystarjs`). **Test:** Unit test pathfinding integration.
 *   [ ] Proper character/enemy sprites and animations.
 *   [ ] Click-and-drag selection for controlling individual characters.
 *   [ ] More robust error handling and user feedback.
 *   [ ] Server-side validation of movement distance/speed to prevent cheating.
 *   [ ] Scalability considerations (multiple zones, potentially multiple server instances with Redis).
 *   [ ] Unit and End-to-End testing.
+*   [ ] Server-side movement validation. **Test:** Unit/Integration tests for validation logic.
+*   [ ] **Write initial set of tests:** Cover `AuthService`, `UserService`, `CharacterService` unit tests. Write E2E tests for Auth flow. Write basic `NetworkManager` unit tests.
 
 ---
 
@@ -217,9 +247,10 @@ This guide helps developers understand the current state and continue working on
 *   Refer to the main documentation (above) for detailed feature list, architecture, and updated TODO list.
 
 **2. Core Development Loop:**
-*   **Backend:** Run `npm run start:dev` in the `backend` directory. Uses NestJS CLI with watch mode. Changes should auto-reload.
-*   **Frontend:** Run `npm run dev` in the `frontend` directory. Uses Vite dev server with HMR. Changes often reflect without full reload.
-*   **Database:** Assumes PostgreSQL is running and accessible with credentials configured (currently hardcoded/env vars in `backend/src/app.module.ts` via `TypeOrmModule.forRoot`). `synchronize: true` is enabled for development (auto-updates schema based on entities).
+*   **Backend:** `npm run start:dev`. Auto-reloads. Run tests via `npm run test` (unit/integration) or `npm run test:e2e`.
+*   **Frontend:** `npm run dev`. HMR. Run tests via `npm run test` (if configured).
+*   **Testing:** Write tests (especially backend unit/integration) alongside new features or bug fixes. Refer to Section 10 for strategy. Ensure E2E tests run against a dedicated test database.
+*   **Database:** `synchronize: true` active for development. Use migrations for production later.
 
 **3. Key Modules/Files for Common Tasks:**
 

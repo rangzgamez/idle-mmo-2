@@ -1,5 +1,10 @@
 {
   "files": [],
+  "compilerOptions": {
+    // ... existing options ...
+    "types": ["vite/client", "vitest/globals", "node"] // Add "vitest/globals" and "node"
+  },
+   "include": ["src", /* other includes */ "*.config.ts", "*.config.js"],
   "references": [
     { "path": "./tsconfig.app.json" },
     { "path": "./tsconfig.node.json" }
