@@ -1,126 +1,118 @@
 // frontend/src/network/NetworkManager.ts
 import { io, Socket } from 'socket.io-client';
-//import { EventBus } from '../EventBus'; // We'll use a simple event emitter
+import { EventBus } from '../EventBus';
+
+// Define interfaces for expected data structures (optional but good practice)
+interface ZoneCharacterState {
+    id: string;
+    ownerId: string;
+    ownerName: string;
+    name: string;
+    level: number;
+    x: number | null;
+    y: number | null;
+}
+
+interface EntityUpdateData {
+    id: string;
+    x?: number | null;
+    y?: number | null;
+    // Add other potential update fields later (health, state, etc.)
+}
+
 
 export class NetworkManager {
-  private socket: Socket | null = null;
-  private static instance: NetworkManager;
+    private socket: Socket | null = null;
+    private static instance: NetworkManager;
 
-  private constructor() {
-    // Private constructor for singleton pattern
-  }
+    private constructor() {}
 
-  public static getInstance(): NetworkManager {
-    if (!NetworkManager.instance) {
-      NetworkManager.instance = new NetworkManager();
-    }
-    return NetworkManager.instance;
-  }
-
-  public connect(token: string) {
-    if (this.socket?.connected) {
-      console.warn('Socket already connected.');
-      return;
-    }
-
-    console.log('Attempting to connect to WebSocket server...');
-
-    // Connect to the NestJS WebSocket server (default port 3000)
-    // Pass the JWT in the 'auth' object
-    this.socket = io('ws://localhost:3000', { // Use ws:// or wss://
-      auth: {
-        token: token,
-      },
-      // Optional: If using namespaces on backend
-      // path: '/socket.io' // Default path
-      // You might specify a namespace if used: e.g., io('ws://localhost:3000/game', ...)
-    });
-
-    this.socket.on('connect', () => {
-      console.log('Successfully connected to WebSocket server:', this.socket?.id);
-      EventBus.emit('network-connect'); // Emit event for scenes to react
-    });
-
-    this.socket.on('disconnect', (reason) => {
-      console.log('Disconnected from WebSocket server:', reason);
-      EventBus.emit('network-disconnect', reason);
-      this.socket = null; // Clear socket instance on disconnect
-    });
-
-    this.socket.on('connect_error', (error) => {
-      console.error('WebSocket connection error:', error.message);
-      // Handle specific auth errors if needed
-      if (error.message.includes('Authentication failed') || error.message.includes('Unauthorized')) {
-          EventBus.emit('network-auth-error', error.message);
-          // Maybe redirect to login or show an error message
-      } else {
-          EventBus.emit('network-error', error.message);
-      }
-      this.socket = null; // Clear socket on connection error
-    });
-
-    // --- Register listeners for server events ---
-    // Example: listen for chat messages
-    this.socket.on('chatMessage', (data: { senderName: string, message: string }) => {
-      console.log('Chat Message Received:', data);
-      EventBus.emit('chat-message-received', data);
-    });
-
-    // Example: listen for entity updates
-    this.socket.on('entityUpdate', (data: any) => {
-        // console.log('Entity Update Received:', data); // Can be very noisy
-        EventBus.emit('entity-update-received', data);
-    });
-
-    // Add more listeners for other game events (playerJoined, itemDropped, etc.)
-    // this.socket.on('playerJoined', (data) => EventBus.emit('player-joined', data));
-    // ...
-  }
-
-  public disconnect() {
-    this.socket?.disconnect();
-    this.socket = null;
-  }
-
-  public isConnected(): boolean {
-    return this.socket?.connected ?? false;
-  }
-
-  // --- Method to send messages to the server ---
-  public sendMessage<T>(eventName: string, data?: T, ack?: (...args: any[]) => void) {
-    if (!this.isConnected()) {
-      console.error('Cannot send message: Socket not connected.');
-      return;
-    }
-    if (ack) {
-        this.socket?.emit(eventName, data, ack);
-    } else {
-        this.socket?.emit(eventName, data);
-    }
-    console.log(`Sent message [${eventName}]:`, data); // Log outgoing messages
-  }
-}
-
-// --- Simple Event Emitter ---
-// You can use a library like 'mitt' or Phaser's built-in events if preferred
-class SimpleEventBus {
-    private listeners: { [key: string]: Function[] } = {};
-
-    on(event: string, callback: Function) {
-        if (!this.listeners[event]) {
-            this.listeners[event] = [];
+    public static getInstance(): NetworkManager {
+        // ... (singleton logic)
+        if (!NetworkManager.instance) {
+          NetworkManager.instance = new NetworkManager();
         }
-        this.listeners[event].push(callback);
+        return NetworkManager.instance;
     }
 
-    off(event: string, callback: Function) {
-        if (!this.listeners[event]) return;
-        this.listeners[event] = this.listeners[event].filter(listener => listener !== callback);
+    public connect(token: string) {
+        // ... (connection logic, including auth and basic event listeners: connect, disconnect, connect_error)
+        if (this.socket?.connected) {
+          console.warn('Socket already connected.');
+          return;
+        }
+
+        console.log('Attempting to connect to WebSocket server...');
+        this.socket = io('ws://localhost:3000', { auth: { token: token } });
+
+        this.socket.on('connect', () => {
+            console.log('>>> NetworkManager: Received "connect" event from socket.io. Emitting "network-connect" via EventBus.');
+            EventBus.emit('network-connect');
+        });
+
+        this.socket.on('disconnect', (reason) => {
+            console.log('NetworkManager: Received "disconnect" event.', reason);
+            EventBus.emit('network-disconnect', reason);
+            this.socket = null;
+        });
+
+        this.socket.on('connect_error', (error) => {
+            console.error('>>> NetworkManager: Received "connect_error" event:', error.message, error);
+             if (error.message.includes('Authentication') || error.message.includes('Unauthorized')) {
+                EventBus.emit('network-auth-error', error.message);
+            } else {
+                EventBus.emit('network-error', `Connection failed: ${error.message}`);
+            }
+            this.socket = null;
+        });
+
+        // --- Register NEW listeners for game events ---
+
+        // Player Joined (receives data about the joining player's characters)
+        this.socket.on('playerJoined', (data: { characters: ZoneCharacterState[] }) => {
+            console.log('NetworkManager: Received "playerJoined"', data);
+            EventBus.emit('player-joined', data);
+        });
+
+        // Player Left (receives the User ID of the player who left)
+        this.socket.on('playerLeft', (data: { playerId: string }) => {
+            console.log('NetworkManager: Received "playerLeft"', data);
+            EventBus.emit('player-left', data);
+        });
+
+        // Entity Updates (receives batched updates)
+        this.socket.on('entityUpdate', (data: { updates: EntityUpdateData[] }) => {
+            // console.log('NetworkManager: Received "entityUpdate"', data); // Can be very noisy!
+            EventBus.emit('entity-update', data);
+        });
+
+        // Existing listeners (keep if needed)
+        // this.socket.on('chatMessage', (data) => { /* ... */ });
     }
 
-    emit(event: string, ...args: any[]) {
-        if (!this.listeners[event]) return;
-        this.listeners[event].forEach(listener => listener(...args));
+    public disconnect() {
+        // ...
+        this.socket?.disconnect();
+        this.socket = null;
+    }
+
+    public isConnected(): boolean {
+        // ...
+        return this.socket?.connected ?? false;
+    }
+
+    // Method to send messages to the server (no changes needed)
+    public sendMessage<T>(eventName: string, data?: T, ack?: (...args: any[]) => void) {
+        // ...
+        if (!this.isConnected()) {
+            console.error('Cannot send message: Socket not connected.');
+            return;
+        }
+        if (ack) {
+            this.socket?.emit(eventName, data, ack);
+        } else {
+            this.socket?.emit(eventName, data);
+        }
+        // console.log(`Sent message [${eventName}]:`, data); // Can be noisy
     }
 }
-export const EventBus = new SimpleEventBus();

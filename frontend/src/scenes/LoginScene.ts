@@ -124,12 +124,29 @@ export default class LoginScene extends Phaser.Scene {
                 // Attempt WebSocket connection
                 this.setStatus('Connecting...', false);
                 NetworkManager.getInstance().connect(token);
-
+                console.log('LoginScene: NetworkManager.connect() called. Registering listeners...'); // Add this
                 // Listen for successful connection before changing scene
+                // Add a listener for generic network errors too
+                EventBus.once('network-error', (errorMessage: string) => {
+                    console.error('LoginScene: Received "network-error" event:', errorMessage);
+                    this.setStatus(errorMessage, true);
+                    this.enableInputs();
+                    localStorage.removeItem('jwtToken'); // Clear token on connection failure
+                });
+
+                EventBus.once('network-auth-error', (errorMessage: string) => {
+                    // This listener already exists, just double-check console log
+                    console.error('LoginScene: Received "network-auth-error" event:', errorMessage);
+                    this.setStatus(`Connection failed: ${errorMessage}`, true);
+                    this.enableInputs();
+                    localStorage.removeItem('jwtToken');
+                });
+
                 EventBus.once('network-connect', () => {
-                     this.setStatus(''); // Clear status
-                     console.log('Network connected, starting CharacterSelectScene.');
-                     this.scene.start('CharacterSelectScene'); // Go to next scene on successful WS connection
+                    // This is the success path
+                    console.log('>>> LoginScene: Received "network-connect" event via EventBus. Starting CharacterSelectScene.'); // Make this obvious
+                    this.setStatus('');
+                    this.scene.start('CharacterSelectScene');
                 });
                 // Handle connection error specifically (handled by 'network-auth-error' listener)
 
