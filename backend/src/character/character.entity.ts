@@ -24,7 +24,14 @@ import {
     @Column('uuid') // Store the user ID directly for easier querying if needed
     userId: string;
     // ------------------------
-  
+    @Column('float', { nullable: true, default: null }) // Use float for coordinates
+    positionX: number | null;
+
+    @Column('float', { nullable: true, default: null })
+    positionY: number | null;
+
+    @Column({ type: 'varchar', length: 100, nullable: true, default: null }) // ID of the zone the character is in
+    currentZoneId: string | null;
     @Column({ length: 50 })
     name: string;
   

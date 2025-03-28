@@ -19,7 +19,7 @@ async function bootstrap() {
     forbidNonWhitelisted: true, // Throw errors if non-whitelisted values are provided
     transform: true, // Automatically transform payloads to DTO instances
   }));
-
+  app.enableShutdownHooks()
 
   await app.listen(3000); // Backend runs on port 3000 by default
   console.log(`Application is running on: ${await app.getUrl()}`);
