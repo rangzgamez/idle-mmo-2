@@ -35,7 +35,7 @@ export default class UIScene extends Phaser.Scene {
         // --- Input Handling ---
         // Prevent Phaser from capturing keyboard input when the chat input is focused
         chatContainer.addListener('click'); // Dummy listener to allow focus
-        this.input.keyboard.on('keydown', (event: KeyboardEvent) => {
+        this.input.keyboard?.on('keydown', (event: KeyboardEvent) => {
             if (document.activeElement === this.chatInputElement) {
                  event.stopPropagation(); // Stop Phaser from processing keys like space, arrows etc.
                 if (event.key === 'Enter') {
@@ -46,14 +46,26 @@ export default class UIScene extends Phaser.Scene {
 
         // --- EventBus Listener for Incoming Messages ---
         EventBus.on('chat-message-received', this.handleChatMessage, this);
-
+        EventBus.on('focus-chat-input', this.focusChatInput, this);
         // Log successful creation
         console.log('Chat UI Elements Created.');
         if (!this.chatLogElement || !this.chatInputElement) {
              console.error("Failed to get chat log or input elements!");
         }
     }
-
+    /**
+     * Public getter to allow other scenes (like GameScene)
+     * to access the chat input element reference.
+     */
+    public getChatInputElement(): HTMLInputElement | null {
+        return this.chatInputElement;
+    }
+    // ------------------------
+    focusChatInput() {
+        if (this.chatInputElement) {
+            this.chatInputElement.focus();
+        }
+    }
     // --- Send Message Logic ---
     handleSendMessage() {
         if (!this.chatInputElement || !this.networkManager.isConnected()) {
@@ -97,6 +109,7 @@ export default class UIScene extends Phaser.Scene {
     shutdown() {
         console.log('UIScene shutting down, removing listeners.');
         EventBus.off('chat-message-received', this.handleChatMessage, this);
+        EventBus.off('focus-chat-input', this.focusChatInput, this); // <-- Remove focus listener
         // DOM elements added via this.add.dom are usually cleaned up automatically by Phaser
     }
 }

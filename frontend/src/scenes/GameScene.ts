@@ -3,11 +3,17 @@ import Phaser from 'phaser';
 import { NetworkManager } from '../network/NetworkManager';
 import { CharacterSprite } from '../gameobjects/CharacterSprite'; // Import the sprite class
 import { EventBus } from '../EventBus';
+import UIScene from './UIScene';
 // Add the interface definitions if not shared
 interface ZoneCharacterState { id: string; ownerId: string; ownerName: string; name: string; level: number; x: number | null; y: number | null; }
 interface EntityUpdateData { id: string; x?: number | null; y?: number | null; }
 
-
+interface ChatMessageData {
+    senderName: string;
+    senderCharacterId: string;
+    message: string;
+    timestamp?: number;
+}
 export default class GameScene extends Phaser.Scene {
     networkManager!: NetworkManager;
     playerCharacters: Map<string, CharacterSprite> = new Map(); // Key: characterId
@@ -16,6 +22,8 @@ export default class GameScene extends Phaser.Scene {
     private lastMarkerTarget: Phaser.Math.Vector2 | null = null; // Store the target associated with the marker
     private clickMarker: Phaser.GameObjects.Sprite | null = null; // Add property for the marker
     private markerFadeTween: Phaser.Tweens.Tween | null = null; // Store the active fade tween
+    private uiSceneRef: UIScene | null = null;
+    private currentPlayerUsername: string | null = null; // <-- Add property to store username
     constructor() {
         super('GameScene');
     }
@@ -25,7 +33,17 @@ export default class GameScene extends Phaser.Scene {
         console.log('GameScene init with data:', data);
         this.selectedPartyData = data.selectedParty || []; // Store the selected party data
         this.networkManager = NetworkManager.getInstance();
-
+        // --- Store current player's username ---
+        this.currentPlayerUsername = null; // Reset on init
+        if (this.selectedPartyData.length > 0 && this.selectedPartyData[0].ownerName) {
+            // Get username from the ownerName field provided by the backend's selectParty response
+            this.currentPlayerUsername = this.selectedPartyData[0].ownerName;
+            console.log(`Stored current player username: ${this.currentPlayerUsername}`);
+        } else {
+            console.warn("Could not determine current player username from selectedParty data.");
+            // Fallback or error handling if needed, maybe try decoding JWT as a last resort?
+            // For now, bubbles for own messages might not work if this fails.
+        }
         // Clear any old character data if re-entering scene
         this.playerCharacters.clear();
         this.otherCharacters.clear();
@@ -63,12 +81,27 @@ export default class GameScene extends Phaser.Scene {
         EventBus.on('player-joined', this.handlePlayerJoined, this);
         EventBus.on('player-left', this.handlePlayerLeft, this);
         EventBus.on('entity-update', this.handleEntityUpdate, this);
-
+        EventBus.on('chat-message-received', this.handleChatMessageForBubble, this); // Add listener for bubbles
         // --- Launch UI Scene ---
         // Use scene.launch to run it in parallel with this scene
         console.log('Launching UIScene...');
         this.scene.launch('UIScene');
+        this.uiSceneRef = this.scene.get('UIScene') as UIScene; // Get reference
 
+        // --- Global Enter Key Listener ---
+        this.input.keyboard?.on('keydown-ENTER', (event: KeyboardEvent) => {
+            // Check if chat input is already focused
+            const chatInput = this.uiSceneRef?.getChatInputElement(); // Use getter
+            if (document.activeElement === chatInput) {
+                // Input is focused, let UIScene handle sending
+                return;
+            } else {
+                // Input is NOT focused, emit event to focus it
+                console.log("Enter pressed, focusing chat input.");
+                EventBus.emit('focus-chat-input');
+                event.stopPropagation(); // Prevent other Enter handlers
+            }
+        });
         // --- Send 'enterZone' request ---
         const zoneId = 'startZone'; // Or determine dynamically
         this.networkManager.sendMessage('enterZone', { zoneId }, (response: { success: boolean; zoneState?: ZoneCharacterState[]; message?: string }) => {
@@ -169,6 +202,28 @@ export default class GameScene extends Phaser.Scene {
             }
         });
         // ------------------------------------------------
+    }
+    handleChatMessageForBubble(data: ChatMessageData) {
+        console.log('GameScene received chat message for bubble:', data);
+
+        let targetSprite: CharacterSprite | undefined;
+        // --- Logic to find the target sprite USING senderCharacterId ---
+        if (data.senderCharacterId) {
+            // Check if it's one of the player's own characters
+            targetSprite = this.playerCharacters.get(data.senderCharacterId);
+
+            if (!targetSprite) {
+                // If not found in player's characters, check other characters
+                targetSprite = this.otherCharacters.get(data.senderCharacterId);
+            }
+        }
+        if (targetSprite) {
+            console.log(`Found target sprite ${targetSprite.characterId} for chat bubble from ${data.senderName}.`);
+            targetSprite.showChatBubble(data.message);
+        } else {
+             // This might happen if the character left the zone just before the message arrived
+             console.warn(`Could not find target sprite with ID ${data.senderCharacterId} for chat bubble from ${data.senderName}.`);
+        }
     }
     update(time: number, delta: number) {
         // Update character interpolation
@@ -309,6 +364,7 @@ export default class GameScene extends Phaser.Scene {
         EventBus.off('player-joined', this.handlePlayerJoined, this);
         EventBus.off('player-left', this.handlePlayerLeft, this);
         EventBus.off('entity-update', this.handleEntityUpdate, this);
+        EventBus.off('chat-message-received', this.handleChatMessageForBubble, this); // Remove bubble listener
         // --- Clean up click marker ---
         if (this.markerFadeTween) {
             this.markerFadeTween.stop(); // Stop active tween on shutdown
@@ -317,6 +373,7 @@ export default class GameScene extends Phaser.Scene {
        this.clickMarker = null;
        this.markerFadeTween = null;
        this.lastMarkerTarget = null;
+       this.currentPlayerUsername = null; // Clear username on shutdown
         // Destroy all character sprites
         this.playerCharacters.forEach(sprite => sprite.destroy());
         this.otherCharacters.forEach(sprite => sprite.destroy());
@@ -324,6 +381,8 @@ export default class GameScene extends Phaser.Scene {
         this.otherCharacters.clear();
         // --- Stop the UI Scene when GameScene stops ---
         console.log('Stopping UIScene...');
+        this.input.keyboard?.off('keydown-ENTER'); // Clean up listener
+        this.uiSceneRef = null; // Clear reference
         this.scene.stop('UIScene');
     }
 

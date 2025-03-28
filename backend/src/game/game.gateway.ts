@@ -184,7 +184,7 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
   ): void { // No explicit return needed, just broadcast
       const user = client.data.user as User;
       const currentZoneId = client.data.currentZoneId as string;
-
+      const partyCharacters = client.data.selectedCharacters as Character[];
       // Basic validation
       if (!user) {
           this.logger.warn(`sendMessage rejected: User not authenticated on socket ${client.id}`);
@@ -194,6 +194,10 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
           this.logger.warn(`sendMessage rejected: User ${user.username} not in a zone.`);
           return; // Or send error ack to client
       }
+      if (!partyCharacters || partyCharacters.length === 0) {
+        this.logger.warn(`sendMessage rejected: User ${user.username} has no party selected.`);
+        return;
+   }
       if (!data || typeof data.message !== 'string' || data.message.trim().length === 0) {
           this.logger.warn(`sendMessage rejected: Invalid message data from ${user.username}.`);
           return; // Or send error ack to client
@@ -219,14 +223,18 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
             return;
       }
       // -----------------------
-
-
+      // --- Determine Sender Character ID (Assume Leader) ---
+      const senderCharacterId = partyCharacters[0]?.id; // Get ID of the first character
+      if (!senderCharacterId) {
+          this.logger.error(`Could not determine senderCharacterId for user ${user.username}`);
+          return; // Cannot proceed without a character ID
+      }
       const payload = {
-          senderName: user.username, // Use username for now
-          // senderCharacterName: client.data.selectedCharacters[0]?.name, // Or primary character name
-          message: sanitizedMessage,
-          timestamp: Date.now(),
-      };
+        senderName: user.username,
+        senderCharacterId: senderCharacterId, // Example: ID of leader char
+        message: sanitizedMessage,
+        timestamp: Date.now(),
+    };
 
       // Broadcast to the specific zone room
       this.logger.log(`>>> Broadcasting chatMessage to zone ${currentZoneId} with payload:`, payload); // Log BEFORE emit
