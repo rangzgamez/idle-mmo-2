@@ -1,319 +1,253 @@
 ## **Idle Browser MMO - Project Documentation**
 
-**Version:** 0.1 (Initial Draft)
-**Date:** 2023-10-27
+**Version:** 0.3 (Refined for Extensibility)
+**Date:** 2023-10-28 (Adjust date)
 
 **1. Overview**
 
-This document outlines the architecture, database schema, and initial development plan for an Idle Browser MMO game. The game features real-time multiplayer interaction in a top-down view, RTS-style character control, automated combat mechanics, and social features like chat.
+This document outlines the architecture, database schema, and development plan for an Idle Browser MMO game. The game features real-time multiplayer interaction in a top-down view, RTS-style character control with formation movement, automated combat mechanics (planned), and social features like zone-based chat with bubbles.
 
-**2. Core Features (Initial Scope)**
+**2. Core Features (Implemented - v0.2)**
 
-*   **Authentication:** User registration and login.
-*   **Character Management:** Create multiple characters per account, select up to 3 active characters for gameplay.
-*   **Top-Down World:** Players navigate a 2D world with a top-down camera.
-*   **RTS-Style Control:** Point-and-click movement for selected characters. Click on enemies to initiate attacks.
-*   **Idle/Automated Combat:**
-    *   Characters auto-attack nearby enemies once engaged.
-    *   Melee characters move to engage, returning to an anchor point if pulled too far (leashing).
-    *   Healer characters auto-heal nearby allies.
-    *   Enemies aggro players within range.
-*   **Multiplayer Zones:** Multiple players can inhabit the same zone, see each other, and fight enemies together.
-*   **Enemy Spawning & Loot:** Enemies automatically spawn in zones and drop items upon defeat.
-*   **Item Pickup:** Players click on dropped items to pick them up.
-*   **Shared Player Inventory:** A single inventory shared across all characters of a player.
-*   **Basic Equipment:** Characters can equip a Weapon and Armor item from the shared inventory.
-*   **Pets:** Players can acquire pets that automatically pick up loot (slowly) and require feeding.
-*   **Chat:** Real-time chat functionality within game zones.
+*   **Authentication:** User registration and login (REST API with JWT).
+*   **WebSocket Auth:** Secure WebSocket connections using JWT.
+*   **Character Management:** Create multiple characters per account (API).
+*   **Party Selection:** Select up to 3 active characters per session (Client UI + Server Validation).
+*   **Top-Down World:** Players navigate a 2D world (currently basic colored background). Camera follows the player's party leader.
+*   **RTS-Style Control:** Point-and-click movement commands.
+*   **Formation Movement:** Clicking sends a target anchor; the backend calculates individual destinations for the party (up to 3) in a triangle formation. Characters move towards these points.
+*   **Click Marker:** Visual indicator appears at the click location and fades out, disappearing early if the party arrives near the anchor point.
+*   **Server-Side Movement:** Backend simulates character movement towards targets (`GameGateway` loop) and broadcasts updated positions.
+*   **Client-Side Interpolation:** Frontend smoothly interpolates character sprites towards server-provided positions (`CharacterSprite`).
+*   **Multiplayer Zones:** Multiple players can inhabit the same zone (`ZoneService` manages state).
+*   **Real-time Sync:** Players see each other join (`playerJoined`), leave (`playerLeft`), and move (`entityUpdate`).
+*   **Chat:**
+    *   Zone-scoped real-time text chat.
+    *   Input via UI or pressing Enter key globally.
+    *   Messages broadcast only to players in the same zone.
+    *   Chat Bubbles appear above the speaking character (leader of the party), stack vertically, follow the character, and fade out individually.
 
-**3. Technology Stack**
+**3. Technology Stack (Unchanged)**
 
-*   **Frontend:** Phaser 3 (JavaScript/TypeScript)
+*   **Frontend:** Phaser 3 (TypeScript), Vite
 *   **Backend:** NestJS (Node.js / TypeScript)
 *   **Real-time Communication:** WebSockets (via Socket.IO library, integrated with NestJS)
-*   **API:** RESTful API for Authentication and non-real-time data fetching (via NestJS).
-*   **Database:** PostgreSQL (Relational Database)
-*   **ORM:** TypeORM (or Prisma - TBD, TypeORM is a common NestJS choice)
+*   **API:** RESTful API for Authentication and Character listing.
+*   **Database:** PostgreSQL
+*   **ORM:** TypeORM
 *   **Authentication:** JSON Web Tokens (JWT)
 
-**4. System Architecture Diagram (Conceptual Text)**
+**4. System Architecture Diagram (Conceptual - Unchanged)**
 
 ```
 +-------------------+      (HTTPS/REST)       +----------------------+      +------------+
 |                   | <---------------------> |                      | <--> |            |
-|   Client Browser  |      (Auth, Initial    |   NestJS Backend     |      | PostgreSQL |
-|   (Phaser.js)     |       Data Load)        |   (Node.js)          |      |  Database  |
-|                   |                         |                      | <--> |            |
-|                   |      (WSS/WebSockets)   |  - Auth Module       |      +------------+
-|                   | <---------------------> |  - User Module       |
-|                   |      (Real-time Game   |  - Character Module  |
-|                   |       State, Actions,   |  - Game Module (WS)  |
-|                   |       Chat)             |  - Chat Module (WS)  |
-|                   |                         |  - Inventory Module  |
-|                   |                         |  - Pet Module        |
+|   Client Browser  |      (Auth, Char List)  |   NestJS Backend     |      | PostgreSQL |
+|   (Phaser.js)     |                         |   (Node.js)          |      |  Database  |
+|                   |      (WSS/WebSockets)   |                      | <--> |            |
+|                   | <---------------------> |  - Auth Module       |      +------------+
+|                   |      (Real-time Game   |  - User Module       |
+|                   |       State, Actions,   |  - Character Module  |
+|                   |       Chat)             |  - Game Module (WS)  |
+|                   |                         |    - GameGateway     |
+|                   |                         |    - ZoneService     |
+|                   |                         |  - ... Other Modules |
 +-------------------+                         +----------------------+
-       /|\                                             |
-        |                                              | (Load Balancer - Optional)
-        |                                             \|/
-      User                                       Server Infrastructure
 ```
 
-**Explanation:**
+**5. Backend Module Breakdown (Refined)**
 
-1.  **Client (Phaser.js):** Renders the game, handles user input, displays UI. Communicates with the backend.
-2.  **Backend (NestJS):** The **Authoritative Server**. Manages all game logic, state, persistence, and communication.
-    *   **REST API:** Used for stateless operations like Login, Register, fetching initial character lists. Secured by JWT where necessary.
-    *   **WebSockets:** Used for persistent, real-time communication (movement, combat, chat, state synchronization). Connections are authenticated using JWT. Clients join specific 'rooms' corresponding to game zones.
-3.  **Database (PostgreSQL):** Persists all user data, character data, inventory, item definitions, etc. Accessed by the backend via an ORM.
-4.  **Communication Flow:**
-    *   User Logs in/Registers via REST. Receives JWT.
-    *   Client connects to WebSocket server, sending JWT for authentication.
-    *   Client requests to enter a zone.
-    *   Server validates, adds client to zone room, runs AI/game logic, and broadcasts state updates via WebSockets.
-    *   Client sends commands (move, attack, pickup, chat) via WebSockets.
-    *   Server validates commands, updates state, runs logic, and broadcasts results.
+*   `AppModule`: Root module.
+*   `AuthModule`: Handles user registration, login, JWT (global).
+*   `UserModule`: Manages user entity (`UserService`). Exports service.
+*   `CharacterModule`: Manages character entity (`CharacterService`, `CharacterController`), handles CRUD via REST. Exports service.
+*   `GameModule`: Core real-time logic.
+    *   `GameGateway`: Handles WebSocket connections, auth middleware, message routing (`enterZone`, `selectParty`, `moveCommand`, `sendMessage`), basic simulation loop (`tickGameLoop` for movement updates, AI ticks - TODO), state broadcasting (`entityUpdate`, `chatMessage`, etc.). Injects `ZoneService`, `CharacterService`. *(Note: Game loop logic may be refactored to a dedicated service later)*.
+    *   `ZoneService`: Manages **runtime state** of *all dynamic entities* within zones (players, enemies-TODO, items-TODO) in memory. Handles adding/removing entities, tracking positions, targets, health (TODO), AI state (TODO). Provides state snapshots and update methods to `GameGateway`. *(Note: Separates runtime state from database persistence)*.
+*   *(Chat logic currently resides within `GameGateway`)*
 
-**5. Backend Module Breakdown (NestJS)**
+**6. Frontend Structure Breakdown (Refined)**
 
-*   **`AppModule`:** Root module.
-*   **`AuthModule`:** Handles user registration, login, JWT generation/validation. Uses `Passport.js`.
-*   **`UserModule`:** Manages user-specific data (links to characters, inventory, pets).
-*   **`CharacterModule`:** CRUD for characters, manages stats, equipment, linking to `User`.
-*   **`InventoryModule`:** Manages the shared player inventory, item instances, equipping/unequipping logic (interacts with `CharacterModule`). Defines `ItemTemplate`.
-*   **`GameModule`:** Core real-time logic.
-    *   `GameGateway`: Handles WebSocket connections, routing messages, managing rooms (zones).
-    *   `ZoneService`: Manages state of individual game zones (players, enemies, dropped items).
-    *   `CombatService`: Calculates combat outcomes, damage, healing.
-    *   `MovementService`: Handles position updates, validation, pathfinding (basic initially).
-    *   `AIService`: Manages enemy AI (spawning, aggro, attacking) and character automation (auto-attack targeting, healer targeting, pet actions).
-    *   `LootService`: Handles loot table processing and item drop generation.
-*   **`ChatModule`:**
-    *   `ChatGateway`: Handles chat message broadcasting within zones.
-*   **`PetModule`:** Manages pet creation, data, feeding, and auto-pickup AI (via `AIService`).
-*   **`DatabaseModule`:** Configures database connection (e.g., TypeORM).
+*   **`main.tsx`:** Entry point, Phaser config, scene list.
+*   **`NetworkManager.ts`:** Singleton for WebSocket communication, event handling, local `EventBus` emission.
+*   **`EventBus.ts`:** Simple custom event emitter for intra-client communication.
+*   **Scenes:**
+    *   `BootScene`, `PreloadScene`, `LoginScene`, `CharacterSelectScene`: Handle initial setup, auth, and party selection.
+    *   `GameScene`: Main gameplay area. Manages display objects/sprites for **all entities** (players, enemies-TODO, items-TODO) using Maps keyed by entity ID. Handles network events (`playerJoined`, `playerLeft`, `entityUpdate`, `chatMessage`) to create/update/destroy sprites. Processes player input (movement, targeting-TODO). Launches/Stops `UIScene`. Contains the main Phaser `update` loop triggering sprite updates. Manages camera.
+    *   `UIScene`: Runs parallel to `GameScene`. Handles overlay UI elements (Chatbox currently) using Phaser DOM elements. Listens for specific `EventBus` events.
+*   **GameObjects:**
+    *   `CharacterSprite.ts`: Represents player and other player characters. Extends `Phaser.GameObjects.Sprite`. Includes physics body (basic). Handles position interpolation, name label display, chat bubble management. *(Note: This serves as a template for other entity sprites like `EnemySprite`)*.
 
-**6. Frontend Scene Breakdown (Phaser.js)**
-
-*   **`BootScene`:** Loads minimal assets for the loading screen/bar.
-*   **`PreloadScene`:** Loads all game assets (images, spritesheets, tilemaps, audio).
-*   **`LoginScene`:** UI for Login/Register. Communicates with backend REST API. Stores JWT on success.
-*   **`CharacterSelectScene`:** Fetches characters via REST. Allows creation and selection (up to 3). Transitions to `GameScene`.
-*   **`GameScene`:** Main gameplay area.
-    *   Connects to WebSocket server.
-    *   Loads/renders tilemap and entities (player characters, other players, enemies, items, pets).
-    *   Handles player input (movement clicks, target clicks, item clicks). Sends commands via WebSocket.
-    *   Receives state updates via WebSocket and updates sprite positions (with interpolation), health, animations.
-    *   Manages camera.
-*   **`UIScene`:** Runs parallel to `GameScene`.
-    *   Displays HUD (character info, health bars).
-    *   Displays Chatbox (input/output). Sends/receives chat messages via WebSocket.
-    *   Displays Inventory/Equipment UI (future).
-    *   Displays Pet UI (future).
-
-**7. WebSocket Communication Events (Preliminary)**
+**7. WebSocket Communication Events (Updated)**
 
 *   **Client -> Server:**
-    *   `authenticate` (Implicitly on connection with JWT)
-    *   `enterZone` { zoneId: string }
-    *   `selectParty` { characterIds: string[] }
-    *   `moveCommand` { characterId?: string; target: { x: number, y: number } } // characterId optional for multi-select
-    *   `attackCommand` { characterId?: string; targetEnemyId: string }
-    *   `pickupItemCommand` { characterId: string; itemId: string } // characterId = who is picking up
+    *   `authenticate` (Implicit via `socket.handshake.auth.token` on connection)
+    *   `selectParty` { characterIds: string[] } -> Ack: `{ success: boolean, characters?: CharacterDataWithUsername[] }`
+    *   `enterZone` { zoneId: string } -> Ack: `{ success: boolean; zoneState?: ZoneCharacterState[]; message?: string }`
+    *   `moveCommand` { target: { x: number, y: number } }
     *   `sendMessage` { message: string }
-    *   `equipItem` { characterId: string; inventoryItemId: string; slot: 'weapon' | 'armor' }
-    *   `unequipItem` { characterId: string; slot: 'weapon' | 'armor' }
-    *   `feedPet` { petId: string; foodItemId: string }
 *   **Server -> Client:**
-    *   `connect_error` (Authentication failed)
-    *   `zoneState` { players: object[], enemies: object[], items: object[] } // Initial state on joining
-    *   `playerJoined` { player: object }
-    *   `playerLeft` { playerId: string }
-    *   `partySelected` { success: boolean, characters: object[] }
-    *   `entityUpdate` { updates: Array<{ id: string, x?: number, y?: number, health?: number, state?: string, targetId?: string }> } // Batch updates
-    *   `combatAction` { attackerId: string, targetId: string, damage?: number, heal?: number, type: 'attack' | 'heal' }
-    *   `entityDied` { id: string, type: 'player' | 'enemy' }
-    *   `itemDropped` { item: { id: string, baseItemId: string, x: number, y: number, icon: string } }
-    *   `itemPickedUp` { pickerId: string, itemId: string }
-    *   `inventoryUpdate` { items: object[] } // Full or partial update
-    *   `equipmentUpdate` { characterId: string, equipment: object }
-    *   `chatMessage` { senderName: string, message: string }
-    *   `petUpdate` { pet: object }
+    *   `connect_error` (Auth failed or other connection issue)
+    *   `playerJoined` { characters: ZoneCharacterState[] } // Characters of the player who joined
+    *   `playerLeft` { playerId: string } // User ID of the player who left
+    *   `entityUpdate` { updates: Array<{ id: string, x?: number, y?: number, /* health?, state? */ }> } // Batched updates
+    *   `chatMessage` { senderName: string, senderCharacterId: string, message: string, timestamp: number }
 
-**8. Database Schema (PostgreSQL - Conceptual using TypeORM Entities)**
+**8. Database Schema (Updated)**
 
 ```typescript
-// --- User ---
-@Entity()
-export class User {
-  @PrimaryGeneratedColumn('uuid') id: string;
-  @Column({ unique: true }) username: string;
-  @Column() passwordHash: string;
-  @OneToMany(() => Character, character => character.user) characters: Character[];
-  @OneToMany(() => InventoryItem, item => item.owner) inventory: InventoryItem[];
-  @OneToMany(() => Pet, pet => pet.owner) pets: Pet[];
-  @CreateDateColumn() createdAt: Date;
-  @UpdateDateColumn() updatedAt: Date;
-}
+// backend/src/character/character.entity.ts
+// ... (id, user relation, userId, name, level, xp) ...
+  @Column('float', { nullable: true, default: null })
+  positionX: number | null; // Persisted position (updated periodically/on logout - TODO)
 
-// --- Character ---
-@Entity()
-export class Character {
-  @PrimaryGeneratedColumn('uuid') id: string;
-  @ManyToOne(() => User, user => user.characters) user: User;
-  @Column() name: string;
-  @Column({ default: 1 }) level: number;
-  @Column({ default: 0 }) xp: number;
-  // Define stats (e.g., hp, mp, str, int, def, speed, attackRange, healRange etc)
-  @Column('jsonb', { default: {} }) stats: Record<string, any>;
-  @Column('float', { nullable: true }) positionX: number;
-  @Column('float', { nullable: true }) positionY: number;
-  @Column({ nullable: true }) currentZoneId: string; // Or reference a Zone entity
+  @Column('float', { nullable: true, default: null })
+  positionY: number | null; // Persisted position
 
-  // Equipment - References specific InventoryItem instances
-  @OneToOne(() => InventoryItem, { nullable: true, eager: true }) // Eager load equipped items? TBD
-  @JoinColumn() equippedWeapon: InventoryItem | null;
-  @Column({ nullable: true }) equippedWeaponId: string | null;
-
-  @OneToOne(() => InventoryItem, { nullable: true, eager: true })
-  @JoinColumn() equippedArmor: InventoryItem | null;
-  @Column({ nullable: true }) equippedArmorId: string | null;
-
-  @CreateDateColumn() createdAt: Date;
-  @UpdateDateColumn() updatedAt: Date;
-}
-
-// --- Item Template (Definition) ---
-@Entity()
-export class ItemTemplate {
-  @PrimaryGeneratedColumn('uuid') id: string;
-  @Column() name: string;
-  @Column({ default: '' }) description: string;
-  @Column() type: 'Weapon' | 'Armor' | 'Consumable' | 'PetFood' | 'Material';
-  @Column() slot: 'Weapon' | 'Armor' | 'None';
-  @Column('jsonb', { default: {} }) statsModifier: Record<string, any>; // { "str": 5, "attack": 10 }
-  @Column({ default: 'default_icon' }) icon: string;
-  @Column({ default: 1 }) maxStack: number; // 1 for non-stackable
-}
-
-// --- Inventory Item (Instance) ---
-@Entity()
-export class InventoryItem {
-  @PrimaryGeneratedColumn('uuid') id: string; // Unique instance ID
-  @ManyToOne(() => User, user => user.inventory) owner: User;
-  @Column() ownerUserId: string;
-  @ManyToOne(() => ItemTemplate, { eager: true }) template: ItemTemplate; // Eager load base item info
-  @Column() templateId: string;
-  @Column({ default: 1 }) quantity: number;
-  // Optional: For items with unique stats like durability, enchantments
-  @Column('jsonb', { nullable: true }) instanceData: Record<string, any>;
-  @CreateDateColumn() createdAt: Date;
-}
-
-// --- Pet ---
-@Entity()
-export class Pet {
-  @PrimaryGeneratedColumn('uuid') id: string;
-  @ManyToOne(() => User, user => user.pets) owner: User;
-  @Column() ownerUserId: string;
-  @Column() name: string;
-  @Column({ default: 1 }) level: number;
-  @Column({ default: 100 }) hunger: number; // Example: 0-100
-  @Column('jsonb', { default: {} }) stats: Record<string, any>; // e.g., pickupSpeed, pickupRange
-  @CreateDateColumn() createdAt: Date;
-  @UpdateDateColumn() updatedAt: Date;
-}
-
-// --- Potentially Needed Later ---
-// Zone Entity
-// EnemyTemplate Entity
-// DroppedItem Entity (maybe managed in memory/cache primarily for performance)
+  @Column({ length: 100, nullable: true, default: null })
+  currentZoneId: string | null; // Persisted zone (updated periodically/on logout - TODO)
+// ... (timestamps) ...
 ```
+*(User, ItemTemplate, InventoryItem, Pet schemas remain the same for now)*
 
-**9. Initial TODO List / Roadmap**
+**⭐ 9. Key Concepts / Reusable Patterns (NEW SECTION) ⭐**
 
-**Phase 0: Setup & Foundations**
+This section highlights established patterns intended for reuse across different features (like Enemies, Pets, etc.).
 
-1.  [ ] Initialize NestJS Backend Project (`nestjs new backend`)
-2.  [ ] Initialize Phaser Frontend Project (using a template or `npm init phaser`)
-3.  [ ] Setup PostgreSQL Database & Connect NestJS (TypeORM)
-4.  [ ] Define basic `User` Entity & Migration.
-5.  [ ] Implement `AuthModule` (Register, Login REST endpoints, JWT generation/validation).
-6.  [ ] Implement basic password hashing (`bcrypt`).
-7.  [ ] Implement `UserService` (create, find user).
-8.  [ ] Setup basic WebSocket Gateway (`GameGateway`) in NestJS (`@nestjs/websockets`, Socket.IO adapter).
-9.  [ ] Implement WebSocket connection authentication using JWT.
+*   **Entity Runtime State Management (`ZoneService`):**
+    *   `ZoneService` uses in-memory `Map` structures to hold the *current* state of dynamic entities within each active zone (e.g., `zone.players: Map<userId, PlayerInZone>`, `zone.enemies: Map<instanceId, EnemyInstance>`).
+    *   This runtime state (position, target coordinates, current health, AI state) is distinct from the persisted database state (base stats, level, inventory). Runtime state is lost on server restart.
+    *   Provides methods to add/remove entities, update specific properties (like target position), and retrieve state snapshots for broadcasting.
+    *   *Extension:* Use similar Maps and interfaces in `ZoneService` to manage `EnemyInstance` or `DroppedItem` states.
 
-**Phase 1: Character & Basic World Entry**
+*   **Server-Side Simulation Loop (`GameGateway.tickGameLoop` / Future Service):**
+    *   A fixed-interval loop (`setInterval`) iterates through active zones and entities.
+    *   Uses `deltaTime` for consistent calculations regardless of minor timing fluctuations.
+    *   Reads the current state and target state from `ZoneService` (e.g., current position vs target position, current AI state).
+    *   Performs simulation steps (e.g., calculate movement vector towards target based on speed, execute AI state transitions/actions).
+    *   Updates the runtime state via `ZoneService` methods (e.g., update current position).
+    *   Collects relevant state changes for broadcasting.
+    *   *Extension:* Add Enemy AI logic (state checks, target acquisition, attack triggers) and combat resolution ticks within this loop.
 
-10. [ ] Define `Character` Entity & Migration (basic fields: name, link to user).
-11. [ ] Implement `CharacterModule` (Create, List characters for a user - REST endpoints).
-12. [ ] Implement `CharacterService`.
-13. [ ] Frontend: Create `LoginScene` (UI, calls backend Auth API). Store JWT.
-14. [ ] Frontend: Create `CharacterSelectScene` (UI, calls backend Character API, allows creation).
-15. [ ] Frontend: Create basic `GameScene` and `UIScene`.
-16. [ ] Frontend: Implement `NetworkingManager` to handle WebSocket connection.
-17. [ ] Backend: Implement `selectParty` WebSocket handler (link selected characters to player's connection state).
-18. [ ] Backend: Implement `enterZone` WebSocket handler (add player to zone, maybe load basic zone data).
-19. [ ] Frontend: On entering `GameScene`, connect WebSocket, send `selectParty`, send `enterZone`.
-20. [ ] Frontend: Load a basic Tilemap in `GameScene`.
-21. [ ] Backend: Send basic `zoneState` (initially just the player's characters) on `enterZone` success.
-22. [ ] Frontend: Render player characters based on `zoneState`.
+*   **Client-Side State Synchronization (`NetworkManager` -> `EventBus` -> `GameScene`):**
+    *   Server broadcasts batched state changes (`entityUpdate`) containing only necessary data (ID, changed properties like x, y, health).
+    *   `NetworkManager` receives raw WebSocket events.
+    *   `NetworkManager` emits specific, local `EventBus` events (e.g., `'entity-update'`).
+    *   `GameScene` listens for `EventBus` events. On receive, it finds the corresponding sprite using the entity ID from its maps (`playerCharacters`, `otherCharacters`, `enemySprites`).
+    *   `GameScene` **does not** directly set sprite properties like `x`, `y`. Instead, it calls methods on the sprite object (e.g., `sprite.updateTargetPosition(x, y)`, `sprite.updateHealth(h)`).
+    *   *Extension:* Use the same `entityUpdate` event (or new specific events) for enemy state changes (position, health). `GameScene` handles these similarly, finding the `EnemySprite` and calling its update methods.
 
-**Phase 2: Movement & Basic Sync**
+*   **Client-Side Interpolation (Entity Sprites - `CharacterSprite`, `EnemySprite`):**
+    *   Sprite classes store both current rendered position (`this.x`, `this.y`) and target position (`this.targetX`, `this.targetY` - updated by `GameScene` based on network events).
+    *   The sprite's `update(time, delta)` method (called by `GameScene.update`) uses `Phaser.Math.Linear` (lerp) or similar functions to smoothly move `this.x`, `this.y` towards `this.targetX`, `this.targetY` over time. This decouples rendering framerate from network update rate.
+    *   *Extension:* Implement `EnemySprite` using the exact same interpolation pattern.
 
-23. [ ] Backend: Update `Character` entity with `positionX`, `positionY`, `currentZoneId`.
-24. [ ] Backend: Implement basic `ZoneService` to track entities in zones.
-25. [ ] Backend: Implement `moveCommand` WebSocket handler. Validate, update character position *in server memory* (ZoneService).
-26. [ ] Backend: Implement basic game loop to tick updates.
-27. [ ] Backend: Broadcast `entityUpdate` messages with new positions from game loop.
-28. [ ] Frontend: Handle `moveCommand` input (click on ground). Send command.
-29. [ ] Frontend: Handle `entityUpdate` messages. Update sprite positions (implement simple interpolation).
-30. [ ] Frontend: Make camera follow one of the player's characters.
-31. [ ] Backend: Handle `playerJoined` / `playerLeft` broadcasts.
-32. [ ] Frontend: Handle `playerJoined` / `playerLeft` (create/destroy other player sprites).
+*   **Visual Components Attached to Sprites (Entity Sprites):**
+    *   UI elements directly related to an entity (Name Labels, Health Bars-TODO, Chat Bubbles) are best managed *within* the entity's sprite class (`CharacterSprite`).
+    *   These components are created/destroyed along with the sprite.
+    *   Their positions are updated relative to the sprite's interpolated `x`, `y` within the sprite's `update` method.
+    *   *Extension:* Add Health Bars to `CharacterSprite` and `EnemySprite`. `EnemySprite` might have different label styling.
 
-**Phase 3: Basic Combat & Enemies**
+**10. Core Real-time Update Flow (e.g., Movement - Refined)**
 
-33. [ ] Backend: Define `EnemyTemplate` (stats, name, etc. - maybe just in code initially).
-34. [ ] Backend: Define basic `CombatService`.
-35. [ ] Backend: Define basic `AIService` (enemy spawning, basic aggro).
-36. [ ] Backend: Spawn dummy enemies in `ZoneService`.
-37. [ ] Backend: Implement `attackCommand` WebSocket handler.
-38. [ ] Backend: Implement basic auto-attack logic (target nearest enemy if in 'attack' state) in `AIService`.
-39. [ ] Backend: Calculate damage in `CombatService`. Update health (in `ZoneService` state).
-40. [ ] Backend: Broadcast `combatAction` and `entityUpdate` (for health changes).
-41. [ ] Backend: Handle entity death (health <= 0). Broadcast `entityDied`.
-42. [ ] Frontend: Handle `attackCommand` input (click on enemy). Send command.
-43. [ ] Frontend: Display enemies based on `zoneState` / `entityUpdate`.
-44. [ ] Frontend: Display health bars (update via `entityUpdate`).
-45. [ ] Frontend: Play basic attack animations/effects on `combatAction`.
-46. [ ] Frontend: Remove sprites on `entityDied`.
+1.  **Input/Trigger:** `GameScene` detects player input OR `GameGateway` loop triggers AI decision.
+2.  **Command/Intent:** `GameScene` sends command (`moveCommand`) OR `GameGateway` determines AI intent (e.g., move enemy X towards player Y).
+3.  **State Update (Target/Action):** `GameGateway` receives command/determines intent. Calculates necessary state changes (e.g., new target coordinates for affected entities). Updates the **runtime target state** via `ZoneService` (e.g., `zoneService.setCharacterTargetPosition(...)`, `zoneService.setEnemyTarget(...)`).
+4.  **Simulation Tick (`tickGameLoop`):** Loop reads current position and target position for entities from `ZoneService`. Calculates movement step based on speed/deltaTime. Updates the **runtime current position** via `ZoneService` (directly modifying the in-memory object or using an update method).
+5.  **Broadcast:** Loop collects updated current positions (and other changes like health). `GameGateway` broadcasts batched `entityUpdate` { updates: [{ id, x, y, health? }, ...] } to the relevant zone room.
+6.  **Client Reception:** `NetworkManager` receives `entityUpdate`. Emits local `EventBus` event `'entity-update'`.
+7.  **Client State Update:** `GameScene` listener receives event data. Finds corresponding Sprite (Player, Enemy) by ID. Calls method on sprite (e.g., `sprite.updateTargetPosition(x, y)`, `sprite.setHealth(h)`).
+8.  **Client Rendering (`update`):** Sprite's `update` method interpolates its visual `x, y` towards its `targetX, targetY`. Attached components (labels, health bars, bubbles) update their positions relative to the sprite's interpolated `x, y`.
 
-**Phase 4: Inventory, Loot & Equipment**
+**11. TODO List / Roadmap (Updated with Refinements)**
 
-47. [ ] Backend: Define `ItemTemplate` and `InventoryItem` entities & migrations.
-48. [ ] Backend: Implement `InventoryModule` and `InventoryService` (add/remove items).
-49. [ ] Backend: Implement `LootService` and configure basic loot tables.
-50. [ ] Backend: Trigger loot drops on enemy death (`LootService`). Add `DroppedItem` state to `ZoneService`. Broadcast `itemDropped`.
-51. [ ] Backend: Implement `pickupItemCommand` handler (validate range, add to inventory via `InventoryService`, remove from zone). Broadcast `itemPickedUp` and `inventoryUpdate`.
-52. [ ] Frontend: Display dropped item sprites based on `itemDropped`.
-53. [ ] Frontend: Handle clicking items -> send `pickupItemCommand`. Remove sprite on `itemPickedUp`.
-54. [ ] Frontend: Basic Inventory UI (in `UIScene`) to display items from `inventoryUpdate`.
-55. [ ] Backend: Add `equippedWeapon`, `equippedArmor` to `Character` entity.
-56. [ ] Backend: Implement `equipItem` / `unequipItem` logic in `InventoryService`/`CharacterService`. Broadcast `equipmentUpdate`.
-57. [ ] Frontend: Basic Equipment UI (in `UIScene`). Allow equipping/unequipping via drag/drop or buttons. Send commands. Update UI on `equipmentUpdate`.
+**Phase 0-3 (Complete)**
 
-**Phase 5: Chat & Pets (Lower Priority)**
+**➡️ Phase 4: Basic Combat & Enemies (Next Steps)**
+1.  [ ] Backend: Define `EnemyTemplate` interface/object (stats, behavior flags, loot ref).
+2.  [ ] Backend: Enhance `ZoneService` to manage `EnemyInstance` state *similarly to PlayerInZone* (Map keyed by instanceId, holding runtime data: templateId, health, pos, target, AI state).
+3.  [ ] Backend: Implement basic enemy spawning logic (timed/location based) in `ZoneService` or `EnemyService`. Broadcast spawn (`enemySpawned` event or use `entityUpdate` with type field).
+4.  [ ] Frontend: Create `EnemySprite` class *similar to CharacterSprite*, handling interpolation, maybe different visual style/label.
+5.  [ ] Frontend: Handle enemy spawn/update events in `GameScene` to manage `EnemySprite` instances *like other entities*. Add an `enemySprites` Map.
+6.  [ ] Backend: Implement basic `CombatService` (e.g., `calculateDamage(attackerStats, defenderStats)`).
+7.  [ ] Backend: Enhance `AIService` or `tickGameLoop`:
+    *   Enemy Aggro logic (distance check).
+    *   Enemy Movement *using target updates via ZoneService*.
+    *   Enemy Attack logic (trigger `CombatService` on timer/cooldown if in range). Define basic AI states (Idle, Chasing, Attacking).
+8.  [ ] Backend: Handle `attackCommand` from client -> set player character's target/state via `ZoneService`.
+9.  [ ] Backend: Implement Character Auto-Attack AI -> check state/target, trigger `CombatService`, update target/position via `ZoneService`.
+10. [ ] Backend: Broadcast `combatAction` (attackerId, targetId, damage) & health updates (`entityUpdate`). Handle death via `entityDied` (entityId, type).
+11. [ ] Frontend: Handle `attackCommand` input (click on enemy sprite).
+12. [ ] Frontend: Implement/Add Health Bars to `CharacterSprite` and `EnemySprite`, updated via `entityUpdate`.
+13. [ ] Frontend: Show basic attack visuals on `combatAction`.
+14. [ ] Frontend: Handle `entityDied` (remove sprite, show effect).
 
-58. [ ] Backend: Implement `ChatModule` (`ChatGateway`, `sendMessage` handler). Broadcast `chatMessage` to zone room.
-59. [ ] Frontend: Implement Chat UI (input/display) in `UIScene`. Send/receive messages.
-60. [ ] Backend: Define `Pet` entity & migration.
-61. [ ] Backend: Implement `PetModule`/`PetService`.
-62. [ ] Backend: Implement basic Pet AI (find nearby item, move, trigger pickup) in `AIService`. Rate limit this.
-63. [ ] Backend: Implement `feedPet` command/logic.
-64. [ ] Frontend: Render Pet sprite.
-65. [ ] Frontend: Pet UI (hunger status, feed button).
+**Phase 5: Inventory, Loot & Equipment (Was Phase 5)**
+*   [...] Define Item entities, LootService, pickup command/logic, basic UI.
+
+**Phase 6: Pets (Was Phase 6)**
+*   [...] Define Pet entity, AI Service logic, feeding command.
+
+**Refinement / Future TODOs:**
+*   [ ] Refactor game loop out of `GameGateway` into a dedicated service.
+*   [ ] Persist character position/zone periodically or on logout/zone change.
+*   [ ] Implement proper Tilemaps and Collision on frontend & backend validation.
+*   [ ] More sophisticated movement (Pathfinding using libraries like `easystarjs`).
+*   [ ] Add character stats (HP, Attack, Defense, Speed etc.) to entities and combat calculations.
+*   [ ] Add different character types/classes (Melee, Ranged, Healer AI).
+*   [ ] Proper character/enemy sprites and animations.
+*   [ ] Click-and-drag selection for controlling individual characters.
+*   [ ] More robust error handling and user feedback.
+*   [ ] Server-side validation of movement distance/speed to prevent cheating.
+*   [ ] Scalability considerations (multiple zones, potentially multiple server instances with Redis).
+*   [ ] Unit and End-to-End testing.
 
 ---
 
-This provides a solid foundation. We can refine the database schema, WebSocket events, and TODO list as we progress through development. Does this structure and level of detail work for you? Ready to start tackling Phase 0?
+## **Continuing Development Guide (v0.2)**
+
+This guide helps developers understand the current state and continue working on the Idle Browser MMO project. Reference Section 9: Key Concepts / Reusable Patterns in the main documentation when implementing new features like enemies
+
+**1. Current Status:**
+*   The project has functional user authentication (REST + WebSockets).
+*   Players can create characters and select a party of up to 3.
+*   Players enter a shared zone, see each other, and can move their party in formation by clicking.
+*   Movement is simulated server-side and interpolated client-side.
+*   Zone-based chat with chat bubbles above characters is implemented.
+*   Refer to the main documentation (above) for detailed feature list, architecture, and updated TODO list.
+
+**2. Core Development Loop:**
+*   **Backend:** Run `npm run start:dev` in the `backend` directory. Uses NestJS CLI with watch mode. Changes should auto-reload.
+*   **Frontend:** Run `npm run dev` in the `frontend` directory. Uses Vite dev server with HMR. Changes often reflect without full reload.
+*   **Database:** Assumes PostgreSQL is running and accessible with credentials configured (currently hardcoded/env vars in `backend/src/app.module.ts` via `TypeOrmModule.forRoot`). `synchronize: true` is enabled for development (auto-updates schema based on entities).
+
+**3. Key Modules/Files for Common Tasks:**
+
+*   **Adding REST API Endpoints:** Look at `CharacterController` / `AuthController` and their corresponding Services/Modules. Use NestJS CLI (`nest generate controller/service/module`).
+*   **Adding WebSocket Events:**
+    *   Define `@SubscribeMessage('eventName')` handler in `GameGateway` (`backend/src/game/game.gateway.ts`).
+    *   Inject necessary services (`ZoneService`, `CharacterService`, etc.) into `GameGateway`.
+    *   Send messages from client using `NetworkManager.getInstance().sendMessage('eventName', payload)`.
+    *   Listen for server broadcasts on client using `socket.on('eventName', handler)` within `NetworkManager.connect`, emitting local `EventBus` events.
+    *   Handle `EventBus` events in relevant Phaser Scenes (usually `GameScene` or `UIScene`).
+*   **Real-time State Management:** `ZoneService` (`backend/src/game/zone.service.ts`) holds the in-memory state of players/characters/enemies per zone. Modify this service to track new entities or properties.
+*   **Game Loop / Simulation:** Basic loop is in `GameGateway.tickGameLoop`. Movement simulation happens here. Combat/AI ticks will likely go here too (consider refactoring to a dedicated service later).
+*   **Client-side Visuals:**
+    *   Sprites: `CharacterSprite` (`frontend/src/gameobjects/CharacterSprite.ts`). Add new sprite types here.
+    *   Rendering/Scene Logic: `GameScene` (`frontend/src/scenes/GameScene.ts`). Handles creating/destroying sprites based on network events, input, camera.
+    *   UI Elements: `UIScene` (`frontend/src/scenes/UIScene.ts`). Uses Phaser DOM elements for overlays like chat.
+*   **Database Models:** Define entities in `.entity.ts` files (e.g., `Character`, `User`). Use TypeORM decorators. Ensure entities are registered in their respective module's `TypeOrmModule.forFeature([...])` and that the module is imported into `AppModule`.
+
+**4. Core Gameplay Flow (Movement Example):**
+1.  `GameScene`: User clicks (`pointerdown`).
+2.  `GameScene`: Calculates `worldPoint`. Calls `showClickMarker`. Sends `moveCommand` with `{ target: worldPoint }` via `NetworkManager`.
+3.  `GameGateway`: Receives `moveCommand`. Gets user's party from `ZoneService`. Calculates formation target coordinates for each character. Calls `ZoneService.setCharacterTargetPosition` for each character.
+4.  `GameGateway.tickGameLoop`: Iterates characters. Checks `character.position` vs `character.target`. Calculates movement step based on `MOVEMENT_SPEED` and `deltaTime`. Updates `character.position` (in memory via `ZoneService` state). Collects updated positions.
+5.  `GameGateway`: Broadcasts batched `entityUpdate` { updates: [{ id, x, y }, ...] } to the zone room.
+6.  `NetworkManager`: Receives `entityUpdate`. Emits local `EventBus` event `'entity-update'`.
+7.  `GameScene`: Listener for `'entity-update'` receives data. Iterates updates. Finds corresponding `CharacterSprite` (or `EnemySprite`). Calls `sprite.updateTargetPosition(x, y)`.
+8.  `CharacterSprite.update`: Called by `GameScene.update`. Interpolates `this.x`, `this.y` towards `this.targetX`, `this.targetY` using `Phaser.Math.Linear`. Updates name label / chat bubble positions relative to interpolated `this.x`, `this.y`.
+
+**5. Next Steps:**
+*   Refer to the **Phase 4** section in the main TODO list above. Focus on implementing basic enemies and combat mechanics.
+*   Consider tackling the "Refinement / Future TODOs" items as needed or after core features are in place.
