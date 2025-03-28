@@ -14,6 +14,8 @@ import { Logger, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt'; // Import JwtService
 import { UserService } from '../user/user.service'; // Import UserService
 import { User } from '../user/user.entity'; // Import User entity
+import { CharacterService } from '../character/character.service'; // Import CharacterService
+import { Character } from '../character/character.entity'; // Import Character entity
 
 @WebSocketGateway({
   cors: { /* ... */ },
@@ -25,6 +27,7 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
   constructor(
     private jwtService: JwtService, // Inject JwtService
     private userService: UserService, // Inject UserService
+    private characterService: CharacterService, // Inject CharacterService
   ) {}
 
   afterInit(server: Server) {
@@ -103,5 +106,47 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     }
     this.logger.log(`Message from ${user.username} (${client.id}): ${data}`);
     return `Message received from ${user.username}!`;
+  }
+  @SubscribeMessage('selectParty')
+  async handleSelectParty(
+    @MessageBody() data: { characterIds: string[] },
+    @ConnectedSocket() client: Socket,
+  ): Promise<{ success: boolean; characters?: Character[]; message?: string }> { // Return acknowledge response
+    const user = client.data.user as User;
+    if (!user) {
+      return { success: false, message: 'User not authenticated.' };
+    }
+
+    const characterIds = data.characterIds;
+
+    // Validation
+    if (!Array.isArray(characterIds) || characterIds.length === 0) {
+        return { success: false, message: 'No characters selected.' };
+    }
+    if (characterIds.length > 3) { // Ensure limit (adjust if needed)
+        return { success: false, message: 'Too many characters selected (max 3).' };
+    }
+
+    // Verify that all selected characters belong to the user and exist
+    const characters: Character[] = [];
+    for (const id of characterIds) {
+      // Basic UUID check (optional, ParseUUIDPipe would do this on controller)
+      // if (!isValidUUID(id)) return { success: false, message: `Invalid character ID format: ${id}` };
+
+      const character = await this.characterService.findCharacterByIdAndUserId(id, user.id);
+      if (!character) {
+        this.logger.warn(`User ${user.username} tried to select invalid/unowned character ${id}`);
+        return { success: false, message: `Character not found or not owned: ${id}` };
+      }
+      characters.push(character);
+    }
+
+    // Store the selected party on the socket data for this session
+    // This is the active party for this specific connection
+    client.data.selectedCharacters = characters;
+    this.logger.log(`User ${user.username} (${client.id}) selected party: ${characters.map(c => c.name).join(', ')}`);
+
+    // Acknowledge success back to the client, optionally sending the validated character data
+    return { success: true, characters };
   }
 }
