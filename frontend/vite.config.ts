@@ -12,5 +12,8 @@ export default defineConfig({
     setupFiles: './src/setupTests.ts', // Optional setup file path
     // include: ['src/**/*.{test,spec}.{js,ts,jsx,tsx}'], // Default pattern
   },
+  server: {
+    allowedHosts: true,
+  }
   // --------------------------
 });

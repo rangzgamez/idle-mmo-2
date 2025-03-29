@@ -4,9 +4,10 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { UserModule } from './user/user.module';
 import { AuthModule } from './auth/auth.module';
-import { GameGateway } from './game/game.gateway';
 import { GameModule } from './game/game.module';
 import { CharacterModule } from './character/character.module';
+import { EnemyModule } from './enemy/enemy.module';
+import { DebugModule } from './debug/debug.module';
 
 @Module({
   imports: [
@@ -27,6 +28,8 @@ import { CharacterModule } from './character/character.module';
     AuthModule,
     GameModule,
     CharacterModule,
+    EnemyModule,
+    DebugModule,
     // Add other modules here as you create them
     // AuthModule, UserModule, CharacterModule, GameModule, etc.
   ],

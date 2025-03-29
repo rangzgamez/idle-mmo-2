@@ -86,7 +86,8 @@ export default class CharacterSelectScene extends Phaser.Scene {
         }
 
         try {
-            const response = await fetch('http://localhost:3000/characters', {
+            const response = await fetch('http://localhost:3000/characters', //'http://141.155.171.22:3000/auth/login', 
+            {
                 method: 'GET',
                 headers: {
                     'Authorization': `Bearer ${token}`,
@@ -228,7 +229,8 @@ export default class CharacterSelectScene extends Phaser.Scene {
         }
 
         try {
-            const response = await fetch('http://localhost:3000/characters', {
+            const response = await fetch('http://localhost:3000/characters', //'http://141.155.171.22:3000/auth/login', 
+            {
                 method: 'POST',
                 headers: {
                     'Authorization': `Bearer ${token}`,

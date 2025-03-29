@@ -18,6 +18,8 @@ import { CharacterService } from '../character/character.service'; // Import Cha
 import { Character } from '../character/character.entity'; // Import Character entity
 import { ZoneService, ZoneCharacterState } from './zone.service'; // Import ZoneService
 import * as sanitizeHtml from 'sanitize-html';
+import { CombatService } from './combat.service';
+import { EnemyService } from 'src/enemy/enemy.service';
 @WebSocketGateway({
   cors: { /* ... */ },
 })
@@ -27,12 +29,16 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
   private gameLoopInterval: NodeJS.Timeout | null = null;
   private readonly TICK_RATE = 100; // ms (10 FPS)
   private readonly MOVEMENT_SPEED = 150; // Pixels per second
+  private readonly ENEMY_MOVEMENT_SPEED = 75; // Pixels per second
+  private readonly ENEMY_AGGRO_RANGE = 200;
 
   constructor(
     private jwtService: JwtService, // Inject JwtService
     private userService: UserService, // Inject UserService
     private characterService: CharacterService, // Inject CharacterService
     private zoneService: ZoneService, // Inject ZoneService
+    private combatService: CombatService, // Inject CombatService
+    private enemyService: EnemyService, // Inject EnemyService
   ) {}
 
   afterInit(server: Server) {
@@ -103,10 +109,11 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     const deltaTime = this.TICK_RATE / 1000.0; // Delta time in seconds
 
     for (const [zoneId, zone] of (this.zoneService as any).zones.entries()) { // Use getter later
-        if (zone.players.size === 0) continue;
+        if (zone.players.size === 0 && zone.enemies.size === 0) continue; //Skip zones with no players or enemies
 
-        const updates: Array<{ id: string, x: number | null, y: number | null }> = [];
+        const updates: Array<{ id: string, x: number | null, y: number | null, health?: number | null }> = [];
 
+        // --- Character Movement ---
         for (const player of zone.players.values()) {
             for (const character of player.characters) { // character is RuntimeCharacterData
                 let moved = false;
@@ -123,6 +130,8 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
                         // Reached target
                         character.positionX = character.targetX;
                         character.positionY = character.targetY;
+                        character.targetX = null; // Clear Target
+                        character.targetY = null;
                         moved = true;
                     } else {
                         // Move towards target
@@ -132,8 +141,10 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
                         character.positionY += moveY;
                         moved = true;
                     }
+
                     // Update the character's current position in ZoneService
                     // (This updates the object directly since it's in memory)
+                    // No need to call zoneService.updateCharacterPosition here
                 }
                 // -------------------------
 
@@ -145,6 +156,101 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
                         y: character.positionY,
                     });
                 // }
+            }
+        }
+
+        // --- Enemy AI & Movement ---
+        const enemies = this.zoneService.getZoneEnemies(zoneId);
+        for (const enemy of enemies) {
+            if (enemy.aiState === 'IDLE') {
+                // Check for nearby players and switch to CHASING state
+                const closestPlayer = this.findClosestPlayer(enemy, zoneId);
+                if (closestPlayer) {
+                    const distance = this.calculateDistance(enemy.position, { x: closestPlayer.x!, y: closestPlayer.y! });
+                    if (distance <= this.ENEMY_AGGRO_RANGE) {
+                      enemy.aiState = 'CHASING';
+                      enemy.target = { x: closestPlayer.x!, y: closestPlayer.y! };
+                      this.zoneService.setEnemyAiState(zoneId, enemy.instanceId, 'CHASING');
+                      this.zoneService.setEnemyTarget(zoneId, enemy.instanceId, enemy.target);
+                      this.logger.log(`Enemy ${enemy.instanceId} is now CHASING player ${closestPlayer.ownerName}'s char ${closestPlayer.name}`);
+                    }
+
+                }
+            } else if (enemy.aiState === 'CHASING') {
+                // Move towards the target
+                if (!enemy.target) {
+                    // Target lost, go back to idle (THIS SHOULD NOT HAPPEN)
+                    this.logger.warn(`Enemy ${enemy.instanceId} has no target while CHASING!  Going back to IDLE`);
+                    enemy.aiState = 'IDLE';
+                    this.zoneService.setEnemyAiState(zoneId, enemy.instanceId, 'IDLE');
+                    continue;
+                }
+                // Calculate movement step
+                const distance = this.calculateDistance(enemy.position, enemy.target);
+
+                if (distance > 0) {
+                    const step = this.ENEMY_MOVEMENT_SPEED * deltaTime;
+                    let newX: number, newY: number;
+
+                    if (step >= distance) {
+                        // Close enough, snap to target (Reached target)
+                        newX = enemy.target.x;
+                        newY = enemy.target.y;
+
+                        // If close enough, switch to ATTACKING state
+                        enemy.aiState = 'ATTACKING';
+                        this.zoneService.setEnemyAiState(zoneId, enemy.instanceId, 'ATTACKING');
+                        this.logger.log(`Enemy ${enemy.instanceId} is now ATTACKING`);
+                    } else {
+                        // Move towards target
+                        const dx = enemy.target.x - enemy.position.x;
+                        const dy = enemy.target.y - enemy.position.y;
+                        newX = enemy.position.x + (dx / distance) * step;
+                        newY = enemy.position.y + (dy / distance) * step;
+                    }
+
+                    // Update enemy position
+                    this.zoneService.updateEnemyPosition(zoneId, enemy.instanceId, { x: newX, y: newY });
+                    enemy.position = { x: newX, y: newY };
+                    updates.push({ id: enemy.instanceId, x: newX, y: newY });
+                }
+            } else if (enemy.aiState === 'ATTACKING') {
+                // Find a character in the same position
+                const targetChar = this.findCharacterFromPosition(enemy.position, zoneId);
+
+                if (targetChar) {
+                    // Calculate Damage
+                    // Get stats, currently hardcoded for simplicity
+                    const enemyAttack = 10; // example number
+                    const playerDefense = 5; // example Number
+
+                    const damage = this.combatService.calculateDamage(enemyAttack, playerDefense);
+
+                    // Apply Damage
+                    this.zoneService.updateEnemyHealth(zoneId, enemy.instanceId, -damage);
+                    const currentHealth = this.zoneService.getEnemy(zoneId, enemy.instanceId)?.currentHealth;
+
+                    updates.push({ id: enemy.instanceId, x: enemy.position.x, y: enemy.position.y, health: currentHealth })
+
+                    if (currentHealth! <= 0) {
+                        this.logger.log(`Enemy ${enemy.instanceId} has died!`);
+                        this.zoneService.removeEnemy(zoneId, enemy.instanceId);
+                        this.server.to(zoneId).emit('entityDied', { entityId: enemy.instanceId, type: 'enemy' });
+                    }
+
+                    // Set AI state back to IDLE (for now)
+                    enemy.aiState = 'IDLE';
+                    enemy.target = null;
+                    this.zoneService.setEnemyAiState(zoneId, enemy.instanceId, 'IDLE');
+                    this.zoneService.setEnemyTarget(zoneId, enemy.instanceId, null);
+
+                    this.logger.log(`Enemy ${enemy.instanceId} attacks character ${targetChar.id} for ${damage} damage!`);
+                } else {
+                  enemy.aiState = 'IDLE';
+                  enemy.target = null;
+                  this.zoneService.setEnemyAiState(zoneId, enemy.instanceId, 'IDLE');
+                  this.zoneService.setEnemyTarget(zoneId, enemy.instanceId, null);
+                }
             }
         }
 
@@ -406,4 +512,59 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
 
     // The actual movement happens in the game loop based on these targets
 }
+   @SubscribeMessage('attackCommand')
+    handleAttackCommand(
+        @MessageBody() data: { targetId: string },
+        @ConnectedSocket() client: Socket,
+    ): void {
+        const user = client.data.user as User;
+        const partyCharacters = this.zoneService.getPlayerCharacters(user.id);
+
+        if (partyCharacters && partyCharacters.length > 0) {
+            const zoneId = partyCharacters[0].currentZoneId ? partyCharacters[0].currentZoneId : 'startZone';
+            const attacker = partyCharacters[0];
+            const target = this.zoneService.getEnemy(zoneId, data.targetId);
+
+            if (target) {
+                // Set the character's target for auto-attack in the game loop
+                attacker.targetX = target.position.x;
+                attacker.targetY = target.position.y;
+                client.data.attackTarget = target.instanceId;
+            }
+        }
+    }
+
+        //  --------------------- AI ADDITIONS ---------------------
+  private findClosestPlayer(enemy: any, zoneId: string): ZoneCharacterState | undefined {
+      let closestPlayer: ZoneCharacterState | undefined;
+      let minDistance = Infinity;
+
+      const players = this.zoneService.getZoneCharacterStates(zoneId);
+      for (const player of players) {
+          const distance = this.calculateDistance(enemy.position, {x: player.x!, y: player.y!});
+          if (distance < minDistance) {
+              minDistance = distance;
+              closestPlayer = player;
+          }
+      }
+      return closestPlayer;
+  }
+  private calculateDistance(point1: {x:number, y:number}, point2: {x:number, y:number}): number {
+      const dx = point1.x - point2.x;
+      const dy = point1.y - point2.y;
+      return Math.sqrt(dx * dx + dy * dy);
+  }
+    private findCharacterFromPosition(position: {x:number, y:number}, zoneId:string): any | undefined{
+        let foundCharacter: any | undefined;
+
+        const players = this.zoneService.getPlayersInZone(zoneId);
+        for(const player of players){
+            for(const char of player.characters){
+                if(char.positionX == position.x && char.positionY == position.y){
+                    foundCharacter = char;
+                }
+            }
+        }
+        return foundCharacter;
+    }
 }

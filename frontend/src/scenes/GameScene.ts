@@ -126,7 +126,7 @@ export default class GameScene extends Phaser.Scene {
                  const firstPlayerChar = Array.from(this.playerCharacters.values())[0];
                  if(firstPlayerChar) {
                      this.cameras.main.startFollow(firstPlayerChar, true, 0.1, 0.1); // Smooth follow
-                     this.cameras.main.setZoom(2); // Zoom in a bit
+                     this.cameras.main.setZoom(1.7); // Zoom in a bit
                  }
 
             } else {

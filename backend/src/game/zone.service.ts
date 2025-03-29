@@ -3,6 +3,9 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Socket } from 'socket.io';
 import { Character } from '../character/character.entity';
 import { User } from '../user/user.entity';
+import { EnemyInstance } from './interfaces/enemy-instance.interface';
+import { v4 as uuidv4 } from 'uuid';
+import { EnemyService } from '../enemy/enemy.service'; // Import EnemyService
 
 // Interface for player data within a zone
 interface PlayerInZone {
@@ -24,9 +27,10 @@ export interface ZoneCharacterState {
 }
 
 // Interface for the overall zone state
+
 interface ZoneState {
-    players: Map<string, PlayerInZone>; // Keyed by User ID
-    // Add enemies map/list later
+    players: Map<string, PlayerInZone>; // Existing player state
+    enemies: Map<string, EnemyInstance>; // Enemy instances, keyed by instanceId
     // Add items map/list later
 }
 // Conceptually add these to the Character objects stored *within* the ZoneService's 'characters' array
@@ -43,12 +47,17 @@ export class ZoneService {
     private zones: Map<string, ZoneState> = new Map();
     private logger: Logger = new Logger('ZoneService');
 
+    constructor(private readonly enemyService: EnemyService) { // Inject EnemyService
+        // Initialize zone state for default zone(s).
+        this.zones.set('startZone', { players: new Map(), enemies: new Map() });
+        this.startSpawningEnemies('startZone'); // Start spawning enemies in the default zone.
+      }
     // --- Player Management ---
 
     addPlayerToZone(zoneId: string, playerSocket: Socket, user: User, characters: Character[]): void {
         if (!this.zones.has(zoneId)) {
             this.logger.log(`Creating new zone: ${zoneId}`);
-            this.zones.set(zoneId, { players: new Map() });
+            this.zones.set(zoneId, { players: new Map(), enemies: new Map() });
         }
         const zone = this.zones.get(zoneId)!; // Zone is guaranteed to exist now
 
@@ -64,6 +73,8 @@ export class ZoneService {
 
 
         zone.players.set(user.id, { socket: playerSocket, user, characters: runtimeCharacters });
+        console.log(zone);
+        console.log(this.zones);
         this.logger.log(`User ${user.username} (${user.id}) added to zone ${zoneId}`);
 
         // Add socket to the Socket.IO room for this zone
@@ -104,9 +115,120 @@ export class ZoneService {
         }
         return null; // Player wasn't found in any zone
     }
+    async addEnemy(zoneId: string, templateId: string, position: { x: number; y: number }): Promise<EnemyInstance | null> {
+        const zone = this.zones.get(zoneId);
+        if (!zone) {
+          console.warn(`Zone ${zoneId} does not exist.  Cannot add enemy.`);
+          return null; // Zone doesn't exist.
+        }
+    
+        // Fetch the template from the EnemyService
+        const enemyTemplate = await this.enemyService.findOne(templateId);
+        if (!enemyTemplate) {
+            console.warn(`Enemy template ${templateId} does not exist.  Cannot add enemy.`);
+          return null; // Template doesn't exist.
+        }
+    
+        const instanceId = uuidv4();
+        const newEnemy: EnemyInstance = {
+          instanceId,
+          templateId,
+          zoneId,
+          currentHealth: enemyTemplate.baseHealth,
+          position,
+          aiState: 'IDLE', // Initial AI state
+        };
+    
+        zone.enemies.set(instanceId, newEnemy);
+        console.log(`Added enemy ${enemyTemplate.name} at ${position.x}, ${position.y} (${instanceId}) to zone ${zoneId}`);
+        return newEnemy;
+      }
 
+
+  removeEnemy(zoneId: string, instanceId: string): boolean {
+    const zone = this.zones.get(zoneId);
+    if (!zone) {
+      return false;
+    }
+    return zone.enemies.delete(instanceId);
+  }
+
+  getEnemy(zoneId: string, instanceId: string): EnemyInstance | undefined {
+    const zone = this.zones.get(zoneId);
+    if (!zone) {
+      return undefined;
+    }
+    return zone.enemies.get(instanceId);
+  }
+
+  updateEnemyPosition(zoneId: string, instanceId: string, position: { x: number; y: number }): boolean {
+      const enemy = this.getEnemy(zoneId, instanceId);
+      if (!enemy) return false;
+      enemy.position = position;
+      return true;
+  }
+
+  setEnemyTarget(zoneId: string, instanceId: string, target: { x: number; y: number } | null): boolean {
+      const enemy = this.getEnemy(zoneId, instanceId);
+      if (!enemy) return false;
+      enemy.target = target;
+      return true;
+  }
+
+  setEnemyAiState(zoneId: string, instanceId: string, aiState: string): boolean {
+      const enemy = this.getEnemy(zoneId, instanceId);
+      if (!enemy) return false;
+      enemy.aiState = aiState;
+      return true;
+  }
+
+  updateEnemyHealth(zoneId: string, instanceId: string, healthChange: number): boolean {
+      const enemy = this.getEnemy(zoneId, instanceId);
+      if (!enemy) return false;
+      enemy.currentHealth += healthChange;
+
+      //Ensure health doesn't go below 0.  CombatService should handle death.
+      if (enemy.currentHealth < 0) {
+        enemy.currentHealth = 0;
+      }
+      return true;
+  }
+
+  getZoneEnemies(zoneId: string): EnemyInstance[] {
+      const zone = this.zones.get(zoneId);
+      if (!zone) return [];
+      return Array.from(zone.enemies.values());
+  }
     // --- State Retrieval ---
+    private async spawnEnemy(zoneId: string) {
+        // Simple spawning logic:
+        // 1. Get a random enemy template ID from the EnemyService.
+        // 2. Generate a random position within the zone.
+        // 3. Call addEnemy.
 
+        const enemyTemplates = await this.enemyService.findAll();
+        if (enemyTemplates.length === 0) {
+        console.warn('No enemy templates found.  Cannot spawn enemies.');
+        return;
+        }
+
+        const randomTemplate = enemyTemplates[Math.floor(Math.random() * enemyTemplates.length)];
+        const randomPosition = {
+        x: Math.random() * 500, // Example zone size (500x500).  Replace with actual zone dimensions
+        y: Math.random() * 500,
+        };
+
+        await this.addEnemy(zoneId, randomTemplate.id, randomPosition);
+        console.log(`Spawned enemy ${randomTemplate.name} (${randomTemplate.id}) in zone ${zoneId}`);
+
+        // TODO: Broadcast enemySpawned event to clients in the zone (later).
+    }
+
+    private startSpawningEnemies(zoneId: string) {
+        setInterval(() => {
+            this.spawnEnemy(zoneId);
+        }, 5000); // Spawn every 5 seconds (adjust as needed)
+    } 
     getPlayersInZone(zoneId: string): PlayerInZone[] {
         const zone = this.zones.get(zoneId);
         return zone ? Array.from(zone.players.values()) : [];

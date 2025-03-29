@@ -102,7 +102,8 @@ export default class LoginScene extends Phaser.Scene {
         this.disableInputs();
 
         try {
-            const response = await fetch('http://localhost:3000/auth/login', {
+            const response = await fetch('http://localhost:3000/auth/login', //'http://141.155.171.22:3000/auth/login', 
+            {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ username, password }),
@@ -193,7 +194,8 @@ export default class LoginScene extends Phaser.Scene {
         this.disableInputs();
 
         try {
-            const response = await fetch('http://localhost:3000/auth/register', {
+            const response = await fetch('http://localhost:3000/auth/register', //'http://141.155.171.22:3000/auth/login', 
+            {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ username, password }),
