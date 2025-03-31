@@ -4,6 +4,7 @@ import { NetworkManager } from '../network/NetworkManager';
 import { CharacterSprite } from '../gameobjects/CharacterSprite'; // Import the sprite class
 import { EventBus } from '../EventBus';
 import UIScene from './UIScene';
+import { EnemySprite } from '../gameobjects/EnemySprite';
 // Add the interface definitions if not shared
 interface ZoneCharacterState { id: string; ownerId: string; ownerName: string; name: string; level: number; x: number | null; y: number | null; }
 interface EntityUpdateData { id: string; x?: number | null; y?: number | null; }
@@ -24,6 +25,7 @@ export default class GameScene extends Phaser.Scene {
     private markerFadeTween: Phaser.Tweens.Tween | null = null; // Store the active fade tween
     private uiSceneRef: UIScene | null = null;
     private currentPlayerUsername: string | null = null; // <-- Add property to store username
+    private enemySprites: Map<string, EnemySprite> = new Map(); //NEW
     constructor() {
         super('GameScene');
     }
@@ -53,6 +55,8 @@ export default class GameScene extends Phaser.Scene {
         // Load assets needed specifically for this scene if not preloaded
         this.load.image('playerPlaceholder', 'assets/sprites/player_sprite.png');
         this.load.image('clickMarker', 'assets/ui/click_marker.png'); // <-- Load the marker
+        this.load.image('goblin', 'assets/sprites/goblin.png'); // Example sprite - add more
+        this.load.image('spider', 'assets/sprites/spider.png');   // Load spider sprite
         // this.load.tilemapTiledJSON('zone1Map', 'assets/tilemaps/zone1.json');
         // this.load.image('tileset', 'assets/tilesets/your_tileset.png');
     }
@@ -104,7 +108,7 @@ export default class GameScene extends Phaser.Scene {
         });
         // --- Send 'enterZone' request ---
         const zoneId = 'startZone'; // Or determine dynamically
-        this.networkManager.sendMessage('enterZone', { zoneId }, (response: { success: boolean; zoneState?: ZoneCharacterState[]; message?: string }) => {
+        this.networkManager.sendMessage('enterZone', { zoneId }, (response: { success: boolean; zoneState?: ZoneCharacterState[]; enemyState?:any[]; message?: string }) => {
             if (response && response.success) {
                 console.log(`Entered zone ${zoneId} successfully. Initial state:`, response.zoneState);
 
@@ -128,6 +132,13 @@ export default class GameScene extends Phaser.Scene {
                      this.cameras.main.startFollow(firstPlayerChar, true, 0.1, 0.1); // Smooth follow
                      this.cameras.main.setZoom(1.7); // Zoom in a bit
                  }
+                 if (response.enemyState) {
+                    response.enemyState.forEach(enemyData => {
+                        // Create EnemySprite for each existing enemy
+                         const newEnemy = new EnemySprite(this, enemyData.position.x, enemyData.position.y, 'goblin', `Enemy ${enemyData.instanceId}`, enemyData);
+                        this.enemySprites.set(enemyData.instanceId, newEnemy);
+                    });
+                }
 
             } else {
                 console.error(`Failed to enter zone ${zoneId}:`, response?.message);
@@ -229,7 +240,7 @@ export default class GameScene extends Phaser.Scene {
         // Update character interpolation
         this.playerCharacters.forEach(char => char.update(time, delta));
         this.otherCharacters.forEach(char => char.update(time, delta));
-
+        this.enemySprites.forEach(sprite => sprite.update(time, delta));
         // --- Check for Arrival to Stop Marker Tween (Using Average Position) ---
         if (this.markerFadeTween && this.lastMarkerTarget && this.playerCharacters.size > 0) {
 
@@ -306,6 +317,19 @@ export default class GameScene extends Phaser.Scene {
                 characterSprite.updateTargetPosition(x, y);
             }
              // Handle other updates later (health, state changes, etc.)
+             else if (this.enemySprites.has(update.id)) {
+                const sprite = this.enemySprites.get(update.id);
+                if (sprite && update.x && update.y) {
+                    sprite.updateTargetPosition(update.x, update.y);
+                }
+            }
+             // 4. NEW - Create Enemy Sprite if doesn't exist
+            else {
+                 // ASSUME THIS IS AN ENEMY for now - needs to be changed to a type-safe approach.
+                //This is a HACK since there will never be a health check for a new sprite for users
+                 const newEnemy = new EnemySprite(this, update.x!, update.y!, 'goblin', `Enemy ${update.id}`, null);
+                 this.enemySprites.set(update.id, newEnemy);
+             }
         });
     }
 

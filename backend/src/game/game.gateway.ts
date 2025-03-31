@@ -162,21 +162,21 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
         // --- Enemy AI & Movement ---
         const enemies = this.zoneService.getZoneEnemies(zoneId);
         for (const enemy of enemies) {
-            if (enemy.aiState === 'IDLE') {
-                // Check for nearby players and switch to CHASING state
-                const closestPlayer = this.findClosestPlayer(enemy, zoneId);
-                if (closestPlayer) {
-                    const distance = this.calculateDistance(enemy.position, { x: closestPlayer.x!, y: closestPlayer.y! });
-                    if (distance <= this.ENEMY_AGGRO_RANGE) {
-                      enemy.aiState = 'CHASING';
-                      enemy.target = { x: closestPlayer.x!, y: closestPlayer.y! };
-                      this.zoneService.setEnemyAiState(zoneId, enemy.instanceId, 'CHASING');
-                      this.zoneService.setEnemyTarget(zoneId, enemy.instanceId, enemy.target);
-                      this.logger.log(`Enemy ${enemy.instanceId} is now CHASING player ${closestPlayer.ownerName}'s char ${closestPlayer.name}`);
-                    }
+            //Check for nearby players and switch to CHASING state
+            const closestPlayer = this.findClosestPlayer(enemy, zoneId);
 
-                }
-            } else if (enemy.aiState === 'CHASING') {
+            if(closestPlayer){
+                  const distance = this.calculateDistance(enemy.position, { x: closestPlayer.x!, y: closestPlayer.y! });
+                  if (distance <= this.ENEMY_AGGRO_RANGE && enemy.aiState != "ATTACKING") {
+                        enemy.aiState = 'CHASING';
+                        enemy.target = { x: closestPlayer.x!, y: closestPlayer.y! };
+                        this.zoneService.setEnemyAiState(zoneId, enemy.instanceId, 'CHASING');
+                        this.zoneService.setEnemyTarget(zoneId, enemy.instanceId, enemy.target);
+                        this.logger.log(`Enemy ${enemy.instanceId} is now CHASING player ${closestPlayer.ownerName}'s char ${closestPlayer.name}`);
+                  }
+            }
+
+            if (enemy.aiState === 'CHASING') {
                 // Move towards the target
                 if (!enemy.target) {
                     // Target lost, go back to idle (THIS SHOULD NOT HAPPEN)
@@ -202,14 +202,14 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
                         this.zoneService.setEnemyAiState(zoneId, enemy.instanceId, 'ATTACKING');
                         this.logger.log(`Enemy ${enemy.instanceId} is now ATTACKING`);
                     } else {
-                        // Move towards target
+                        //Move towards target
                         const dx = enemy.target.x - enemy.position.x;
                         const dy = enemy.target.y - enemy.position.y;
                         newX = enemy.position.x + (dx / distance) * step;
                         newY = enemy.position.y + (dy / distance) * step;
                     }
 
-                    // Update enemy position
+                    //Update enemy position
                     this.zoneService.updateEnemyPosition(zoneId, enemy.instanceId, { x: newX, y: newY });
                     enemy.position = { x: newX, y: newY };
                     updates.push({ id: enemy.instanceId, x: newX, y: newY });
@@ -238,7 +238,7 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
                         this.server.to(zoneId).emit('entityDied', { entityId: enemy.instanceId, type: 'enemy' });
                     }
 
-                    // Set AI state back to IDLE (for now)
+                    //Set AI state back to IDLE (for now)
                     enemy.aiState = 'IDLE';
                     enemy.target = null;
                     this.zoneService.setEnemyAiState(zoneId, enemy.instanceId, 'IDLE');
@@ -416,7 +416,7 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
   async handleEnterZone(
     @MessageBody() data: { zoneId: string },
     @ConnectedSocket() client: Socket,
-  ): Promise<{ success: boolean; zoneState?: ZoneCharacterState[]; message?: string }> {
+  ): Promise<{ success: boolean; zoneState?: ZoneCharacterState[]; enemyState?:any[]; message?: string }> {
       const user = client.data.user as User;
       const selectedCharacters = client.data.selectedCharacters as Character[];
       const zoneId = data.zoneId || 'startZone'; // Default to 'startZone' if not provided
@@ -430,7 +430,7 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
       // TODO: Add validation if player is already in another zone?
 
       this.logger.log(`User ${user.username} attempting to enter zone ${zoneId}`);
-
+      const existingEnemies = this.zoneService.getZoneEnemies(zoneId);
       // 1. Get state of other players already in the zone BEFORE adding the new player
       const playersAlreadyInZone = this.zoneService.getZoneCharacterStates(zoneId);
 
@@ -453,7 +453,7 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
       this.logger.log(`Broadcast playerJoined for ${user.username} to zone ${zoneId}`);
 
       // 4. Send the state of existing players to the NEW player
-      return { success: true, zoneState: playersAlreadyInZone };
+      return { success: true, zoneState: playersAlreadyInZone, enemyState: existingEnemies };
   }
 
   @SubscribeMessage('moveCommand')
