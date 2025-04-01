@@ -41,6 +41,17 @@ import {
     @Column({ type: 'bigint', default: 0 }) // Use bigint for potentially large XP numbers
     xp: number;
   
+    // --- ADDED BASIC STATS (As per documentation plan) ---
+    @Column({ type: 'integer', default: 100 })
+    baseHealth: number;
+
+    @Column({ type: 'integer', default: 15 })
+    baseAttack: number;
+
+    @Column({ type: 'integer', default: 5 })
+    baseDefense: number;
+    // ------------------------------------------------------
+  
     // TODO: Define stats later (hp, mp, str, int, def, speed, etc.)
     // @Column('jsonb', { default: {} })
     // stats: Record<string, any>;

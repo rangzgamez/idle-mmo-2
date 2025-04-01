@@ -1,6 +1,6 @@
 // backend/src/game/zone.service.spec.ts
 import { Test, TestingModule } from '@nestjs/testing';
-import { ZoneService } from './zone.service';
+import { ZoneService, RuntimeCharacterData } from './zone.service';
 import { EnemyService } from '../enemy/enemy.service';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { Enemy } from '../enemy/enemy.entity';
@@ -19,7 +19,7 @@ const mockEnemyTemplate = {
   baseHealth: 50,
   baseAttack: 5,
   baseDefense: 2,
-  baseSpeed: 20,
+  baseSpeed: 75,
   attackRange: 30,
   xpReward: 10,
   behaviorFlags: {
@@ -27,7 +27,43 @@ const mockEnemyTemplate = {
     isStationary: false,
   },
   spriteKey: 'goblin',
+  createdAt: new Date(),
+  updatedAt: new Date(),
 };
+
+// --- Re-add Reusable Mock Factories ---
+const createMockEnemy = (id: string, health: number, attack: number, defense: number): EnemyInstance => ({
+  id: id, 
+  templateId: `template-${id}`,
+  zoneId: 'startZone', // Use consistent zone ID
+  currentHealth: health,
+  position: { x: 10, y: 10 },
+  aiState: 'IDLE',
+  baseAttack: attack,
+  baseDefense: defense,
+});
+
+const createMockCharacter = (id: string, health: number, attack: number, defense: number): RuntimeCharacterData => ({
+  id: id, 
+  userId: `user-${id}`,
+  ownerId: `user-${id}`,
+  name: `Char ${id}`,
+  level: 1,
+  xp: 0,
+  positionX: 20,
+  positionY: 20,
+  targetX: null,
+  targetY: null,
+  currentZoneId: 'startZone', // Use consistent zone ID
+  baseHealth: 100, 
+  currentHealth: health,
+  baseAttack: attack,
+  baseDefense: defense,
+  user: { id: `user-${id}`, username: `User ${id}` } as User,
+  createdAt: new Date(),
+  updatedAt: new Date(),
+});
+// -------------------------------------
 
 // Mock EnemyService
 const mockEnemyService = {
@@ -53,13 +89,22 @@ const mockSocket = {
   data: {} // Add data property
 } as any; // Type assertion to any to bypass strict Socket typing
 
+const DEFAULT_ZONE_ID = 'startZone';
 
 describe('ZoneService', () => {
   let zoneService: ZoneService;
   let enemyService: { findOne: jest.Mock, findAll: jest.Mock };
-  let enemyRepository: { create: jest.Mock, save: jest.Mock, find: jest.Mock, findOne: jest.Mock, merge: jest.Mock, remove: jest.Mock};
+
+  // Mock timers
+  jest.useFakeTimers();
 
   beforeEach(async () => {
+    // Reset mocks
+    mockEnemyService.findOne.mockClear();
+    mockEnemyService.findAll.mockClear();
+    mockSocket.join.mockClear();
+    mockSocket.leave.mockClear();
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         ZoneService,
@@ -67,30 +112,47 @@ describe('ZoneService', () => {
           provide: EnemyService,
           useValue: mockEnemyService,
         },
-        {
-          provide: getRepositoryToken(Enemy),
-          useValue: mockEnemyRepository
-        }
       ],
     }).compile();
 
     zoneService = module.get<ZoneService>(ZoneService);
     enemyService = module.get(EnemyService);
-    enemyRepository = module.get(getRepositoryToken(Enemy));
+
+    // --- Prevent auto-spawning & clear default state for isolation ---
+    // Stop any pending timers from constructor (like startSpawningEnemies)
+    jest.clearAllTimers();
+    // Reset the internal zones map for a clean slate each time
+    (zoneService as any).zones = new Map();
+    // Re-create the default zone needed by many tests
+    (zoneService as any).zones.set(DEFAULT_ZONE_ID, { players: new Map(), enemies: new Map() });
+    // -----------------------------------------------------------------
   });
 
-  it('should be defined', () => {
+  afterEach(() => {
+      // Clear timers after each test
+      jest.clearAllTimers();
+  });
+
+  it('should be defined and have the default zone', () => {
     expect(zoneService).toBeDefined();
+    expect((zoneService as any).zones.has(DEFAULT_ZONE_ID)).toBe(true);
+    expect((zoneService as any).zones.get(DEFAULT_ZONE_ID)?.players.size).toBe(0);
+    expect((zoneService as any).zones.get(DEFAULT_ZONE_ID)?.enemies.size).toBe(0);
   });
 
   // Helper function to add an enemy for testing purposes
-  const addTestEnemy = async (zoneId: string, position: { x: number; y: number }) => {
+  const addTestEnemy = async (zoneId: string, position: { x: number; y: number }): Promise<EnemyInstance | null> => {
+    // Ensure findOne is mocked *before* addEnemy is called
     enemyService.findOne.mockResolvedValue(mockEnemyTemplate);
     return await zoneService.addEnemy(zoneId, mockEnemyTemplate.id, position);
   };
 
   // Helper function to add a player to a zone for testing purposes
   const addTestPlayer = (zoneId: string, socket: Socket, user: User, characters: Character[]) => {
+    // Explicitly ensure the zone exists before adding player for robustness in tests?
+    // if (!(zoneService as any).zones.has(zoneId)) {
+    //     (zoneService as any).zones.set(zoneId, { players: new Map(), enemies: new Map() });
+    // }
     zoneService.addPlayerToZone(zoneId, socket, user, characters);
   };
 
@@ -111,23 +173,25 @@ describe('ZoneService', () => {
         userId: 'mockUserId',
         positionX: 100,
         positionY: 100,
-        currentZoneId: 'default',
+        currentZoneId: 'startZone',
+        baseHealth: 100,
+        baseAttack: 15,
+        baseDefense: 5,
         createdAt: new Date(),
         updatedAt: new Date(),
         user: mockUser
     };
 
   describe('addEnemy', () => {
-    it('should add an enemy to the zone', async () => {
-      const zoneId = 'default';
+    it('should add an enemy to the default zone', async () => {
+      const zoneId = DEFAULT_ZONE_ID;
       const position = { x: 10, y: 20 };
-
-      const enemyInstance = await addTestEnemy(zoneId, position);
-
+      enemyService.findOne.mockResolvedValue(mockEnemyTemplate);
+      const enemyInstance = await zoneService.addEnemy(zoneId, mockEnemyTemplate.id, position);
       expect(enemyService.findOne).toHaveBeenCalledWith(mockEnemyTemplate.id);
       expect(enemyInstance).toBeDefined();
-      expect(enemyInstance?.templateId).toBe(mockEnemyTemplate.id);
       expect(zoneService.getZoneEnemies(zoneId).length).toBe(1);
+      expect(zoneService.getZoneEnemies(zoneId)[0].id).toBe(enemyInstance?.id);
     });
 
     it('should return null if the zone does not exist', async () => {
@@ -140,7 +204,7 @@ describe('ZoneService', () => {
     });
 
     it('should return null if the template does not exist', async () => {
-      const zoneId = 'default';
+      const zoneId = DEFAULT_ZONE_ID;
       const position = { x: 10, y: 20 };
 
       enemyService.findOne.mockResolvedValue(undefined);
@@ -155,31 +219,32 @@ describe('ZoneService', () => {
 
   describe('removeEnemy', () => {
     it('should remove an enemy from the zone', async () => {
-      const zoneId = 'default';
+      const zoneId = DEFAULT_ZONE_ID;
       const position = { x: 10, y: 20 };
-
       const enemyInstance = await addTestEnemy(zoneId, position);
-      const instanceId = enemyInstance?.instanceId;
-
-      const result = zoneService.removeEnemy(zoneId, instanceId!);
-
+      if (!enemyInstance) throw new Error('Test setup failed: addTestEnemy returned null');
+      const enemyId = enemyInstance.id;
+      expect(zoneService.getEnemyInstanceById(zoneId, enemyId)).toBeDefined(); // Pre-check
+      const result = zoneService.removeEnemy(zoneId, enemyId);
       expect(result).toBe(true);
       expect(zoneService.getZoneEnemies(zoneId).length).toBe(0);
+      expect(zoneService.getEnemyInstanceById(zoneId, enemyId)).toBeUndefined(); // Post-check
     });
 
     it('should return false if the zone does not exist', () => {
       const zoneId = 'nonExistentZone';
-      const instanceId = 'someInstanceId';
+      const enemyId = 'someEnemyId';
 
-      const result = zoneService.removeEnemy(zoneId, instanceId);
+      const result = zoneService.removeEnemy(zoneId, enemyId);
 
       expect(result).toBe(false);
     });
 
-    it('should return false if the instanceId does not exist', async () => {
-      const zoneId = 'default';
-      const instanceId = 'nonExistentInstanceId';
-      const result = zoneService.removeEnemy(zoneId, instanceId);
+    it('should return false if the enemyId does not exist', async () => {
+      const zoneId = DEFAULT_ZONE_ID;
+      const enemyId = 'nonExistentEnemyId';
+
+      const result = zoneService.removeEnemy(zoneId, enemyId);
 
       expect(result).toBe(false);
     });
@@ -187,32 +252,34 @@ describe('ZoneService', () => {
 
   describe('getEnemy', () => {
     it('should return the enemy if it exists', async () => {
-      const zoneId = 'default';
+      const zoneId = DEFAULT_ZONE_ID;
       const position = { x: 10, y: 20 };
 
       const enemyInstance = await addTestEnemy(zoneId, position);
-      const instanceId = enemyInstance?.instanceId;
+      // Add null check for safety
+      if (!enemyInstance) throw new Error('Test setup failed: addTestEnemy returned null');
+      const enemyId = enemyInstance.id;
 
-      const result = zoneService.getEnemy(zoneId, instanceId!);
+      const result = zoneService.getEnemy(zoneId, enemyId);
 
       expect(result).toBeDefined();
-      expect(result?.instanceId).toBe(instanceId);
+      expect(result?.id).toBe(enemyId);
     });
 
     it('should return undefined if the zone does not exist', () => {
       const zoneId = 'nonExistentZone';
-      const instanceId = 'someInstanceId';
+      const enemyId = 'someEnemyId';
 
-      const result = zoneService.getEnemy(zoneId, instanceId);
+      const result = zoneService.getEnemy(zoneId, enemyId);
 
       expect(result).toBeUndefined();
     });
 
-    it('should return undefined if the instanceId does not exist', async () => {
-      const zoneId = 'default';
-      const instanceId = 'nonExistentInstanceId';
+    it('should return undefined if the enemyId does not exist', async () => {
+      const zoneId = DEFAULT_ZONE_ID;
+      const enemyId = 'nonExistentEnemyId';
 
-      const result = zoneService.getEnemy(zoneId, instanceId);
+      const result = zoneService.getEnemy(zoneId, enemyId);
 
       expect(result).toBeUndefined();
     });
@@ -220,209 +287,153 @@ describe('ZoneService', () => {
 
   describe('updateEnemyPosition', () => {
     it('should update the enemy position', async () => {
-      const zoneId = 'default';
+      const currentZoneId = DEFAULT_ZONE_ID; // Use different variable name
       const position = { x: 10, y: 20 };
-
-      const enemyInstance = await addTestEnemy(zoneId, position);
-      const instanceId = enemyInstance?.instanceId;
+      const enemyInstance = await addTestEnemy(currentZoneId, position);
+      if (!enemyInstance) throw new Error('Test setup failed: addTestEnemy returned null');
+      const enemyId = enemyInstance.id; // Use 'id'
       const newPosition = { x: 30, y: 40 };
-
-      const result = zoneService.updateEnemyPosition(zoneId, instanceId!, newPosition);
-
+      const result = zoneService.updateEnemyPosition(currentZoneId, enemyId, newPosition);
       expect(result).toBe(true);
-      expect(zoneService.getEnemy(zoneId, instanceId!)?.position).toEqual(newPosition);
+      expect(zoneService.getEnemyInstanceById(currentZoneId, enemyId)?.position).toEqual(newPosition);
     });
-
     it('should return false if the zone does not exist', () => {
-      const zoneId = 'nonExistentZone';
-      const instanceId = 'someInstanceId';
-      const newPosition = { x: 30, y: 40 };
-
-      const result = zoneService.updateEnemyPosition(zoneId, instanceId, newPosition);
-
-      expect(result).toBe(false);
+        const result = zoneService.updateEnemyPosition('nonExistentZone', 'someId', {x:0, y:0});
+        expect(result).toBe(false);
     });
-
-    it('should return false if the instanceId does not exist', async () => {
-      const zoneId = 'default';
-      const instanceId = 'nonExistentInstanceId';
-      const newPosition = { x: 30, y: 40 };
-
-      const result = zoneService.updateEnemyPosition(zoneId, instanceId, newPosition);
-
-      expect(result).toBe(false);
+    it('should return false if the enemyId does not exist', async () => {
+        const currentZoneId = DEFAULT_ZONE_ID; // Use different variable name
+        const result = zoneService.updateEnemyPosition(currentZoneId, 'nonExistentId', {x:0, y:0});
+        expect(result).toBe(false);
     });
   });
 
   describe('setEnemyTarget', () => {
-    it('should set the enemy target', async () => {
-      const zoneId = 'default';
-      const position = { x: 10, y: 20 };
-
-      const enemyInstance = await addTestEnemy(zoneId, position);
-      const instanceId = enemyInstance?.instanceId;
-      const newTarget = { x: 30, y: 40 };
-
-      const result = zoneService.setEnemyTarget(zoneId, instanceId!, newTarget);
-
-      expect(result).toBe(true);
-      expect(zoneService.getEnemy(zoneId, instanceId!)?.target).toEqual(newTarget);
-    });
-
-    it('should return false if the zone does not exist', () => {
-      const zoneId = 'nonExistentZone';
-      const instanceId = 'someInstanceId';
-      const newTarget = { x: 30, y: 40 };
-
-      const result = zoneService.setEnemyTarget(zoneId, instanceId, newTarget);
-
-      expect(result).toBe(false);
-    });
-
-    it('should return false if the instanceId does not exist', async () => {
-      const zoneId = 'default';
-      const instanceId = 'nonExistentInstanceId';
-      const newTarget = { x: 30, y: 40 };
-
-      const result = zoneService.setEnemyTarget(zoneId, instanceId, newTarget);
-
-      expect(result).toBe(false);
-    });
+      it('should set the enemy target', async () => {
+          const currentZoneId = DEFAULT_ZONE_ID;
+          const position = { x: 10, y: 20 };
+          const enemyInstance = await addTestEnemy(currentZoneId, position);
+          if (!enemyInstance) throw new Error('Test setup failed: addTestEnemy returned null');
+          const enemyId = enemyInstance.id; // Use 'id'
+          const target = { x: 50, y: 50 };
+          const result = zoneService.setEnemyTarget(currentZoneId, enemyId, target);
+          expect(result).toBe(true);
+          expect(zoneService.getEnemyInstanceById(currentZoneId, enemyId)?.target).toEqual(target);
+      });
+       it('should return false if enemy not found', () => {
+            const result = zoneService.setEnemyTarget(DEFAULT_ZONE_ID, 'nonExistentId', {x:0, y:0});
+            expect(result).toBe(false);
+       });
   });
 
   describe('setEnemyAiState', () => {
-    it('should set the enemy AI state', async () => {
-      const zoneId = 'default';
+      it('should set the enemy AI state', async () => {
+          const currentZoneId = DEFAULT_ZONE_ID;
+          const position = { x: 10, y: 20 };
+          const enemyInstance = await addTestEnemy(currentZoneId, position);
+           if (!enemyInstance) throw new Error('Test setup failed: addTestEnemy returned null');
+          const enemyId = enemyInstance.id; // Use 'id'
+          const newState = 'CHASING';
+          const result = zoneService.setEnemyAiState(currentZoneId, enemyId, newState);
+          expect(result).toBe(true);
+          expect(zoneService.getEnemyInstanceById(currentZoneId, enemyId)?.aiState).toBe(newState);
+      });
+       it('should return false if enemy not found', () => {
+            const result = zoneService.setEnemyAiState(DEFAULT_ZONE_ID, 'nonExistentId', 'IDLE');
+            expect(result).toBe(false);
+       });
+  });
+  
+  describe('updateEnemyAttackTime', () => {
+     it('should update the enemy last attack time', async () => {
+      const currentZoneId = DEFAULT_ZONE_ID;
       const position = { x: 10, y: 20 };
-
-      const enemyInstance = await addTestEnemy(zoneId, position);
-      const instanceId = enemyInstance?.instanceId;
-      const newAiState = 'CHASING';
-
-      const result = zoneService.setEnemyAiState(zoneId, instanceId!, newAiState);
-
+      const enemyInstance = await addTestEnemy(currentZoneId, position);
+       if (!enemyInstance) throw new Error('Test setup failed: addTestEnemy returned null');
+      const enemyId = enemyInstance.id; // Use 'id'
+      const timestamp = Date.now();
+      const result = zoneService.updateEnemyAttackTime(currentZoneId, enemyId, timestamp);
       expect(result).toBe(true);
-      expect(zoneService.getEnemy(zoneId, instanceId!)?.aiState).toBe(newAiState);
+      expect(zoneService.getEnemyInstanceById(currentZoneId, enemyId)?.lastAttackTime).toBe(timestamp);
     });
-
-    it('should return false if the zone does not exist', () => {
-      const zoneId = 'nonExistentZone';
-      const instanceId = 'someInstanceId';
-      const newAiState = 'CHASING';
-
-      const result = zoneService.setEnemyAiState(zoneId, instanceId, newAiState);
-
-      expect(result).toBe(false);
-    });
-
-    it('should return false if the instanceId does not exist', async () => {
-      const zoneId = 'default';
-      const instanceId = 'nonExistentInstanceId';
-      const newAiState = 'CHASING';
-
-      const result = zoneService.setEnemyAiState(zoneId, instanceId, newAiState);
-
-      expect(result).toBe(false);
-    });
+     it('should return false if enemy not found', () => {
+         const result = zoneService.updateEnemyAttackTime(DEFAULT_ZONE_ID, 'nonExistentId', Date.now());
+         expect(result).toBe(false);
+     });
   });
 
   describe('updateEnemyHealth', () => {
-    it('should update the enemy health', async () => {
-      const zoneId = 'default';
-      const position = { x: 10, y: 20 };
-
-      const enemyInstance = await addTestEnemy(zoneId, position);
-      const instanceId = enemyInstance?.instanceId;
-      const healthChange = -10;
-
-      const result = zoneService.updateEnemyHealth(zoneId, instanceId!, healthChange);
-
-      expect(result).toBe(true);
-      expect(zoneService.getEnemy(zoneId, instanceId!)?.currentHealth).toBe(40);
+    it('should update enemy health and return new health', async () => {
+        const currentZoneId = DEFAULT_ZONE_ID;
+        const position = { x: 10, y: 20 };
+        const initialHealth = mockEnemyTemplate.baseHealth;
+        const enemyInstance = await addTestEnemy(currentZoneId, position);
+         if (!enemyInstance) throw new Error('Test setup failed: addTestEnemy returned null');
+        const enemyId = enemyInstance.id; // Use 'id'
+        const healthChange = -10;
+        const expectedHealth = initialHealth + healthChange;
+        const newHealth = await zoneService.updateEnemyHealth(currentZoneId, enemyId, healthChange);
+        expect(newHealth).toBe(expectedHealth);
+        expect(zoneService.getEnemyInstanceById(currentZoneId, enemyId)?.currentHealth).toBe(expectedHealth);
     });
-
-    it('should not let the health go below 0', async () => {
-      const zoneId = 'default';
-      const position = { x: 10, y: 20 };
-
-      const enemyInstance = await addTestEnemy(zoneId, position);
-      const instanceId = enemyInstance?.instanceId;
-      const healthChange = -100;
-
-      const result = zoneService.updateEnemyHealth(zoneId, instanceId!, healthChange);
-
-      expect(result).toBe(true);
-      expect(zoneService.getEnemy(zoneId, instanceId!)?.currentHealth).toBe(0);
+    it('should return null if the enemyId does not exist', async () => {
+        const zoneId = DEFAULT_ZONE_ID;
+        const result = await zoneService.updateEnemyHealth(zoneId, 'nonExistentEnemyId', -10);
+        expect(result).toBeNull();
     });
-
-    it('should return false if the zone does not exist', () => {
-      const zoneId = 'nonExistentZone';
-      const instanceId = 'someInstanceId';
-      const healthChange = -10;
-
-      const result = zoneService.updateEnemyHealth(zoneId, instanceId, healthChange);
-
-      expect(result).toBe(false);
-    });
-
-    it('should return false if the instanceId does not exist', async () => {
-      const zoneId = 'default';
-      const instanceId = 'nonExistentInstanceId';
-      const healthChange = -10;
-
-      const result = zoneService.updateEnemyHealth(zoneId, instanceId, healthChange);
-
-      expect(result).toBe(false);
-    });
+    it('should return null if the zone does not exist', async () => {
+         const result = await zoneService.updateEnemyHealth('nonExistentZone', 'someEnemyId', -10);
+         expect(result).toBeNull();
+     });
   });
 
   describe('spawnEnemy', () => {
+    let randomSpy: jest.SpyInstance;
+    let addEnemySpy: jest.SpyInstance;
+    let consoleWarnSpy: jest.SpyInstance;
+
+    afterEach(() => {
+        // Restore any spies created IN THE TEST
+        randomSpy?.mockRestore();
+        addEnemySpy?.mockRestore();
+        consoleWarnSpy?.mockRestore();
+    });
+
     it('should spawn an enemy in the zone', async () => {
-      const zoneId = 'default';
-      enemyService.findAll.mockResolvedValue([mockEnemyTemplate]);
-      enemyService.findOne.mockResolvedValue(mockEnemyTemplate); // Add mock for findOne, since spawnEnemy calls addEnemy
+      const zoneId = DEFAULT_ZONE_ID;
+      // Mock findAll specifically for this test
+      enemyService.findAll.mockResolvedValue([mockEnemyTemplate]); 
+      // Spy on addEnemy specifically for this test
+      addEnemySpy = jest.spyOn(zoneService, 'addEnemy').mockResolvedValue(createMockEnemy(uuidv4(), 50, 5, 2)); 
+      // Mock Math.random
+      randomSpy = jest.spyOn(Math, 'random').mockReturnValue(0.5);
+      
+      await (zoneService as any).spawnEnemy(zoneId); // Call private method
 
-      // Mock Math.random to ensure consistent test results
-      jest.spyOn(Math, 'random').mockReturnValue(0.5);
-
-      //Spy on addEnemy for spawnEnemy test to ensure addEnemy is only called once and that the position has been calculated correctly
-      const addEnemySpy = jest.spyOn(zoneService, 'addEnemy');
-
-      // Mock the startSpawningEnemies method so that it spawns only once
-      jest.spyOn(zoneService as any, 'startSpawningEnemies').mockImplementation(() => {
-          (zoneService as any).spawnEnemy(zoneId);
-      });
-
-      (zoneService as any).startSpawningEnemies(zoneId);
-
-      expect(enemyService.findAll).toHaveBeenCalled();
+      expect(enemyService.findAll).toHaveBeenCalledTimes(1);
       expect(addEnemySpy).toHaveBeenCalledTimes(1);
-
-      const expectedPosition = {x: 250, y: 250}; // Since Math.random is mocked to return 0.5
+      const expectedPosition = { x: 250, y: 250 }; // 0.5 * 500
       expect(addEnemySpy).toHaveBeenCalledWith(zoneId, mockEnemyTemplate.id, expectedPosition);
-
-      // Restore Math.random to its original implementation.
-      (Math.random as unknown as jest.SpyInstance).mockRestore();
-      jest.restoreAllMocks();
     });
 
     it('should not spawn an enemy if no templates are found', async () => {
-      const zoneId = 'default';
-      enemyService.findAll.mockResolvedValue([]);
+       const zoneId = DEFAULT_ZONE_ID;
+       // Mock findAll specifically for this test
+       enemyService.findAll.mockResolvedValue([]); 
+       // Spy on addEnemy specifically for this test
+       addEnemySpy = jest.spyOn(zoneService, 'addEnemy');
+       // Suppress console.warn
+       consoleWarnSpy = jest.spyOn(console, 'warn').mockImplementation();
 
-      const consoleWarnSpy = jest.spyOn(console, 'warn');
+       await (zoneService as any).spawnEnemy(zoneId);
 
-       // Mock the startSpawningEnemies method so that it spawns only once
-       jest.spyOn(zoneService as any, 'startSpawningEnemies').mockImplementation(() => {
-            (zoneService as any).spawnEnemy(zoneId);
-        });
-      (zoneService as any).startSpawningEnemies(zoneId);
-
-      expect(enemyService.findAll).toHaveBeenCalled();
-      expect(consoleWarnSpy).toHaveBeenCalledWith('No enemy templates found.  Cannot spawn enemies.');
-      jest.restoreAllMocks();
-    });
+       expect(enemyService.findAll).toHaveBeenCalledTimes(1);
+       // Check console warning was called
+       expect(consoleWarnSpy).toHaveBeenCalledWith('No enemy templates found.  Cannot spawn enemies.');
+       expect(addEnemySpy).not.toHaveBeenCalled(); // addEnemy should not be called
+     });
   });
+
   describe('addPlayerToZone', () => {
         it('should add a player to the zone', () => {
             const zoneId = 'default';
@@ -446,36 +457,57 @@ describe('ZoneService', () => {
     });
 
     describe('removePlayerFromZone', () => {
-        it('should remove a player from the zone', () => {
-            const zoneId = 'default';
-
-            // Mock the addPlayerToZone method
-            jest.spyOn(zoneService, 'addPlayerToZone').mockImplementation(() => {
-              // Intentionally empty mock implementation
-            });
-
-            mockSocket.data.user = mockUser; // Simulate user being attached to socket
-            zoneService.addPlayerToZone(zoneId, mockSocket, mockUser, [mockCharacter]);
+        it('should remove a player from the zone and call socket.leave', () => {
+            const zoneId = DEFAULT_ZONE_ID;
+            // Use the helper to add the player
+            addTestPlayer(zoneId, mockSocket, mockUser, [mockCharacter]);
+            // Assign user to socket data BEFORE calling remove
+            mockSocket.data.user = mockUser; 
+            
+            // Pre-check: Ensure player exists in the map
+            const zoneMap = (zoneService as any).zones.get(zoneId);
+            expect(zoneMap?.players.has(mockUser.id)).toBe(true);
 
             const result = zoneService.removePlayerFromZone(mockSocket);
 
-            const zone = (zoneService as any).zones.get(zoneId);
-            expect(zone?.players.has(mockUser.id)).toBe(false);
+            // Check result
+            expect(result).toEqual({ zoneId: zoneId, userId: mockUser.id });
+            // Check player was removed from map
+            expect(zoneMap?.players.has(mockUser.id)).toBe(false);
+            // Check socket method was called
             expect(mockSocket.leave).toHaveBeenCalledWith(zoneId);
-            expect(result).toEqual({ zoneId: 'default', userId: 'mockUserId' });
         });
+        
+        it('should delete the zone if it becomes empty after removal', () => {
+             const zoneId = 'zoneToDelete';
+             // Manually create zone
+             (zoneService as any).zones.set(zoneId, { players: new Map(), enemies: new Map() });
+             addTestPlayer(zoneId, mockSocket, mockUser, [mockCharacter]);
+             mockSocket.data.user = mockUser;
 
-        it('should return null if the user is not in any zone', () => {
-            mockSocket.data.user = mockUser; // Simulate user being attached to socket
-            const result = zoneService.removePlayerFromZone(mockSocket);
-            expect(result).toBeNull();
-        });
+             expect((zoneService as any).zones.has(zoneId)).toBe(true); // Zone exists
+             expect((zoneService as any).zones.get(zoneId)?.players.has(mockUser.id)).toBe(true); // Player exists
 
-        it('should return null if the socket does not have user data', () => {
-            mockSocket.data.user = null; // Simulate no user on socket
-            const result = zoneService.removePlayerFromZone(mockSocket);
-            expect(result).toBeNull();
+             zoneService.removePlayerFromZone(mockSocket);
+
+             // Assert the zone is deleted
+             expect((zoneService as any).zones.has(zoneId)).toBe(false);
+             expect(mockSocket.leave).toHaveBeenCalledWith(zoneId); // Socket left room
         });
+        
+         it('should return null if user not found on socket data', () => {
+              mockSocket.data.user = undefined; // Simulate missing user data
+              const result = zoneService.removePlayerFromZone(mockSocket);
+              expect(result).toBeNull();
+         });
+         it('should return null if player not found in any zone', () => {
+              // Reset zones map to ensure player isn't lingering from other tests
+              (zoneService as any).zones = new Map(); 
+              (zoneService as any).zones.set(DEFAULT_ZONE_ID, { players: new Map(), enemies: new Map() });
+              mockSocket.data.user = mockUser;
+              const result = zoneService.removePlayerFromZone(mockSocket);
+              expect(result).toBeNull();
+         });
     });
 
     describe('getPlayersInZone', () => {

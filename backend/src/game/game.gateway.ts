@@ -16,21 +16,25 @@ import { UserService } from '../user/user.service'; // Import UserService
 import { User } from '../user/user.entity'; // Import User entity
 import { CharacterService } from '../character/character.service'; // Import CharacterService
 import { Character } from '../character/character.entity'; // Import Character entity
-import { ZoneService, ZoneCharacterState } from './zone.service'; // Import ZoneService
+import { ZoneService, ZoneCharacterState, RuntimeCharacterData } from './zone.service'; // Import ZoneService
 import * as sanitizeHtml from 'sanitize-html';
 import { CombatService } from './combat.service';
 import { EnemyService } from 'src/enemy/enemy.service';
+import { AIService } from './ai.service'; // Import the AI Service
+import { AIAction, AIActionAttack, AIActionMoveTo } from './interfaces/ai-action.interface'; // Import AIAction types
+import { EnemyInstance } from './interfaces/enemy-instance.interface'; // Import EnemyInstance
+
 @WebSocketGateway({
   cors: { /* ... */ },
 })
 export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect, OnApplicationShutdown {
   @WebSocketServer() server: Server;
   private logger: Logger = new Logger('GameGateway');
-  private gameLoopInterval: NodeJS.Timeout | null = null;
+  private gameLoopTimeout: NodeJS.Timeout | null = null; // Changed from Interval
+  private isLoopRunning = false;
   private readonly TICK_RATE = 100; // ms (10 FPS)
   private readonly MOVEMENT_SPEED = 150; // Pixels per second
   private readonly ENEMY_MOVEMENT_SPEED = 75; // Pixels per second
-  private readonly ENEMY_AGGRO_RANGE = 200;
 
   constructor(
     private jwtService: JwtService, // Inject JwtService
@@ -39,6 +43,7 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     private zoneService: ZoneService, // Inject ZoneService
     private combatService: CombatService, // Inject CombatService
     private enemyService: EnemyService, // Inject EnemyService
+    private aiService: AIService,     // Inject AIService
   ) {}
 
   afterInit(server: Server) {
@@ -88,178 +93,250 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
         return next(new UnauthorizedException('Authentication failed: ' + error.message));
       }
     });
-    // --- Start Game Loop ---
-    if (!this.gameLoopInterval) {
-      this.gameLoopInterval = setInterval(() => {
-          this.tickGameLoop();
-      }, this.TICK_RATE);
-      this.logger.log(`Game loop started with tick rate ${this.TICK_RATE}ms`);
+    // --- Start Game Loop using recursive setTimeout ---
+    if (!this.isLoopRunning) {
+        this.logger.log(`Starting game loop with tick rate ${this.TICK_RATE}ms`);
+        this.isLoopRunning = true;
+        this.scheduleNextTick();
     }
+  }
 
-  }
-  // Called on server shutdown (e.g., via OnApplicationShutdown interface)
-  onApplicationShutdown(signal?: string) {
-    this.logger.log('Clearing game loop interval...');
-    if (this.gameLoopInterval) {
-        clearInterval(this.gameLoopInterval);
-        this.gameLoopInterval = null;
+  private scheduleNextTick(): void {
+    // Clear previous timeout just in case
+    if (this.gameLoopTimeout) {
+        clearTimeout(this.gameLoopTimeout);
     }
+    // Schedule the next tick
+    this.gameLoopTimeout = setTimeout(async () => {
+        if (this.isLoopRunning) { // Check if loop should still be running
+             await this.tickGameLoop(); // Await the async tick
+             this.scheduleNextTick(); // Schedule the next one after completion
+        }
+    }, this.TICK_RATE);
   }
-  private tickGameLoop(): void {
+
+  onApplicationShutdown(signal?: string) {
+    this.logger.log('Stopping game loop...');
+    this.isLoopRunning = false; // Signal the loop to stop
+    if (this.gameLoopTimeout) {
+        clearTimeout(this.gameLoopTimeout);
+        this.gameLoopTimeout = null;
+    }
+    this.logger.log('Game loop stopped.');
+  }
+
+  // Make the game loop async
+  private async tickGameLoop(): Promise<void> {
+    const startTime = Date.now();
     const deltaTime = this.TICK_RATE / 1000.0; // Delta time in seconds
 
-    for (const [zoneId, zone] of (this.zoneService as any).zones.entries()) { // Use getter later
-        if (zone.players.size === 0 && zone.enemies.size === 0) continue; //Skip zones with no players or enemies
+    try {
+        for (const [zoneId, zone] of (this.zoneService as any).zones.entries()) { // Use getter later
+            if (zone.players.size === 0 && zone.enemies.size === 0) continue; //Skip zones with no players or enemies
 
-        const updates: Array<{ id: string, x: number | null, y: number | null, health?: number | null }> = [];
+            const updates: Array<{ id: string, x: number | null, y: number | null, health?: number | null }> = [];
+            const combatActions: Array<any> = [];
+            const deaths: Array<{ entityId: string, type: 'character' | 'enemy' }> = [];
 
-        // --- Character Movement ---
-        for (const player of zone.players.values()) {
-            for (const character of player.characters) { // character is RuntimeCharacterData
-                let moved = false;
-                // --- Movement Simulation ---
-                if (character.targetX !== null && character.targetY !== null &&
-                    (character.positionX !== character.targetX || character.positionY !== character.targetY))
-                {
-                    const dx = character.targetX - character.positionX;
-                    const dy = character.targetY - character.positionY;
-                    const distance = Math.sqrt(dx*dx + dy*dy);
-                    const maxMove = this.MOVEMENT_SPEED * deltaTime;
+            // --- Character Movement ---
+            for (const player of zone.players.values()) {
+                for (const character of player.characters) { // character is RuntimeCharacterData
+                    let moved = false;
+                    // --- Movement Simulation ---
+                    if (character.targetX !== null && character.targetY !== null &&
+                        (character.positionX !== character.targetX || character.positionY !== character.targetY))
+                    {
+                        const dx = character.targetX - character.positionX;
+                        const dy = character.targetY - character.positionY;
+                        const distance = Math.sqrt(dx*dx + dy*dy);
+                        const maxMove = this.MOVEMENT_SPEED * deltaTime;
 
-                    if (distance <= maxMove) {
-                        // Reached target
-                        character.positionX = character.targetX;
-                        character.positionY = character.targetY;
-                        character.targetX = null; // Clear Target
-                        character.targetY = null;
-                        moved = true;
-                    } else {
-                        // Move towards target
-                        const moveX = (dx / distance) * maxMove;
-                        const moveY = (dy / distance) * maxMove;
-                        character.positionX += moveX;
-                        character.positionY += moveY;
-                        moved = true;
+                        if (distance <= maxMove) {
+                            // Reached target
+                            character.positionX = character.targetX;
+                            character.positionY = character.targetY;
+                            character.targetX = null; // Clear Target
+                            character.targetY = null;
+                            moved = true;
+                        } else {
+                            // Move towards target
+                            const moveX = (dx / distance) * maxMove;
+                            const moveY = (dy / distance) * maxMove;
+                            character.positionX += moveX;
+                            character.positionY += moveY;
+                            moved = true;
+                        }
+
+                        // Update the character's current position in ZoneService
+                        // (This updates the object directly since it's in memory)
+                        // No need to call zoneService.updateCharacterPosition here
                     }
+                    // -------------------------
 
-                    // Update the character's current position in ZoneService
-                    // (This updates the object directly since it's in memory)
-                    // No need to call zoneService.updateCharacterPosition here
+                    // Always include character in update for now (or only if moved)
+                    // if (moved) {
+                        updates.push({
+                            id: character.id,
+                            x: character.positionX,
+                            y: character.positionY,
+                        });
+                    // }
                 }
-                // -------------------------
-
-                // Always include character in update for now (or only if moved)
-                // if (moved) {
-                    updates.push({
-                        id: character.id,
-                        x: character.positionX,
-                        y: character.positionY,
-                    });
-                // }
-            }
-        }
-
-        // --- Enemy AI & Movement ---
-        const enemies = this.zoneService.getZoneEnemies(zoneId);
-        for (const enemy of enemies) {
-            //Check for nearby players and switch to CHASING state
-            const closestPlayer = this.findClosestPlayer(enemy, zoneId);
-
-            if(closestPlayer){
-                  const distance = this.calculateDistance(enemy.position, { x: closestPlayer.x!, y: closestPlayer.y! });
-                  if (distance <= this.ENEMY_AGGRO_RANGE && enemy.aiState != "ATTACKING") {
-                        enemy.aiState = 'CHASING';
-                        enemy.target = { x: closestPlayer.x!, y: closestPlayer.y! };
-                        this.zoneService.setEnemyAiState(zoneId, enemy.instanceId, 'CHASING');
-                        this.zoneService.setEnemyTarget(zoneId, enemy.instanceId, enemy.target);
-                        this.logger.log(`Enemy ${enemy.instanceId} is now CHASING player ${closestPlayer.ownerName}'s char ${closestPlayer.name}`);
-                  }
             }
 
-            if (enemy.aiState === 'CHASING') {
-                // Move towards the target
-                if (!enemy.target) {
-                    // Target lost, go back to idle (THIS SHOULD NOT HAPPEN)
-                    this.logger.warn(`Enemy ${enemy.instanceId} has no target while CHASING!  Going back to IDLE`);
-                    enemy.aiState = 'IDLE';
-                    this.zoneService.setEnemyAiState(zoneId, enemy.instanceId, 'IDLE');
-                    continue;
-                }
-                // Calculate movement step
-                const distance = this.calculateDistance(enemy.position, enemy.target);
+            // --- Enemy Processing (Refactored) ---
+            const enemies = this.zoneService.getZoneEnemies(zoneId);
+            for (const enemy of enemies) {
+                // --- Get Attacker Object --- 
+                // We already have the 'enemy' object (which is an EnemyInstance)
+                // Ensure it has baseAttack/baseDefense (added in ZoneService.addEnemy)
+                const attacker = enemy;
 
-                if (distance > 0) {
-                    const step = this.ENEMY_MOVEMENT_SPEED * deltaTime;
-                    let newX: number, newY: number;
+                // 1. Get AI Action
+                const action = this.aiService.updateEnemyAI(attacker, zoneId);
 
-                    if (step >= distance) {
-                        // Close enough, snap to target (Reached target)
-                        newX = enemy.target.x;
-                        newY = enemy.target.y;
+                // 2. Execute Action
+                switch (action.type) {
+                    case 'MOVE_TO': {
+                        const moveTo = action as AIActionMoveTo;
+                        const target = moveTo.target;
+                        const distance = this.calculateDistance(enemy.position, target);
 
-                        // If close enough, switch to ATTACKING state
-                        enemy.aiState = 'ATTACKING';
-                        this.zoneService.setEnemyAiState(zoneId, enemy.instanceId, 'ATTACKING');
-                        this.logger.log(`Enemy ${enemy.instanceId} is now ATTACKING`);
-                    } else {
-                        //Move towards target
-                        const dx = enemy.target.x - enemy.position.x;
-                        const dy = enemy.target.y - enemy.position.y;
-                        newX = enemy.position.x + (dx / distance) * step;
-                        newY = enemy.position.y + (dy / distance) * step;
+                        if (distance > 0) {
+                            const step = this.ENEMY_MOVEMENT_SPEED * deltaTime;
+                            let newX: number, newY: number;
+
+                            if (step >= distance) {
+                                // Reached target (or close enough)
+                                newX = target.x;
+                                newY = target.y;
+                                // AI Service handles state transition (e.g., to ATTACKING if range allows)
+                                // No need to change aiState here
+                            } else {
+                                // Move towards target
+                                const dx = target.x - enemy.position.x;
+                                const dy = target.y - enemy.position.y;
+                                newX = enemy.position.x + (dx / distance) * step;
+                                newY = enemy.position.y + (dy / distance) * step;
+                            }
+
+                            // Update enemy position in ZoneService
+                            this.zoneService.updateEnemyPosition(zoneId, enemy.id, { x: newX, y: newY });
+                            // Update local copy for broadcast
+                            enemy.position = { x: newX, y: newY }; 
+                            updates.push({ id: enemy.id, x: newX, y: newY });
+                        }
+                        break;
                     }
+                    case 'ATTACK': {
+                        const attackAction = action as AIActionAttack;
+                        this.logger.debug(`Enemy ${attacker.id} attempting ATTACK on ${attackAction.targetEntityType} ${attackAction.targetEntityId}`);
 
-                    //Update enemy position
-                    this.zoneService.updateEnemyPosition(zoneId, enemy.instanceId, { x: newX, y: newY });
-                    enemy.position = { x: newX, y: newY };
-                    updates.push({ id: enemy.instanceId, x: newX, y: newY });
-                }
-            } else if (enemy.aiState === 'ATTACKING') {
-                // Find a character in the same position
-                const targetChar = this.findCharacterFromPosition(enemy.position, zoneId);
+                        // --- Get Defender Object ---
+                        let defender: RuntimeCharacterData | EnemyInstance | undefined;
+                        if (attackAction.targetEntityType === 'character') {
+                            defender = this.zoneService.getCharacterStateById(zoneId, attackAction.targetEntityId);
+                        } else { // Target is an enemy (currently unlikely)
+                            defender = this.zoneService.getEnemyInstanceById(zoneId, attackAction.targetEntityId);
+                        }
 
-                if (targetChar) {
-                    // Calculate Damage
-                    // Get stats, currently hardcoded for simplicity
-                    const enemyAttack = 10; // example number
-                    const playerDefense = 5; // example Number
+                        if (!defender) {
+                            this.logger.warn(`ATTACK action failed: Target ${attackAction.targetEntityType} ${attackAction.targetEntityId} not found in zone ${zoneId}.`);
+                            continue; // Skip to next enemy
+                        }
 
-                    const damage = this.combatService.calculateDamage(enemyAttack, playerDefense);
+                        // --- Perform Combat --- 
+                        // Pass the actual attacker/defender objects
+                        const combatResult = await this.combatService.handleAttack(
+                            attacker, // Attacker object (EnemyInstance)
+                            defender, // Defender object (RuntimeCharacterData or EnemyInstance)
+                            zoneId
+                        );
 
-                    // Apply Damage
-                    this.zoneService.updateEnemyHealth(zoneId, enemy.instanceId, -damage);
-                    const currentHealth = this.zoneService.getEnemy(zoneId, enemy.instanceId)?.currentHealth;
-
-                    updates.push({ id: enemy.instanceId, x: enemy.position.x, y: enemy.position.y, health: currentHealth })
-
-                    if (currentHealth! <= 0) {
-                        this.logger.log(`Enemy ${enemy.instanceId} has died!`);
-                        this.zoneService.removeEnemy(zoneId, enemy.instanceId);
-                        this.server.to(zoneId).emit('entityDied', { entityId: enemy.instanceId, type: 'enemy' });
+                        // Process Combat Result
+                        if (combatResult && !combatResult.error) {
+                            // Use attackAction.targetEntityId for targetId
+                            combatActions.push({
+                                attackerId: attacker.id,
+                                targetId: attackAction.targetEntityId, // Use ID from action
+                                damage: combatResult.damageDealt,
+                                type: 'attack',
+                            });
+                            // Use attackAction.targetEntityId for health update ID
+                            updates.push({
+                                id: attackAction.targetEntityId, // Use ID from action
+                                x: null, y: null,
+                                health: combatResult.targetCurrentHealth
+                            });
+                            // Check if target died
+                            if (combatResult.targetDied) {
+                                this.logger.log(`${attackAction.targetEntityType} ${attackAction.targetEntityId} died.`);
+                                // Use attackAction.targetEntityId for death event ID
+                                deaths.push({ entityId: attackAction.targetEntityId, type: attackAction.targetEntityType }); // Use ID from action
+                                // ZoneService should handle removal of the dead entity (if character)
+                                // Enemy removal happens within CombatService or needs handling here
+                                if (attackAction.targetEntityType === 'enemy') { 
+                                    // This case shouldn't happen with current AI (enemy attacking enemy)
+                                    // But handle it if needed in future
+                                    this.zoneService.removeEnemy(zoneId, attackAction.targetEntityId); 
+                                }
+                                // Character removal/state change needs handling
+                                 if (attackAction.targetEntityType === 'character') {
+                                    // TODO: Implement character death handling (e.g., mark as dead, respawn logic?)
+                                    this.logger.warn(`Character ${attackAction.targetEntityId} death handling not fully implemented!`);
+                                }
+                            }
+                        } else if (combatResult?.error) {
+                            // Use attackAction.targetEntityId in error log
+                            this.logger.error(`Combat calculation error for ${attacker.id} -> ${attackAction.targetEntityId}: ${combatResult.error}`);
+                        }
+                        break;
                     }
-
-                    //Set AI state back to IDLE (for now)
-                    enemy.aiState = 'IDLE';
-                    enemy.target = null;
-                    this.zoneService.setEnemyAiState(zoneId, enemy.instanceId, 'IDLE');
-                    this.zoneService.setEnemyTarget(zoneId, enemy.instanceId, null);
-
-                    this.logger.log(`Enemy ${enemy.instanceId} attacks character ${targetChar.id} for ${damage} damage!`);
-                } else {
-                  enemy.aiState = 'IDLE';
-                  enemy.target = null;
-                  this.zoneService.setEnemyAiState(zoneId, enemy.instanceId, 'IDLE');
-                  this.zoneService.setEnemyTarget(zoneId, enemy.instanceId, null);
+                    case 'IDLE':
+                    // case 'COOLDOWN': // Handled within IDLE case implicitly
+                        // No movement or attack action required from the gateway
+                        // May need to push state update if AI state changed to IDLE
+                        // updates.push({ id: enemy.id, x: enemy.position.x, y: enemy.position.y }); // Ensure position is sent
+                        break;
                 }
+                
+                // Always add enemy position to updates if not already handled by MOVE_TO
+                // This ensures enemies that go IDLE still broadcast their final position.
+                if (action.type !== 'MOVE_TO') {
+                     const existingUpdateIndex = updates.findIndex(u => u.id === enemy.id);
+                     if (existingUpdateIndex !== -1) {
+                         // Update existing entry if health changed (e.g., from ATTACK result)
+                         updates[existingUpdateIndex].x = enemy.position.x;
+                         updates[existingUpdateIndex].y = enemy.position.y;
+                     } else {
+                         // Add new update entry if not present
+                         updates.push({ id: enemy.id, x: enemy.position.x, y: enemy.position.y, health: enemy.currentHealth });
+                     }
+                }
+
+            }
+            // --- Broadcasting --- 
+            // Broadcast batched entity updates (positions, health)
+            if (updates.length > 0) {
+                this.server.to(zoneId).emit('entityUpdate', { updates });
+            }
+            // Broadcast batched combat actions (visuals)
+            for (const action of combatActions) {
+                this.server.to(zoneId).emit('combatAction', action);
+            }
+            // Broadcast batched deaths
+            for (const death of deaths) {
+                this.server.to(zoneId).emit('entityDied', death);
             }
         }
-
-        // Broadcast batched updates
-        if (updates.length > 0) {
-            this.server.to(zoneId).emit('entityUpdate', { updates });
-        }
+    } catch (error) {
+        this.logger.error(`Error during game loop tick: ${error}`, error.stack);
     }
+    // Optional: Log tick duration
+    // const duration = Date.now() - startTime;
+    // this.logger.verbose(`Game loop tick finished in ${duration}ms`);
 }
+
   handleDisconnect(client: Socket) {
     const user = client.data.user as User;
     const username = user?.username || 'Unknown';
@@ -529,42 +606,15 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
                 // Set the character's target for auto-attack in the game loop
                 attacker.targetX = target.position.x;
                 attacker.targetY = target.position.y;
-                client.data.attackTarget = target.instanceId;
+                client.data.attackTarget = target.id;
             }
         }
     }
 
         //  --------------------- AI ADDITIONS ---------------------
-  private findClosestPlayer(enemy: any, zoneId: string): ZoneCharacterState | undefined {
-      let closestPlayer: ZoneCharacterState | undefined;
-      let minDistance = Infinity;
-
-      const players = this.zoneService.getZoneCharacterStates(zoneId);
-      for (const player of players) {
-          const distance = this.calculateDistance(enemy.position, {x: player.x!, y: player.y!});
-          if (distance < minDistance) {
-              minDistance = distance;
-              closestPlayer = player;
-          }
-      }
-      return closestPlayer;
-  }
   private calculateDistance(point1: {x:number, y:number}, point2: {x:number, y:number}): number {
       const dx = point1.x - point2.x;
       const dy = point1.y - point2.y;
       return Math.sqrt(dx * dx + dy * dy);
   }
-    private findCharacterFromPosition(position: {x:number, y:number}, zoneId:string): any | undefined{
-        let foundCharacter: any | undefined;
-
-        const players = this.zoneService.getPlayersInZone(zoneId);
-        for(const player of players){
-            for(const char of player.characters){
-                if(char.positionX == position.x && char.positionY == position.y){
-                    foundCharacter = char;
-                }
-            }
-        }
-        return foundCharacter;
-    }
 }

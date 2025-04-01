@@ -1,8 +1,16 @@
 // backend/src/game/combat.service.ts
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { ZoneService } from './zone.service'; // Inject ZoneService
-import { EnemyService } from '../enemy/enemy.service'; // Inject EnemyService
-import { CombatResult } from './interfaces/combat.interface'; // Import the interface
+import { ZoneService, RuntimeCharacterData } from './zone.service'; // Import ZoneService and RuntimeCharacterData
+import { EnemyInstance } from './interfaces/enemy-instance.interface'; // Import EnemyInstance
+import { CombatResult } from './interfaces/combat.interface';
+// No longer need EnemyService here if stats are passed in
+// import { EnemyService } from '../enemy/enemy.service'; 
+
+// Define a common structure for combat participants
+// We might need base stats here if not directly on EnemyInstance/RuntimeCharacterData
+// For now, assume they have necessary stats like baseAttack, baseDefense, currentHealth
+type Combatant = (EnemyInstance & { baseAttack: number, baseDefense: number }) 
+               | (RuntimeCharacterData & { baseAttack: number, baseDefense: number });
 
 @Injectable()
 export class CombatService {
@@ -10,105 +18,86 @@ export class CombatService {
 
     constructor(
         private readonly zoneService: ZoneService,
-        private readonly enemyService: EnemyService,
-        // Inject CharacterService if needed for base stats later
+        // Remove EnemyService injection
+        // private readonly enemyService: EnemyService,
     ) {}
 
     /**
      * Calculates the base damage dealt from attacker to defender.
      */
     calculateDamage(attackerAttack: number, defenderDefense: number): number {
-        let damage = attackerAttack - defenderDefense;
-        // Basic formula: Attack minus Defense
-        // Add critical hits, randomness, resistances etc. later
-        return Math.max(0, damage); // Damage cannot be negative
+        this.logger.debug(`Calculating damage: Attacker Attack = ${attackerAttack}, Defender Defense = ${defenderDefense}`);
+        const rawDamage = attackerAttack - defenderDefense;
+        this.logger.debug(`Raw damage (Attack - Defense) = ${rawDamage}`);
+        const finalDamage = Math.max(0, rawDamage); // Damage cannot be negative
+        this.logger.debug(`Final damage (Clamped to >= 0) = ${finalDamage}`);
+        return finalDamage;
     }
 
     /**
      * Handles a complete attack interaction between two entities.
-     * Fetches stats, calculates damage, applies it, checks for death.
+     * Assumes attacker and defender objects contain necessary stats.
+     * Calculates damage, applies it via ZoneService, checks for death.
      * @returns Promise<CombatResult> - The outcome of the attack.
      */
     async handleAttack(
-        attackerId: string,
-        attackerType: 'enemy' | 'character',
-        defenderId: string,
-        defenderType: 'enemy' | 'character',
-        zoneId: string,
+        attacker: Combatant,
+        defender: Combatant,
+        zoneId: string, // Still needed for ZoneService calls
     ): Promise<CombatResult> {
         try {
-            // --- 1. Get Attacker Stats ---
-            let attackerAttack = 0;
-            if (attackerType === 'enemy') {
-                const enemyInstance = this.zoneService.getEnemy(zoneId, attackerId);
-                if (!enemyInstance) throw new NotFoundException(`Attacker enemy ${attackerId} not found in zone ${zoneId}`);
-                const enemyTemplate = await this.enemyService.findOne(enemyInstance.templateId);
-                if (!enemyTemplate) throw new NotFoundException(`Enemy template ${enemyInstance.templateId} not found`);
-                attackerAttack = enemyTemplate.baseAttack;
-            } else { // Attacker is character
-                // TODO: Fetch character stats - requires ownerId
-                // For now, use a placeholder
-                attackerAttack = 15; // Placeholder character attack
-            }
+            // Log initial states
+            this.logger.debug(`Handling attack: Attacker ID=${attacker.id}, Defender ID=${defender.id}`);
+            this.logger.debug(`Attacker Stats: Attack=${attacker.baseAttack ?? 'N/A'}`);
+            this.logger.debug(`Defender Stats: Defense=${defender.baseDefense ?? 'N/A'}, Current Health=${defender.currentHealth ?? 'N/A'}`);
 
-            // --- 2. Get Defender Stats & State ---
-            let defenderDefense = 0;
-            let defenderCurrentHealth = 0;
-            let defenderOwnerId: string | null = null; // Needed if defender is a character
+            // --- 1. Get Stats (Directly from objects) ---
+            const attackerAttack = attacker.baseAttack ?? 0;
+            const defenderDefense = defender.baseDefense ?? 0;
+            const defenderInitialHealth = defender.currentHealth ?? 0; // Health before damage
 
-            if (defenderType === 'enemy') {
-                const enemyInstance = this.zoneService.getEnemy(zoneId, defenderId);
-                if (!enemyInstance) throw new NotFoundException(`Defender enemy ${defenderId} not found in zone ${zoneId}`);
-                const enemyTemplate = await this.enemyService.findOne(enemyInstance.templateId);
-                if (!enemyTemplate) throw new NotFoundException(`Enemy template ${enemyInstance.templateId} not found`);
-                defenderDefense = enemyTemplate.baseDefense;
-                defenderCurrentHealth = enemyInstance.currentHealth;
-            } else { // Defender is character
-                // Find the character across all players in the zone
-                const characterData = this.zoneService.findCharacterInZoneById(zoneId, defenderId);
-                if (!characterData) throw new NotFoundException(`Defender character ${defenderId} not found in zone ${zoneId}`);
-
-                defenderDefense = characterData.baseDefense ?? 5; // Placeholder character defense
-                defenderCurrentHealth = characterData.currentHealth ?? 100; // Get current health
-                defenderOwnerId = characterData.ownerId!; // Get owner ID
-            }
-
-            // --- 3. Calculate Damage ---
+            // --- 2. Calculate Damage (Now logs internally) ---
             const damageDealt = this.calculateDamage(attackerAttack, defenderDefense);
 
-            // --- 4. Apply Damage ---
+            // --- 3. Apply Damage ---
             let targetDied = false;
-            let targetCurrentHealth = defenderCurrentHealth; // Start with current health before damage
+            let targetCurrentHealth = defenderInitialHealth;
 
             if (damageDealt > 0) {
-                if (defenderType === 'enemy') {
-                    const success = this.zoneService.updateEnemyHealth(zoneId, defenderId, -damageDealt);
-                    if (success) {
-                        const updatedEnemy = this.zoneService.getEnemy(zoneId, defenderId);
-                        targetCurrentHealth = updatedEnemy?.currentHealth ?? 0; // Get health AFTER update
-                        targetDied = targetCurrentHealth <= 0;
-                    } else {
-                         throw new Error(`Failed to update health for enemy ${defenderId}`);
-                    }
-                } else { // Defender is character
-                     if (!defenderOwnerId) throw new Error(`Defender character ${defenderId} ownerId is missing`);
-                    const success = this.zoneService.updateCharacterHealth(defenderOwnerId, defenderId, -damageDealt);
-                     if (success) {
-                         const updatedCharacter = this.zoneService.getPlayerCharacterById(defenderOwnerId, defenderId);
-                         targetCurrentHealth = updatedCharacter?.currentHealth ?? 0; // Get health AFTER update
+                this.logger.debug(`Applying ${damageDealt} damage to defender ${defender.id}`);
+                 // Corrected Type Check: Check for ownerId first
+                 if ('ownerId' in defender && defender.ownerId) { // Defender is RuntimeCharacterData
+                     this.logger.debug(`Defender identified as Character (ID: ${defender.id}, Owner: ${defender.ownerId})`);
+                     // Ensure ownerId is actually present (it should be based on type, but belt-and-suspenders)
+                     const newHealth = await this.zoneService.updateCharacterHealth(defender.ownerId, defender.id, -damageDealt);
+                     if (newHealth !== null) {
+                         targetCurrentHealth = newHealth;
                          targetDied = targetCurrentHealth <= 0;
                      } else {
-                          throw new Error(`Failed to update health for character ${defenderId}`);
+                         throw new Error(`Failed to update health for character ${defender.id}`);
                      }
-                }
+                 } else if ('id' in defender) { // Assume defender is EnemyInstance (has id but no ownerId)
+                     this.logger.debug(`Defender identified as Enemy (ID: ${defender.id})`);
+                     const newHealth = await this.zoneService.updateEnemyHealth(zoneId, defender.id, -damageDealt);
+                     if (newHealth !== null) {
+                         targetCurrentHealth = newHealth;
+                         targetDied = targetCurrentHealth <= 0;
+                     } else {
+                         throw new Error(`Failed to update health for enemy ${defender.id}`);
+                     }
+                 } else {
+                      // Type is 'never' here, cannot safely access defender.id
+                     this.logger.error(`Could not determine defender type. Properties: ${Object.keys(defender).join(', ')}`);
+                     throw new Error('Defender type could not be determined');
+                 }
             } else {
-                // No damage dealt, health remains the same
-                 targetCurrentHealth = defenderCurrentHealth;
-                 targetDied = defenderCurrentHealth <= 0; // Could already be dead
+                this.logger.debug(`Damage dealt is ${damageDealt}, no health update needed for ${defender.id}`);
+                targetCurrentHealth = defenderInitialHealth; // Ensure health is set correctly
+                targetDied = defenderInitialHealth <= 0; // Check if already dead
             }
 
-            // --- 5. Return Result ---
-            this.logger.log(`Attack resolved: ${attackerType} ${attackerId} -> ${defenderType} ${defenderId}. Damage: ${damageDealt}, Target Died: ${targetDied}, Target Health: ${targetCurrentHealth}`);
+            // --- 4. Return Result ---
+            this.logger.log(`Attack resolved: ${attacker.id} -> ${defender.id}. Damage: ${damageDealt}, Target Died: ${targetDied}, Target Health: ${targetCurrentHealth}`);
             return {
                 damageDealt,
                 targetDied,
@@ -116,30 +105,14 @@ export class CombatService {
             };
 
         } catch (error) {
-            this.logger.error(`Error during handleAttack (${attackerId} -> ${defenderId}): ${error.message}`, error.stack);
+            this.logger.error(`Error during handleAttack (${attacker.id} -> ${defender.id}): ${error.message}`, error.stack);
+            // Simplified error handling return
             return {
                 damageDealt: 0,
-                targetDied: false,
-                // Attempt to get current health even on error, might be useful
-                targetCurrentHealth: this.getCurrentHealthOnError(zoneId, defenderId, defenderType),
+                targetDied: defender.currentHealth <= 0, // Best guess based on state before error
+                targetCurrentHealth: defender.currentHealth ?? 0,
                 error: error.message || 'Unknown combat error',
             };
         }
     }
-
-     // Helper to try and get health even if main logic failed
-     private getCurrentHealthOnError(zoneId: string, entityId: string, entityType: 'enemy' | 'character'): number {
-         try {
-             if (entityType === 'enemy') {
-                 return this.zoneService.getEnemy(zoneId, entityId)?.currentHealth ?? 0;
-             } else {
-                // Need a way to get character health without ownerId if possible, or just return 0
-                // This might require enhancing findCharacterInZoneById or another getter
-                 const char = this.zoneService.findCharacterInZoneById(zoneId, entityId);
-                 return char?.currentHealth ?? 0;
-             }
-         } catch {
-             return 0; // Default to 0 if lookup fails
-         }
-     }
 }

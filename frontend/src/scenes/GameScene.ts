@@ -7,7 +7,7 @@ import UIScene from './UIScene';
 import { EnemySprite } from '../gameobjects/EnemySprite';
 // Add the interface definitions if not shared
 interface ZoneCharacterState { id: string; ownerId: string; ownerName: string; name: string; level: number; x: number | null; y: number | null; }
-interface EntityUpdateData { id: string; x?: number | null; y?: number | null; }
+interface EntityUpdateData { id: string; x?: number | null; y?: number | null; health?: number | null; }
 
 interface ChatMessageData {
     senderName: string;
@@ -148,7 +148,7 @@ export default class GameScene extends Phaser.Scene {
         });
 
         // --- Setup Input for Movement ---
-        this.input.on(Phaser.Input.Events.POINTER_DOWN, (pointer: Phaser.Input.Pointer) => {
+        this.input.on(Phaser.Input.Events.POINTER_DOWN, (pointer: Phaser.Input.Pointer, gameObjects: Phaser.GameObjects.GameObject[]) => {
             if (!this || !this.networkManager || !this.playerCharacters) return;
             if (pointer.button !== 0) return;
 
@@ -163,7 +163,23 @@ export default class GameScene extends Phaser.Scene {
             // Show the marker (this function will now also handle the tween storage)
             this.showClickMarker(worldPoint.x, worldPoint.y);
             // ------------------------------------
-
+            let clickedOnEnemy = false;
+            if (gameObjects.length > 0) {
+                const topObject = gameObjects[0]; // Check the topmost object clicked
+                if (topObject instanceof EnemySprite && topObject.getData('type') === 'enemy') {
+                    // Clicked on an enemy!
+                    const enemySprite = topObject as EnemySprite;
+                    const enemyId = enemySprite.getData('enemyData')?.instanceId; // Get ID from stored data
+                     if (enemyId) {
+                        this.networkManager.sendMessage('attackCommand', { targetId: enemyId });
+                        console.log(`Sent attack command for enemy: ${enemyId}`);
+                        clickedOnEnemy = true;
+                        // Optionally show a target indicator or visual feedback here
+                    } else {
+                        console.warn('Clicked enemy sprite missing instanceId in data.');
+                    }
+                }
+            }
             // --- Send Move Command ---
             const firstPlayerCharId = Array.from(this.playerCharacters.keys())[0];
             if (firstPlayerCharId) {
@@ -311,24 +327,42 @@ export default class GameScene extends Phaser.Scene {
 
             // Find the character sprite (could be player or other)
             const characterSprite = this.playerCharacters.get(id) || this.otherCharacters.get(id);
-
+            if (characterSprite) {
+                if (update.health) {
+                    characterSprite.setHealth(update.health);
+                }
+            }
             if (characterSprite && x !== undefined && y !== undefined && x !== null && y !== null) {
                 // Update the target position for interpolation
                 characterSprite.updateTargetPosition(x, y);
+                
             }
              // Handle other updates later (health, state changes, etc.)
              else if (this.enemySprites.has(update.id)) {
                 const sprite = this.enemySprites.get(update.id);
-                if (sprite && update.x && update.y) {
+                if (!sprite) {
+                    console.warn(`Enemy sprite not found for ID: ${update.id}`);
+                    return;
+                }
+                if (update.x && update.y) {
                     sprite.updateTargetPosition(update.x, update.y);
+                }
+                if (update.health) {
+                    sprite.setHealth(update.health);
                 }
             }
              // 4. NEW - Create Enemy Sprite if doesn't exist
             else {
-                 // ASSUME THIS IS AN ENEMY for now - needs to be changed to a type-safe approach.
-                //This is a HACK since there will never be a health check for a new sprite for users
-                 const newEnemy = new EnemySprite(this, update.x!, update.y!, 'goblin', `Enemy ${update.id}`, null);
-                 this.enemySprites.set(update.id, newEnemy);
+                if (this.playerCharacters.has(update.id) || this.otherCharacters.has(update.id)) {
+                    return; // Do nothing if it's a known character
+                }
+                // TODO: Improve this logic - we need definitive info from backend if it's an enemy
+                // For now, assume it's an enemy if not a known character
+                // GET ENEMY TEMPLATE INFO FROM BACKEND EVENTUALLY
+                const enemyData = { instanceId: update.id }; // Store the ID
+                const newEnemy = new EnemySprite(this, update.x!, update.y!, 'goblin', `Enemy`, enemyData); // Use 'goblin' for now
+                newEnemy.setInteractive(); // *** MAKE ENEMY CLICKABLE ***
+                this.enemySprites.set(update.id, newEnemy);
              }
         });
     }

@@ -1,5 +1,6 @@
 // frontend/src/gameobjects/CharacterSprite.ts
 import Phaser from 'phaser';
+import { HealthBar } from './HealthBar'; // Import HealthBar
 
 // Add the interface definition if you don't have it shared elsewhere
 interface ZoneCharacterState {
@@ -10,13 +11,13 @@ interface ZoneCharacterState {
     level: number;
     x: number | null;
     y: number | null;
+    baseHealth: number;
 }
 
 export class CharacterSprite extends Phaser.GameObjects.Sprite {
     characterId: string;
     ownerId: string; // ID of the controlling player
     isPlayerCharacter: boolean; // Is this one of the client's own characters?
-
     // --- Interpolation properties ---
     targetX: number;
     targetY: number;
@@ -24,6 +25,8 @@ export class CharacterSprite extends Phaser.GameObjects.Sprite {
     // ------------------------------
     // --- Chat Bubble Properties ---
     private activeBubbles: Phaser.GameObjects.Text[] = [];
+    private healthBar: HealthBar; // Add health bar property
+
     private readonly BUBBLE_MAX_WIDTH = 150; // Max width before wrapping
     private readonly BUBBLE_OFFSET_Y = 20;  // Initial offset above sprite center/top
     private readonly BUBBLE_SPACING_Y = 18; // Vertical space between stacked bubbles (adjust based on font size)
@@ -38,7 +41,6 @@ export class CharacterSprite extends Phaser.GameObjects.Sprite {
         wordWrap: { width: this.BUBBLE_MAX_WIDTH }
     };
     private nameLabel: Phaser.GameObjects.Text;
-    private healthBar?: Phaser.GameObjects.Graphics; // Add later
 
     constructor(scene: Phaser.Scene, x: number, y: number, texture: string, data: ZoneCharacterState, isPlayer: boolean) {
         super(scene, x, y, texture);
@@ -62,6 +64,11 @@ export class CharacterSprite extends Phaser.GameObjects.Sprite {
         if (!isPlayer) {
             this.setAlpha(0.8); // Make other players slightly transparent maybe
         }
+        const maxHealth = data.baseHealth; // Get from data or default
+        this.healthBar = new HealthBar(scene, this.x, this.y - 30, 40, 5, maxHealth); // Adjust position/size
+        this.updateHealthBarPosition(); // Initial position
+        this.setHealth(maxHealth); // Initialize health visually
+        // -----------------
     }
     // --- New Method to Show a Bubble ---
     showChatBubble(message: string) {
@@ -136,6 +143,13 @@ export class CharacterSprite extends Phaser.GameObjects.Sprite {
             bubble.y = this.calculateBubbleY(index); // Update Y using the helper            // Relative Y position is handled by initial placement and upward push
         });
         // ---------------------------------------------
+        this.updateHealthBarPosition(); // Keep health bar position updated
+    }
+    setHealth(currentHealth: number, maxHealth?: number): void {
+        this.healthBar.setHealth(currentHealth, maxHealth);
+    }
+    private updateHealthBarPosition(): void {
+        this.healthBar.setPosition(this.x, this.y - 25); // Position below name label
     }
 
     // Override destroy to clean up label too
@@ -149,6 +163,7 @@ export class CharacterSprite extends Phaser.GameObjects.Sprite {
             bubble.destroy();
         });
         this.activeBubbles = []; // Clear array
+        this.healthBar.destroy(); // Destroy health bar
         super.destroy(fromScene);
     }
 }
