@@ -37,6 +37,9 @@ interface ZoneState {
 interface RuntimeCharacterData extends Character {
     targetX: number | null;
     targetY: number | null;
+    currentHealth?: number;
+    ownerId?: string;
+    baseDefense?: number; // Add baseDefense if not inheriting directly from Character entity
     // Add movement speed later
     // movementSpeed: number;
 }
