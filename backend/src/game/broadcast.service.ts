@@ -25,10 +25,8 @@ interface DeathData {
 
 type SpawnData = EnemyInstance; // The full enemy instance data for a new spawn
 
-
 @Injectable()
 export class BroadcastService {
-    private readonly logger = new Logger(BroadcastService.name);
     private server: Server | null = null;
 
     // Queues to hold events per zone before flushing
@@ -36,6 +34,12 @@ export class BroadcastService {
     private combatActionQueue: Map<string, CombatActionData[]> = new Map();
     private deathQueue: Map<string, DeathData[]> = new Map();
     private spawnQueue: Map<string, SpawnData[]> = new Map();
+
+    // Inject Logger through the constructor
+    constructor(private readonly logger: Logger) {
+        // Optionally set context once - REMOVED as Logger type doesn't have this method directly
+        // this.logger.setContext(BroadcastService.name);
+    }
 
     /**
      * Stores the Socket.IO Server instance for broadcasting.

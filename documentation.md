@@ -321,11 +321,12 @@ export interface RuntimeCharacterData extends Character {
 *   **Component-Based Sprites:** Sprites manage their own visual components (labels, health bars, chat bubbles, death visuals).
 *   **State Machine (Server):** `CharacterStateService` uses a state machine (`idle`, `moving`, `attacking`, `dead`) for characters to manage behavior (movement, combat, leashing, respawn).
 
-**10. Testing Strategy (Unchanged - Paused)**
+**10. Testing Strategy (Updated)**
 
 *   Remains multi-layered (Unit, Integration, E2E) primarily focused on backend (Jest).
 *   Frontend unit testing (Vitest/Jest) for utilities. Manual testing for scenes.
-*   **Status:** Unit/Integration test implementation is currently paused to prioritize feature development, but the strategy remains defined for later implementation.
+*   **Status:** Unit/Integration test implementation is **active**. Tests have been added for the refactored game loop services (`MovementService`, `SpawningService`, `BroadcastService`, `CharacterStateService`, `EnemyStateService`) and related refactored services (`ZoneService`, `CombatService`).
+*   **Policy:** Moving forward, new features or significant refactors **must** include corresponding unit and/or integration tests to ensure correctness and prevent regressions.
 
 **11. Core Real-time Update Flow (Example: Character Auto-Attack - Updated with Services)**
 

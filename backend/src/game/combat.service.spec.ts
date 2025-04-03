@@ -12,11 +12,13 @@ const createMockEnemy = (id: string, health: number, attack: number, defense: nu
   id: id,
   templateId: `template-${id}`,
   zoneId: 'test-zone',
+  name: `Enemy ${id}`,
   currentHealth: health,
   position: { x: 10, y: 10 },
   aiState: 'IDLE',
   baseAttack: attack,
   baseDefense: defense,
+  baseSpeed: 75,
 });
 
 // Partial<Character> and Partial<User> help create the object without all entity fields
@@ -40,6 +42,16 @@ const createMockCharacter = (id: string, health: number, attack: number, defense
   user: { id: `user-${id}`, username: `User ${id}` } as User,
   createdAt: new Date(),
   updatedAt: new Date(),
+  state: 'idle',
+  attackTargetId: null,
+  anchorX: 20,
+  anchorY: 20,
+  attackRange: 50,
+  aggroRange: 150,
+  leashDistance: 400,
+  attackSpeed: 1500,
+  lastAttackTime: 0,
+  timeOfDeath: null,
 });
 
 // --- Mock ZoneService --- 

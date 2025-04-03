@@ -176,9 +176,9 @@ export class GameLoopService implements OnApplicationShutdown {
                                 needsPositionUpdate = true;
                                 character.positionX = moveResult.newPosition.x;
                                 character.positionY = moveResult.newPosition.y;
-                                // Persist the updated position in ZoneService's runtime data
-                                this.zoneService.updateCharacterCurrentPosition(player.user.id, character.id, character.positionX, character.positionY);
-                             }
+                            // Persist the updated position in ZoneService's runtime data
+                            this.zoneService.updateCharacterCurrentPosition(player.user.id, character.id, character.positionX, character.positionY);
+                        }
 
                              // If target was reached, clear the target fields in the character data
                              if (moveResult.reachedTarget) {
@@ -280,15 +280,15 @@ export class GameLoopService implements OnApplicationShutdown {
                          }
 
                          if (enemyMoveResult.reachedTarget) {
-                             const previousTarget = enemy.target; // Store before clearing
-                             enemy.target = null; // Clear target locally first
-                             this.zoneService.setEnemyTarget(zoneId, enemy.id, null); // Persist cleared target
+                            const previousTarget = enemy.target; // Store before clearing
+                            enemy.target = null; // Clear target locally first
+                            this.zoneService.setEnemyTarget(zoneId, enemy.id, null); // Persist cleared target
 
                               // State transitions (e.g., WANDERING -> IDLE) are handled here based on reaching target
                               // (Could potentially move into EnemyStateService after movement simulation)
-                              if (enemy.aiState === 'WANDERING' || enemy.aiState === 'LEASHED') {
-                                  this.zoneService.setEnemyAiState(zoneId, enemy.id, 'IDLE'); // Reached wander/leash point
-                              } else if (enemy.aiState === 'CHASING') {
+                             if (enemy.aiState === 'WANDERING' || enemy.aiState === 'LEASHED') {
+                                 this.zoneService.setEnemyAiState(zoneId, enemy.id, 'IDLE'); // Reached wander/leash point
+                             } else if (enemy.aiState === 'CHASING') {
                                   // Reaching the exact spot might transition to ATTACKING or back to CHASING next AI tick
                               }
                          }
@@ -296,7 +296,7 @@ export class GameLoopService implements OnApplicationShutdown {
 
                     // --- Add enemy to updates array if needed ---
                      // Only add if position actually changed
-                     if (enemyNeedsPositionUpdate) {
+                    if (enemyNeedsPositionUpdate) {
                         const updateData = {
                             id: enemy.id,
                             x: enemy.position.x,

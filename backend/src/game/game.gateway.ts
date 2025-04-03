@@ -392,5 +392,5 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
         }
 
         // The actual attacking/movement to target happens in the game loop
-    }
+  }
 }

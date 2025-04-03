@@ -13,6 +13,8 @@ import { EnemyService } from '../enemy/enemy.service';
 import { AIService } from './ai.service'; // Import AIService
 import { Logger } from '@nestjs/common';
 import { Socket } from 'socket.io'; // Import Socket
+import { GameLoopService } from './game-loop.service';
+import { BroadcastService } from './broadcast.service';
 
 // Mocks for services (can be more detailed)
 const mockJwtService = { verifyAsync: jest.fn(), sign: jest.fn() };
@@ -33,6 +35,15 @@ const mockEnemyService = { findOne: jest.fn(), findAll: jest.fn() };
 const mockAIService = {
     updateEnemyAI: jest.fn(), // Mock the method gateway calls
     // Add other methods if gateway uses them
+};
+// Mock for GameLoopService
+const mockGameLoopService = {
+    startLoop: jest.fn(), // Mock methods used by gateway
+};
+// Mock for BroadcastService
+const mockBroadcastService = {
+    setServerInstance: jest.fn(), // Mock methods used by gateway
+    // Add queue/flush mocks if gateway ever uses them directly (it shouldn't)
 };
 
 describe('GameGateway', () => {
@@ -56,6 +67,10 @@ describe('GameGateway', () => {
         user: mockUser,
         createdAt: new Date(),
         updatedAt: new Date(),
+        attackSpeed: 1500,
+        attackRange: 50,
+        aggroRange: 150,
+        leashDistance: 400,
     };
     const mockToken = 'valid-token';
 
@@ -99,6 +114,8 @@ describe('GameGateway', () => {
                 { provide: CombatService, useValue: mockCombatService },
                 { provide: EnemyService, useValue: mockEnemyService },
                 { provide: AIService, useValue: mockAIService },
+                { provide: GameLoopService, useValue: mockGameLoopService },
+                { provide: BroadcastService, useValue: mockBroadcastService },
             ],
         }).compile();
 
