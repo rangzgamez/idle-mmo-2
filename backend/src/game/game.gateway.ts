@@ -145,17 +145,63 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
                 for (const character of player.characters) { // character is RuntimeCharacterData
                     let needsPositionUpdate = false;
 
-                     // --- 0. Basic Checks --- (Handle dead characters)
+                     // --- -1. Respawn Check (if dead) ---
+                     if (character.state === 'dead' && character.timeOfDeath !== null) {
+                         const now = Date.now();
+                         const RESPAWN_DELAY = 5000; // 5 seconds
+                         if (now >= character.timeOfDeath + RESPAWN_DELAY) {
+                             this.logger.log(`Character ${character.id} [${character.name}] respawning.`);
+                             character.currentHealth = character.baseHealth; // Restore health
+                             character.state = 'idle';
+                             character.timeOfDeath = null;
+                             // Move back to anchor point upon respawn
+                             if (character.anchorX !== null && character.anchorY !== null) {
+                                 character.positionX = character.anchorX;
+                                 character.positionY = character.anchorY;
+                             }
+                             // No targets after respawn
+                             character.attackTargetId = null;
+                             character.targetX = null;
+                             character.targetY = null;
+
+                            // Add/update the character state in updates array
+                            const updateIndex = updates.findIndex(u => u.id === character.id);
+                            if (updateIndex > -1) {
+                                updates[updateIndex].x = character.positionX;
+                                updates[updateIndex].y = character.positionY;
+                                updates[updateIndex].health = character.currentHealth;
+                                // Optionally include state? Needs client handling
+                            } else {
+                                updates.push({ id: character.id, x: character.positionX, y: character.positionY, health: character.currentHealth });
+                            }
+                            // Continue to next character, skip dead processing this tick
+                            continue;
+                         }
+                         // Still dead and waiting for respawn timer, skip all other processing
+                         continue;
+                     }
+
+                     // --- 0. Death Check (Transition to dead state) ---
                      if (character.currentHealth <= 0) {
-                        // TODO: Proper dead state handling - for now, just skip processing
-                        // Ensure dead characters are updated at least once? Or handled by death event?
-                        // Check if already in updates, if not add final state?
+                         // If already dead, do nothing further (handled by respawn check above)
+                         // Transition to dead state
+                         this.logger.log(`Character ${character.id} [${character.name}] has died.`);
+                         character.timeOfDeath = Date.now(); // Record time of death
+                         character.state = 'dead';
+                         character.attackTargetId = null;
+                         character.targetX = null;
+                         character.targetY = null;
+
+                        // Add final state to updates if not already present
                          const existingUpdateIndex = updates.findIndex(u => u.id === character.id);
                          if (existingUpdateIndex === -1) {
                              // Ensure the death state (health=0) is broadcast if not already
-                            // updates.push({ id: character.id, x: character.positionX, y: character.positionY, health: 0 });
+                              updates.push({ id: character.id, x: character.positionX, y: character.positionY, health: 0 });
+                         } else if (updates[existingUpdateIndex].health !== 0) {
+                             // Ensure existing update reflects health is 0
+                            updates[existingUpdateIndex].health = 0;
                          }
-                         continue; // Skip processing for dead characters
+                         continue; // Skip further processing for dead characters
                      }
 
                     // --- 1. Leashing Check ---
@@ -203,45 +249,52 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
                                         }
 
                                         // TODO: Implement attack cooldown check here
+                                        const now = Date.now();
+                                        if (now >= character.lastAttackTime + character.attackSpeed) {
+                                            this.logger.debug(`Character ${character.id} [${character.name}] attacking enemy ${targetEnemy.id}`);
+                                            // Ensure combat service exists and can handle Character attacking Enemy
+                                            if (this.combatService && typeof this.combatService.handleAttack === 'function') {
+                                                const combatResult = await this.combatService.handleAttack(
+                                                    character,   // Attacker (Character)
+                                                    targetEnemy, // Defender (Enemy)
+                                                    zoneId
+                                                );
 
-                                        this.logger.debug(`Character ${character.id} [${character.name}] attacking enemy ${targetEnemy.id}`);
-                                        // Ensure combat service exists and can handle Character attacking Enemy
-                                        if (this.combatService && typeof this.combatService.handleAttack === 'function') {
-                                            const combatResult = await this.combatService.handleAttack(
-                                                character,   // Attacker (Character)
-                                                targetEnemy, // Defender (Enemy)
-                                                zoneId
-                                            );
+                                                // Update lastAttackTime ONLY after attempting the attack
+                                                character.lastAttackTime = now;
 
-                                            if (combatResult && !combatResult.error) {
-                                                combatActions.push({
-                                                    attackerId: character.id,
-                                                    targetId: targetEnemy.id,
-                                                    damage: combatResult.damageDealt,
-                                                    type: 'character_attack', // Distinguish from enemy attack if needed
-                                                });
-                                                // Update target enemy's health in the updates array
-                                                const enemyUpdateIndex = updates.findIndex(u => u.id === targetEnemy.id);
-                                                if (enemyUpdateIndex > -1) {
-                                                    updates[enemyUpdateIndex].health = combatResult.targetCurrentHealth;
-                                                } else {
-                                                    updates.push({ id: targetEnemy.id, x: targetEnemy.position.x, y: targetEnemy.position.y, health: combatResult.targetCurrentHealth });
+                                                if (combatResult && !combatResult.error) {
+                                                    combatActions.push({
+                                                        attackerId: character.id,
+                                                        targetId: targetEnemy.id,
+                                                        damage: combatResult.damageDealt,
+                                                        type: 'character_attack', // Distinguish from enemy attack if needed
+                                                    });
+                                                    // Update target enemy's health in the updates array
+                                                    const enemyUpdateIndex = updates.findIndex(u => u.id === targetEnemy.id);
+                                                    if (enemyUpdateIndex > -1) {
+                                                        updates[enemyUpdateIndex].health = combatResult.targetCurrentHealth;
+                                                    } else {
+                                                        updates.push({ id: targetEnemy.id, x: targetEnemy.position.x, y: targetEnemy.position.y, health: combatResult.targetCurrentHealth });
+                                                    }
+
+                                                    if (combatResult.targetDied) {
+                                                        this.logger.log(`Enemy ${targetEnemy.id} died from attack by character ${character.id} [${character.name}].`);
+                                                        deaths.push({ entityId: targetEnemy.id, type: 'enemy' });
+                                                        // Clear target and go idle
+                                                        character.attackTargetId = null;
+                                                        character.state = 'idle';
+                                                        // Enemy removal might be handled elsewhere (e.g., after loop or by CombatService)
+                                                    }
+                                                    // TODO: Add lastAttackTime update for cooldown - REMOVED, handled above
+                                                } else if (combatResult?.error) {
+                                                    this.logger.error(`Combat Error (Char->Enemy): ${character.id} vs ${targetEnemy.id}: ${combatResult.error}`);
+                                                    // Consider stopping attack on error? Maybe switch to idle.
+                                                    // character.attackTargetId = null;
+                                                    // character.state = 'idle';
                                                 }
-
-                                                if (combatResult.targetDied) {
-                                                    this.logger.log(`Enemy ${targetEnemy.id} died from attack by character ${character.id} [${character.name}].`);
-                                                    deaths.push({ entityId: targetEnemy.id, type: 'enemy' });
-                                                    // Clear target and go idle
-                                                    character.attackTargetId = null;
-                                                    character.state = 'idle';
-                                                    // Enemy removal might be handled elsewhere (e.g., after loop or by CombatService)
-                                                }
-                                                // TODO: Add lastAttackTime update for cooldown
-                                            } else if (combatResult?.error) {
-                                                this.logger.error(`Combat Error (Char->Enemy): ${character.id} vs ${targetEnemy.id}: ${combatResult.error}`);
-                                                // Consider stopping attack on error? Maybe switch to idle.
-                                                // character.attackTargetId = null;
-                                                // character.state = 'idle';
+                                            } else {
+                                                this.logger.error(`CombatService or handleAttack method not available.`);
                                             }
                                         } else {
                                             this.logger.error(`CombatService or handleAttack method not available.`);
@@ -285,6 +338,18 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
                                          character.state = 'attacking';
                                          // Movement towards target will be handled in the 'attacking' state logic or movement simulation
                                      }
+                                    // --- No Target Found: Return to Anchor? ---
+                                    else if (character.anchorX !== null && character.anchorY !== null &&
+                                             (character.positionX !== character.anchorX || character.positionY !== character.anchorY))
+                                    {
+                                        // Only start moving if not already moving to the anchor
+                                        if (character.state !== 'moving' || character.targetX !== character.anchorX || character.targetY !== character.anchorY) {
+                                            this.logger.debug(`Character ${character.id} [${character.name}] idle, no targets. Returning to anchor.`);
+                                            character.state = 'moving';
+                                            character.targetX = character.anchorX;
+                                            character.targetY = character.anchorY;
+                                        }
+                                    }
                                 }
                                 break; // End idle state
 

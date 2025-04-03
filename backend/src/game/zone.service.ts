@@ -49,6 +49,11 @@ export interface RuntimeCharacterData extends Character {
     attackRange: number; // How close to attack
     aggroRange: number; // How far to automatically look for targets when idle
     leashDistance: number; // How far from anchor before returning
+    // --- Attack Timing ---
+    attackSpeed: number; // Milliseconds between attacks
+    lastAttackTime: number; // Timestamp of the last attack (Date.now())
+    // --- Death State ---
+    timeOfDeath: number | null; // Timestamp when health reached 0
 }
 @Injectable()
 export class ZoneService {
@@ -87,9 +92,14 @@ export class ZoneService {
             attackTargetId: null,
             anchorX: char.positionX ?? (100 + Math.random() * 50), // Initial anchor is spawn point
             anchorY: char.positionY ?? (100 + Math.random() * 50),
-            attackRange: 50, // TODO: Make this configurable/stat-based
-            aggroRange: 150, // TODO: Make this configurable/stat-based
-            leashDistance: 400, // TODO: Make this configurable
+            attackRange: char.attackRange, // Use value from entity
+            aggroRange: char.aggroRange,   // Use value from entity
+            leashDistance: char.leashDistance, // Use value from entity
+            // --- Initialize Attack Timing ---
+            attackSpeed: char.attackSpeed, // Use value from entity
+            lastAttackTime: 0, // Initialize to 0, meaning they can attack immediately
+            // --- Initialize Death State ---
+            timeOfDeath: null, // Initialize as not dead
         }));
 
         zone.players.set(user.id, { socket: playerSocket, user, characters: runtimeCharacters });

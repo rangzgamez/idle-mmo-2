@@ -50,6 +50,19 @@ import {
 
     @Column({ type: 'integer', default: 5 })
     baseDefense: number;
+
+    // --- ADDED COMBAT/AI STATS ---
+    @Column({ type: 'integer', default: 1500, comment: 'Milliseconds between attacks' })
+    attackSpeed: number;
+
+    @Column({ type: 'integer', default: 50, comment: 'Pixel distance for attacks' })
+    attackRange: number;
+
+    @Column({ type: 'integer', default: 150, comment: 'Pixel distance for auto-aggro' })
+    aggroRange: number;
+
+    @Column({ type: 'integer', default: 400, comment: 'Pixel distance from anchor before returning' })
+    leashDistance: number;
     // ------------------------------------------------------
   
     // TODO: Define stats later (hp, mp, str, int, def, speed, etc.)
