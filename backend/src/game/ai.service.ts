@@ -45,10 +45,22 @@ export class AIService {
 
         // Check if current target is valid
         if (!targetCharacter || targetCharacter.currentHealth <= 0 || targetCharacter.state === 'dead') {
-             this.logger.verbose(`Enemy ${enemy.id} lost/invalid target ${enemy.currentTargetId}. Becoming IDLE.`);
-             this.setState(enemy, zoneId, 'IDLE', null);
-             enemy.currentTargetId = null;
-             return { type: 'IDLE' };
+             this.logger.verbose(`Enemy ${enemy.id} lost/invalid target ${enemy.currentTargetId}. Scanning for new target...`);
+             // --- ADDED: Scan for new target immediately after a kill/invalid target --- 
+             const closestPlayer = this.findClosestPlayer(enemy, zoneId);
+             if (closestPlayer && this.calculateDistance(enemy.position, closestPlayer) <= this.ENEMY_AGGRO_RANGE) {
+                 this.logger.verbose(`Enemy ${enemy.id} found new target ${closestPlayer.id} after previous target loss. Transitioning to CHASING.`);
+                 enemy.currentTargetId = closestPlayer.id;
+                 this.setState(enemy, zoneId, 'CHASING', closestPlayer);
+                 return { type: 'MOVE_TO', target: { x: closestPlayer.positionX!, y: closestPlayer.positionY! } };
+             } else {
+                 // --- No new target found, NOW become IDLE ---
+                 this.logger.verbose(`Enemy ${enemy.id} found no other targets. Becoming IDLE.`);
+                 this.setState(enemy, zoneId, 'IDLE', null);
+                 enemy.currentTargetId = null;
+                 return { type: 'IDLE' };
+             }
+             // ---------------------------------------------------------------------
         }
 
         // Target is valid, check distance
