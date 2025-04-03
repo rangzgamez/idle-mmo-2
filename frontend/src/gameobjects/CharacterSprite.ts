@@ -11,7 +11,8 @@ interface ZoneCharacterState {
     level: number;
     x: number | null;
     y: number | null;
-    baseHealth: number;
+    baseHealth?: number; // <-- Made optional
+    currentHealth?: number; // Also add currentHealth if needed by constructor/logic
 }
 
 export class CharacterSprite extends Phaser.GameObjects.Sprite {
@@ -53,21 +54,25 @@ export class CharacterSprite extends Phaser.GameObjects.Sprite {
         this.targetX = x; // Initialize target position
         this.targetY = y;
 
-        // Basic Name Label
-        this.nameLabel = scene.add.text(x, y - this.height / 2 - 5, `${data.name} (${data.ownerName})`, {
+        // Name Label
+        this.nameLabel = scene.add.text(x, y - this.height / 2 - 5, `${data.name} (Lvl ${data.level})`, { // Updated label format
             fontSize: '10px',
-            color: isPlayer ? '#00ff00' : '#ffffff', // Green for own chars, white for others
+            color: isPlayer ? '#00ff00' : '#ffffff',
             align: 'center',
         }).setOrigin(0.5);
         this.nameLabel.y = y - this.height / 2 - 15;
-        // Could set tint, scale, etc. based on data
+
         if (!isPlayer) {
-            this.setAlpha(0.8); // Make other players slightly transparent maybe
+            this.setAlpha(0.8);
         }
-        const maxHealth = data.baseHealth; // Get from data or default
-        this.healthBar = new HealthBar(scene, this.x, this.y - 30, 40, 5, maxHealth); // Adjust position/size
-        this.updateHealthBarPosition(); // Initial position
-        this.setHealth(maxHealth); // Initialize health visually
+
+        // --- Health Bar --- 
+        const maxHealth = data.baseHealth ?? 100; // Provide default if baseHealth is undefined
+        const currentHealth = data.currentHealth ?? maxHealth; // Use currentHealth or default to max
+
+        this.healthBar = new HealthBar(scene, this.x, this.y - 30, 40, 5, maxHealth); 
+        this.updateHealthBarPosition(); 
+        this.setHealth(currentHealth, maxHealth); // Initialize health visually using correct values
         // -----------------
     }
     // --- New Method to Show a Bubble ---
@@ -132,9 +137,9 @@ export class CharacterSprite extends Phaser.GameObjects.Sprite {
         this.x = Phaser.Math.Linear(this.x, this.targetX, this.lerpSpeed);
         this.y = Phaser.Math.Linear(this.y, this.targetY, this.lerpSpeed);
 
-        // Update name label position (adjust Y offset)
+        // Update name label position
         this.nameLabel.x = this.x;
-        this.nameLabel.y = this.y - this.height / 2 - 15; // Adjusted Y
+        this.nameLabel.y = this.y - this.height / 2 - 15;
 
         // --- Update positions of active chat bubbles ---
         this.activeBubbles.forEach((bubble, index) => {
@@ -143,13 +148,20 @@ export class CharacterSprite extends Phaser.GameObjects.Sprite {
             bubble.y = this.calculateBubbleY(index); // Update Y using the helper            // Relative Y position is handled by initial placement and upward push
         });
         // ---------------------------------------------
-        this.updateHealthBarPosition(); // Keep health bar position updated
+        this.updateHealthBarPosition();
     }
     setHealth(currentHealth: number, maxHealth?: number): void {
         this.healthBar.setHealth(currentHealth, maxHealth);
     }
     private updateHealthBarPosition(): void {
         this.healthBar.setPosition(this.x, this.y - 25); // Position below name label
+    }
+
+    // Add method to update name/level label if needed later
+    updateNameLabel(name: string, level: number) {
+        this.nameLabel.setText(`${name} (Lvl ${level})`);
+        // Optional: Recalculate position if origin/size changes significantly
+        this.nameLabel.y = this.y - this.height / 2 - 15;
     }
 
     // Override destroy to clean up label too

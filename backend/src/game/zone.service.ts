@@ -1,11 +1,13 @@
 // backend/src/game/zone.service.ts
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { Socket } from 'socket.io';
 import { Character } from '../character/character.entity';
 import { User } from '../user/user.entity';
 import { EnemyInstance } from './interfaces/enemy-instance.interface';
 import { v4 as uuidv4 } from 'uuid';
 import { EnemyService } from '../enemy/enemy.service'; // Import EnemyService
+import { SpawnNest } from './interfaces/spawn-nest.interface'; // Import SpawnNest
+import { Enemy } from 'src/enemy/enemy.entity'; // Import Enemy entity
 
 // Interface for player data within a zone
 interface PlayerInZone {
@@ -31,6 +33,7 @@ export interface ZoneCharacterState {
 interface ZoneState {
     players: Map<string, PlayerInZone>; // Existing player state
     enemies: Map<string, EnemyInstance>; // Enemy instances, keyed by id
+    nests: Map<string, SpawnNest>; // <-- ADD Nests map
     // Add items map/list later
 }
 // Export this interface so CombatService can use it
@@ -42,7 +45,7 @@ export interface RuntimeCharacterData extends Character {
     baseAttack: number;
     baseDefense: number;
     // --- RTS Combat State ---
-    state: 'idle' | 'moving' | 'attacking';
+    state: 'idle' | 'moving' | 'attacking' | 'dead';
     attackTargetId: string | null;
     anchorX: number | null; // Last commanded position or spawn point
     anchorY: number | null;
@@ -56,23 +59,95 @@ export interface RuntimeCharacterData extends Character {
     timeOfDeath: number | null; // Timestamp when health reached 0
 }
 @Injectable()
-export class ZoneService {
+export class ZoneService implements OnModuleInit {
     // In-memory store for all active zones
     // Key: zoneId (string), Value: ZoneState
     private zones: Map<string, ZoneState> = new Map();
     private logger: Logger = new Logger('ZoneService');
 
-    constructor(private readonly enemyService: EnemyService) { // Inject EnemyService
-        // Initialize zone state for default zone(s).
-        this.zones.set('startZone', { players: new Map(), enemies: new Map() });
-        this.startSpawningEnemies('startZone'); // Start spawning enemies in the default zone.
-      }
+    // Define Zone Boundaries (adjust as needed)
+    private readonly ZONE_WIDTH = 1000;
+    private readonly ZONE_HEIGHT = 1000;
+    private readonly NESTS_PER_TEMPLATE = 6; // How many nests to create per enemy type
+
+    constructor(private readonly enemyService: EnemyService) {
+        // Initialize default zone(s) structure first
+        this.zones.set('startZone', {
+            players: new Map(),
+            enemies: new Map(),
+            nests: new Map() // Initialize empty nests map
+        });
+    }
+
+    // Use OnModuleInit to ensure EnemyService is ready and nests are created
+    async onModuleInit() {
+        await this.initializeDynamicNests('startZone');
+    }
+
+    // Method to dynamically populate nests for a given zone
+    private async initializeDynamicNests(zoneId: string): Promise<void> {
+        const zone = this.zones.get(zoneId);
+        if (!zone) {
+            this.logger.error(`Cannot initialize dynamic nests: Zone ${zoneId} not found.`);
+            return;
+        }
+
+        let enemyTemplates: Enemy[] = [];
+        try {
+            enemyTemplates = await this.enemyService.findAll();
+            if (enemyTemplates.length === 0) {
+                this.logger.warn(`No enemy templates found. Cannot create dynamic nests for zone ${zoneId}.`);
+                return;
+            }
+        } catch (error) {
+            this.logger.error(`Failed to fetch enemy templates: ${error.message}`, error.stack);
+            return;
+        }
+
+        this.logger.log(`Found ${enemyTemplates.length} enemy templates. Generating ${this.NESTS_PER_TEMPLATE} nests per template for zone ${zoneId}...`);
+
+        const nests = new Map<string, SpawnNest>();
+        enemyTemplates.forEach(template => {
+            for (let i = 1; i <= this.NESTS_PER_TEMPLATE; i++) {
+                const nestId = `${template.name.toLowerCase().replace(/\s+/g, '-')}-nest-${i}`;
+
+                // Generate random parameters within defined ranges
+                const center = {
+                    x: Math.random() * this.ZONE_WIDTH,
+                    y: Math.random() * this.ZONE_HEIGHT,
+                };
+                const radius = Math.floor(Math.random() * (120 - 70 + 1)) + 70; // 70-120
+                const maxCapacity = Math.floor(Math.random() * (18 - 8 + 1)) + 8; // 8-18
+                const respawnDelayMs = Math.floor(Math.random() * (15000 - 8000 + 1)) + 8000; // 8-15 seconds
+
+                const newNest: SpawnNest = {
+                    id: nestId,
+                    zoneId: zoneId,
+                    templateId: template.id, // Use ID from the fetched template
+                    center: center,
+                    radius: radius,
+                    maxCapacity: maxCapacity,
+                    currentEnemyIds: new Set(),
+                    respawnDelayMs: respawnDelayMs,
+                    lastSpawnCheckTime: 0,
+                };
+                nests.set(nestId, newNest);
+            }
+        });
+
+        zone.nests = nests;
+        this.logger.log(`Initialized ${nests.size} dynamic enemy nests for zone ${zoneId}.`);
+    }
+
     // --- Player Management ---
 
     addPlayerToZone(zoneId: string, playerSocket: Socket, user: User, characters: Character[]): void {
         if (!this.zones.has(zoneId)) {
             this.logger.log(`Creating new zone: ${zoneId}`);
-            this.zones.set(zoneId, { players: new Map(), enemies: new Map() });
+            // If creating a new zone, decide how/if to initialize nests
+            // For now, only 'startZone' has predefined nests.
+            // TODO: Maybe call initializeDynamicNests here if a new zone is created?
+            this.zones.set(zoneId, { players: new Map(), enemies: new Map(), nests: new Map() });
         }
         const zone = this.zones.get(zoneId)!; // Zone is guaranteed to exist now
 
@@ -103,8 +178,8 @@ export class ZoneService {
         }));
 
         zone.players.set(user.id, { socket: playerSocket, user, characters: runtimeCharacters });
-        console.log(zone);
-        console.log(this.zones);
+        // console.log(zone);
+        // console.log(this.zones);
         this.logger.log(`User ${user.username} (${user.id}) added to zone ${zoneId}`);
 
         // Add socket to the Socket.IO room for this zone
@@ -131,10 +206,11 @@ export class ZoneService {
                 playerSocket.leave(zoneId);
                 this.logger.log(`Socket ${playerSocket.id} left room ${zoneId}`);
 
-                // If zone becomes empty, clean it up (optional)
+                // If zone becomes empty of PLAYERS, stop spawning checks for it (enemies remain)
                 if (zone.players.size === 0) {
-                    this.logger.log(`Zone ${zoneId} is now empty, removing.`);
-                    this.zones.delete(zoneId);
+                    this.logger.log(`Zone ${zoneId} is now empty of players.`);
+                    // Decide if we want to clear enemies or keep them. For now, keep them.
+                    // Optionally stop nest checks if no players are present
                 }
                 break; // Player found and removed
             }
@@ -145,6 +221,7 @@ export class ZoneService {
         }
         return null; // Player wasn't found in any zone
     }
+
     async addEnemy(zoneId: string, templateId: string, position: { x: number; y: number }): Promise<EnemyInstance | null> {
         const zone = this.zones.get(zoneId);
         if (!zone) {
@@ -165,6 +242,7 @@ export class ZoneService {
           id,
           templateId,
           zoneId,
+          name: enemyTemplate.name,
           currentHealth: enemyTemplate.baseHealth,
           position,
           aiState: 'IDLE',
@@ -172,7 +250,6 @@ export class ZoneService {
           baseAttack: enemyTemplate.baseAttack,
           baseDefense: enemyTemplate.baseDefense,
           // Add other relevant properties if needed
-          // name: enemyTemplate.name, 
         };
     
         zone.enemies.set(id, newEnemy);
@@ -186,7 +263,17 @@ export class ZoneService {
     if (!zone) {
       return false;
     }
-    return zone.enemies.delete(id);
+    if (zone.enemies.has(id)) {
+        const enemy = zone.enemies.get(id);
+        if (enemy && enemy.nestId) {
+            const nest = zone.nests.get(enemy.nestId);
+            if (nest) {
+                nest.currentEnemyIds.delete(id);
+            }
+        }
+        return zone.enemies.delete(id);
+    }
+    return false;
   }
 
   getEnemy(zoneId: string, id: string): EnemyInstance | undefined {
@@ -233,35 +320,6 @@ export class ZoneService {
       return Array.from(zone.enemies.values());
   }
     // --- State Retrieval ---
-    private async spawnEnemy(zoneId: string) {
-        // Simple spawning logic:
-        // 1. Get a random enemy template ID from the EnemyService.
-        // 2. Generate a random position within the zone.
-        // 3. Call addEnemy.
-
-        const enemyTemplates = await this.enemyService.findAll();
-        if (enemyTemplates.length === 0) {
-        console.warn('No enemy templates found.  Cannot spawn enemies.');
-        return;
-        }
-
-        const randomTemplate = enemyTemplates[Math.floor(Math.random() * enemyTemplates.length)];
-        const randomPosition = {
-        x: Math.random() * 500, // Example zone size (500x500).  Replace with actual zone dimensions
-        y: Math.random() * 500,
-        };
-
-        await this.addEnemy(zoneId, randomTemplate.id, randomPosition);
-        console.log(`Spawned enemy ${randomTemplate.name} (${randomTemplate.id}) in zone ${zoneId}`);
-
-        // TODO: Broadcast enemySpawned event to clients in the zone (later).
-    }
-
-    private startSpawningEnemies(zoneId: string) {
-        setInterval(() => {
-            this.spawnEnemy(zoneId);
-        }, 5000); // Spawn every 5 seconds (adjust as needed)
-    } 
     getPlayersInZone(zoneId: string): PlayerInZone[] {
         const zone = this.zones.get(zoneId);
         return zone ? Array.from(zone.players.values()) : [];
@@ -420,38 +478,114 @@ export class ZoneService {
      * Returns null if character or owner not found.
      */
     async updateCharacterHealth(ownerId: string, characterId: string, healthChange: number): Promise<number | null> {
-        // Find the zone the player is in first
-        let character: RuntimeCharacterData | undefined;
-        for (const zone of this.zones.values()) { // Search all zones
-             const player = zone.players.get(ownerId);
-             if (player) {
-                 character = player.characters.find(c => c.id === characterId);
-                 if (character) break; // Found it
-             }
+        // Find the character across all zones (might be inefficient if many zones)
+        let foundCharacter: RuntimeCharacterData | null = null;
+        let foundZoneId: string | null = null;
+
+        // Find the character across all zones (might be inefficient if many zones)
+        for (const [zoneId, zone] of this.zones.entries()) {
+            const player = zone.players.get(ownerId);
+            if (player) {
+                const character = player.characters.find(c => c.id === characterId);
+                if (character) {
+                    foundCharacter = character;
+                    foundZoneId = zoneId;
+                    break;
+                }
+            }
         }
 
-        if (!character) {
-            this.logger.warn(`updateCharacterHealth: Character ${characterId} for owner ${ownerId} not found in any zone.`);
+        if (!foundCharacter || !foundZoneId) {
+            this.logger.warn(`Attempted to update health for non-existent character ${characterId} (owner: ${ownerId})`);
+            return null; // Character not found
+        }
+
+        const currentHealth = foundCharacter.currentHealth ?? foundCharacter.baseHealth; // Default to base health if null/undefined
+        let newHealth = currentHealth + healthChange;
+
+        // Clamp health between 0 and baseHealth
+        newHealth = Math.max(0, newHealth);
+        newHealth = Math.min(foundCharacter.baseHealth, newHealth); // <-- Clamp at max
+
+        // Only update if health actually changed
+        if (newHealth !== foundCharacter.currentHealth) {
+             foundCharacter.currentHealth = newHealth;
+
+             // Handle potential death state transition
+             if (foundCharacter.currentHealth <= 0 && foundCharacter.state !== 'dead') {
+                 this.logger.log(`Character ${characterId} died.`);
+                 foundCharacter.state = 'dead';
+                 foundCharacter.timeOfDeath = Date.now();
+                 // Stop actions
+                 foundCharacter.attackTargetId = null;
+                 foundCharacter.targetX = null;
+                 foundCharacter.targetY = null;
+             } else if (foundCharacter.currentHealth > 0 && foundCharacter.state === 'dead') {
+                 // This handles respawn health setting
+                  this.logger.log(`Character ${characterId} health updated above 0 while dead (likely respawn).`);
+                 // State transition back to idle happens elsewhere (e.g., GameGateway respawn logic)
+             }
+
+             this.logger.verbose(`Updated health for character ${characterId} in zone ${foundZoneId}. New health: ${foundCharacter.currentHealth}/${foundCharacter.baseHealth}`);
+        }
+
+        return foundCharacter.currentHealth; // Return the new health value
+    }
+
+    // --- Nest-Based Spawning Logic ---
+
+    // Modified addEnemy to optionally link to a nest
+    async addEnemyFromNest(nest: SpawnNest): Promise<EnemyInstance | null> {
+        const zone = this.zones.get(nest.zoneId);
+        if (!zone) {
+            console.warn(`Nest ${nest.id} references non-existent zone ${nest.zoneId}.`);
             return null;
         }
 
-        // Ensure currentHealth is initialized
-        if (character.currentHealth === undefined || character.currentHealth === null) {
-             character.currentHealth = character.baseHealth ?? 100; // Use baseHealth from Character entity
-             this.logger.log(`Initialized currentHealth for ${characterId} to ${character.currentHealth}`);
+        const enemyTemplate = await this.enemyService.findOne(nest.templateId);
+        if (!enemyTemplate) {
+            console.warn(`Nest ${nest.id} references non-existent enemy template ${nest.templateId}.`);
+            nest.lastSpawnCheckTime = Date.now(); // Prevent spamming checks for bad template
+            return null;
         }
 
-        character.currentHealth = (character.currentHealth ?? 0) + healthChange;
+        const id = uuidv4();
+        // Spawn within the nest radius
+        const angle = Math.random() * Math.PI * 2;
+        const distance = Math.random() * nest.radius;
+        const position = {
+            x: nest.center.x + Math.cos(angle) * distance,
+            y: nest.center.y + Math.sin(angle) * distance,
+        };
 
-        // Ensure health constraints
-        if (character.currentHealth < 0) {
-            character.currentHealth = 0;
-        }
-        // TODO: Add check for exceeding max health (character.baseHealth)
-        // if (character.currentHealth > character.baseHealth) {
-        //     character.currentHealth = character.baseHealth;
-        // }
+        const newEnemy: EnemyInstance = {
+            id,
+            templateId: nest.templateId,
+            zoneId: nest.zoneId,
+            name: enemyTemplate.name,
+            currentHealth: enemyTemplate.baseHealth,
+            position,
+            aiState: 'IDLE', // Start idle
+            baseAttack: enemyTemplate.baseAttack,
+            baseDefense: enemyTemplate.baseDefense,
+            nestId: nest.id, // <-- Link to nest
+            anchorX: nest.center.x, // <-- Set anchor to nest center
+            anchorY: nest.center.y,
+            wanderRadius: nest.radius, // <-- Set wander radius
+            // Add other relevant properties if needed
+        };
 
-        return character.currentHealth ?? null;
+        zone.enemies.set(id, newEnemy);
+        nest.currentEnemyIds.add(id); // <-- Track enemy in nest
+        nest.lastSpawnCheckTime = Date.now(); // Update last spawn time for this nest
+
+        return newEnemy;
+    }
+
+    // Helper to get all nests in a zone (potentially for debug or AI)
+    getZoneNests(zoneId: string): SpawnNest[] {
+        const zone = this.zones.get(zoneId);
+        if (!zone) return [];
+        return Array.from(zone.nests.values());
     }
 }

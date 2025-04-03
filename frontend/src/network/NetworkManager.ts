@@ -20,6 +20,24 @@ interface EntityUpdateData {
     // Add other potential update fields later (health, state, etc.)
 }
 
+// Interface for data received when an enemy spawns
+interface EnemySpawnData {
+    id: string;
+    templateId: string;
+    zoneId: string;
+    name: string;
+    currentHealth: number;
+    baseAttack?: number; // Optional, might not be needed by client
+    baseDefense?: number; // Optional
+    position: { x: number; y: number };
+    aiState?: string; // Optional
+    nestId?: string; // Optional
+    anchorX?: number; // Optional
+    anchorY?: number; // Optional
+    wanderRadius?: number; // Optional
+    // Add baseHealth if backend sends it, otherwise client might need to infer max HP
+    baseHealth?: number; // Added baseHealth if available
+}
 
 export class NetworkManager {
     private socket: Socket | null = null;
@@ -96,6 +114,13 @@ export class NetworkManager {
             EventBus.emit('entity-died', data); // Emit using the correct event name ('entity-died')
         });
         // -------------------------------------
+
+        // +++ ADDED: Listen for enemy spawns +++
+        this.socket.on('enemySpawned', (enemyData: EnemySpawnData) => {
+            console.log('>>> NetworkManager: Received "enemySpawned"', enemyData);
+            EventBus.emit('enemy-spawned', enemyData);
+        });
+        // +++++++++++++++++++++++++++++++++++++++
 
         // Existing listeners (keep if needed)
         // this.socket.on('chatMessage', (data) => { /* ... */ });

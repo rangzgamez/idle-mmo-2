@@ -1,42 +1,54 @@
 ## **Idle Browser MMO - Project Documentation**
 
-**Version:** 0.5 (Combat Basics & AI Refactor Plan)
-**Date:** 2023-10-29 (Adjust date)
+**Version:** 0.6 (RTS Character Combat & Basic Death Handling)
+**Date:** 2025-04-02 (Adjust date as needed)
 
 **1. Overview**
 
-This document outlines the architecture, database schema, and development plan for an Idle Browser MMO game. The game features real-time multiplayer interaction in a top-down view, RTS-style character control with formation movement, automated combat mechanics, and social features like zone-based chat with bubbles.
+This document outlines the architecture, database schema, and development plan for an Idle Browser MMO game. The game features real-time multiplayer interaction in a top-down view, RTS-style character control with formation movement, **player and enemy combat with auto-attack**, basic death/respawn mechanics, and social features like zone-based chat with bubbles.
 
-**2. Core Features (Implemented - v0.4)**
+**2. Core Features (Implemented - v0.6)**
 
 *   **Authentication:** User registration and login (REST API with JWT).
 *   **WebSocket Auth:** Secure WebSocket connections using JWT.
-*   **Character Management:** Create multiple characters per account (API). Define basic stats (placeholder).
+*   **Character Management:** Create multiple characters per account (API). Define base stats (`baseHealth`, `baseAttack`, `baseDefense`) and **combat stats (`attackSpeed`, `attackRange`, `aggroRange`, `leashDistance`)** in DB.
 *   **Party Selection:** Select up to 3 active characters per session (Client UI + Server Validation).
 *   **Top-Down World:** Players navigate a 2D world. Camera follows the player's party leader. Basic enemy sprites loaded.
-*   **RTS-Style Control:** Point-and-click movement commands.
-*   **Formation Movement:** Backend calculates triangle formation targets; characters move towards them.
+*   **RTS-Style Control:**
+    *   Point-and-click movement commands.
+    *   **Clicking enemies issues an attack command.**
+    *   **Anchor Point:** Last commanded move position (or spawn) acts as an anchor.
+*   **Formation Movement:** Backend calculates triangle formation targets; characters move towards them when commanded.
 *   **Click Marker:** Visual indicator for movement clicks.
-*   **Server-Side Simulation:** Backend simulates character and enemy movement (`GameGateway` loop) and broadcasts updates.
+*   **Server-Side Simulation (`GameGateway` loop):**
+    *   Simulates character and enemy movement.
+    *   **Character State Machine:** Handles `idle`, `moving`, `attacking`, `dead` states.
+    *   **Leashing:** Characters return to anchor if they move too far (`leashDistance`).
+    *   **Auto-Aggro:** Idle characters scan for enemies within `aggroRange` and automatically engage.
+    *   **Return to Anchor:** Idle characters with no targets return to their anchor point.
+    *   **Attack Cooldown:** Characters respect `attackSpeed` between attacks.
+    *   **Enemy AI (`AIService`):** Enemies find nearest living character, move within range, and attack based on their stats.
+    *   Broadcasts updates (`entityUpdate`).
 *   **Client-Side Interpolation:** Frontend smoothly interpolates sprites (`CharacterSprite`, `EnemySprite`).
 *   **Multiplayer Zones:** Multiple players and enemies inhabit shared zones (`ZoneService`).
-*   **Real-time Sync:** Players see others join (`playerJoined`), leave (`playerLeft`), and move/update (`entityUpdate`). New players receive existing enemy state on join.
+    *   **Runtime State:** `ZoneService` tracks character state (including combat state like `state`, `attackTargetId`, `anchorX/Y`, `lastAttackTime`, `timeOfDeath`) and enemy state.
+*   **Real-time Sync:** Players see others join (`playerJoined`), leave (`playerLeft`), move/update (`entityUpdate`), and die (`entityDied`). New players receive existing enemy state on join.
 *   **Chat:** Zone-scoped real-time text chat with chat bubbles.
 *   **Enemy Templates:** Defined in database (`Enemy` entity, `EnemyModule`, `EnemyService`).
 *   **Enemy Spawning:** Basic timed spawning within zones (`ZoneService`).
-*   **Basic Enemy AI (In `GameGateway`, Slated for immediate refactor):**
-    *   Aggro: Enemies detect nearby players (`findClosestPlayer`).
-    *   Chase: Enemies move towards their target (`MOVE_TO` state implied).
-    *   Attack: Enemies trigger combat when in range (`ATTACKING` state).
-*   **Basic Combat Resolution (Server-side):**
-    *   `CombatService` handles attack logic (`handleAttack`), calculating damage based on basic stats (`calculateDamage`).
-    *   Damage applied via `ZoneService` (`updateEnemyHealth`, `updateCharacterHealth`).
-    *   Death check and basic handling (`entityDied` event broadcast).
+*   **Combat Resolution (Server-side `CombatService`):**
+    *   `handleAttack` calculates damage based on attacker/defender stats.
+    *   Damage applied via `ZoneService`.
+    *   Returns combat results including `targetDied` flag.
+*   **Death Handling:**
+    *   **Enemies:** Removed from `ZoneService` on death. `entityDied` event sent. Client destroys sprite.
+    *   **Characters:** Enter `dead` state, stop actions. `entityDied` event sent. Client shows basic death visual (alpha). **Simple 5-second respawn at anchor point with full health.**
 *   **Client Combat Interaction:**
     *   Clicking enemy sprites sends `attackCommand`.
     *   Health bars display on characters and enemies, updated via `entityUpdate`.
-    *   Basic attack visuals (tint flash) shown via `combatAction` event.
-    *   Sprites are removed on `entityDied` event.
+    *   Attack visuals (tint flash) shown via `combatAction` event.
+    *   Enemy sprites are removed on `entityDied` event.
+    *   Character sprites fade slightly on `entityDied` event.
 
 **3. Technology Stack (Unchanged)**
 
@@ -64,7 +76,7 @@ This document outlines the architecture, database schema, and development plan f
 |                   |                         |     - GameGateway       |
 |                   |                         |     - ZoneService       |
 |                   |                         |     - CombatService     |
-|                   |                         |     - AIService (NEW)   |
+|                   |                         |     - AIService         |
 |                   |                         |   - Debug Module        |
 +-------------------+                         +-------------------------+
 ```
@@ -77,11 +89,11 @@ This document outlines the architecture, database schema, and development plan f
 *   `CharacterModule`: Manages character entity (`CharacterService`, `CharacterController`). Exports service.
 *   `EnemyModule`: Manages enemy template entity (`EnemyService`, `EnemyController` (optional), `Enemy` entity). Exports service.
 *   `GameModule`: Core real-time logic.
-    *   `GameGateway`: Handles WebSocket connections, auth middleware, message routing (`enterZone`, `selectParty`, `moveCommand`, `sendMessage`, `attackCommand`). **Orchestrates** the main game loop (`tickGameLoop`), calling `AIService` and `CombatService`. Handles state broadcasting (`entityUpdate`, `chatMessage`, `playerJoined`, `playerLeft`, `combatAction`, `entityDied`). Injects `ZoneService`, `CharacterService`, `EnemyService`, `CombatService`, `AIService`.
-    *   `ZoneService`: Manages **runtime state** of *all dynamic entities* (players, enemies, items-TODO) within zones in memory (Maps). Handles adding/removing entities, tracking positions, targets, health, etc. Provides state snapshots and update methods. Contains enemy spawning logic. Injects `EnemyService`.
+    *   `GameGateway`: Handles WebSocket connections, auth middleware, message routing (`enterZone`, `selectParty`, `moveCommand`, `sendMessage`, `attackCommand`). **Orchestrates** the main game loop (`tickGameLoop`), **managing character state machine (idle, moving, attacking, dead, leashing, aggro, respawn)**, calling `AIService` and `CombatService`. Handles state broadcasting (`entityUpdate`, `chatMessage`, `playerJoined`, `playerLeft`, `combatAction`, `entityDied`). Injects `ZoneService`, `CharacterService`, `EnemyService`, `CombatService`, `AIService`.
+    *   `ZoneService`: Manages **runtime state** of *all dynamic entities* (players, enemies, items-TODO) within zones in memory (Maps). Handles adding/removing entities, tracking positions, targets, health, **combat state (state, anchor, attackTargetId, lastAttackTime, timeOfDeath)**, etc. Provides state snapshots and update methods. Contains enemy spawning logic. Injects `EnemyService`.
     *   `CombatService`: Handles combat resolution logic (`handleAttack`, `calculateDamage`). Injects `ZoneService`, `EnemyService`.
-    *   `AIService` **(NEW - To be implemented)**: Handles AI decision-making logic (`updateEnemyAI`). Returns AI actions. Injects `ZoneService`, potentially `EnemyService`.
-*   `DebugModule` **(NEW)**: Provides endpoints for inspecting runtime state (`/debug/zones`). Injects `ZoneService` (via `GameModule` import).
+    *   `AIService`: Handles AI decision-making logic (`updateEnemyAI` for enemies). Returns AI actions. Injects `ZoneService`.
+*   `DebugModule`: Provides endpoints for inspecting runtime state (`/debug/zones`). Injects `ZoneService` (via `GameModule` import).
 
 **6. Frontend Structure Breakdown (Refined)**
 
@@ -93,8 +105,8 @@ This document outlines the architecture, database schema, and development plan f
     *   `GameScene`: Main gameplay area. Manages sprites for all entities (`playerCharacters`, `otherCharacters`, `enemySprites` Maps). Handles network events (`playerJoined`, `playerLeft`, `entityUpdate`, `chatMessage`, `combatAction`, `entityDied`, initial `enemyState` on `enterZone`) to manage sprites. Processes player input (movement, attack clicks). Manages camera. Launches `UIScene`.
     *   `UIScene`: Handles overlay UI elements (Chatbox, potentially health bars if using DOM).
 *   **GameObjects:**
-    *   `CharacterSprite.ts`: Represents player characters. Handles interpolation, name label, health bar, chat bubbles.
-    *   `EnemySprite.ts`: Represents enemies. Handles interpolation, name label, health bar. Set interactive for clicks.
+    *   `CharacterSprite.ts`: Represents player characters. Handles interpolation, name label, health bar, chat bubbles, **basic death visuals (alpha)**.
+    *   `EnemySprite.ts`: Represents enemies. Handles interpolation, name label, health bar. Set interactive for clicks. **Destroyed on death.**
     *   `HealthBar.ts`: Reusable graphics-based health bar component used by sprites.
 
 **7. WebSocket Communication Events (Updated)**
@@ -120,17 +132,8 @@ This document outlines the architecture, database schema, and development plan f
 
 ```typescript
 // backend/src/character/character.entity.ts
-// ... (id, user relation, userId, name, level, xp) ...
-  @Column('float', { nullable: true, default: null })
-  positionX: number | null; // Persisted last known position
-
-  @Column('float', { nullable: true, default: null })
-  positionY: number | null; // Persisted last known position
-
-  @Column({ length: 100, nullable: true, default: null })
-  currentZoneId: string | null; // Persisted last known zone
-
-  // --- ADD BASIC STATS (Placeholders for now) ---
+// ... (id, user relation, userId, name, level, xp, positions, zoneId) ...
+  // --- ADD BASIC STATS ---
   @Column({ type: 'integer', default: 100 })
   baseHealth: number;
 
@@ -139,6 +142,19 @@ This document outlines the architecture, database schema, and development plan f
 
   @Column({ type: 'integer', default: 5 })
   baseDefense: number;
+
+  // --- ADDED COMBAT/AI STATS ---
+  @Column({ type: 'integer', default: 1500, comment: 'Milliseconds between attacks' })
+  attackSpeed: number;
+
+  @Column({ type: 'integer', default: 50, comment: 'Pixel distance for attacks' })
+  attackRange: number;
+
+  @Column({ type: 'integer', default: 150, comment: 'Pixel distance for auto-aggro' })
+  aggroRange: number;
+
+  @Column({ type: 'integer', default: 400, comment: 'Pixel distance from anchor before returning' })
+  leashDistance: number;
 // ... (timestamps) ...
 
 // backend/src/enemy/enemy.entity.ts
@@ -186,39 +202,56 @@ export class Enemy {
 
 // backend/src/game/interfaces/enemy-instance.interface.ts
 export interface EnemyInstance {
-  instanceId: string;
+  id: string;
   templateId: string;
   zoneId: string;
   currentHealth: number;
+  baseAttack: number; // Required for combat
+  baseDefense: number; // Required for combat
   position: { x: number; y: number };
   target?: { x: number; y: number } | null; // Can be null
-  aiState: string; // e.g., "IDLE", "CHASING", "ATTACKING", "COOLDOWN"
-  // lastAttackTime?: number; // Needed for cooldowns
+  aiState: string; // e.g., "IDLE", "CHASING", "ATTACKING", "COOLDOWN", "DEAD"
+  lastAttackTime?: number; // Timestamp of the last attack
 }
 
 // backend/src/game/zone.service.ts -> RuntimeCharacterData interface
-interface RuntimeCharacterData extends Character {
+export interface RuntimeCharacterData extends Character {
     targetX: number | null;
     targetY: number | null;
-    currentHealth?: number; // Added for runtime tracking
-    ownerId?: string; // Added for easier lookup
-    // baseDefense?: number; // Add if not inheriting
+    currentHealth: number;
+    ownerId: string; // Should always be present after addPlayerToZone
+    // Inherited base stats like baseHealth, baseAttack, baseDefense are used
+    // Inherited combat stats like attackSpeed, attackRange, aggroRange, leashDistance are used
+    // --- RTS Combat State ---
+    state: 'idle' | 'moving' | 'attacking' | 'dead'; // Added 'dead' state
+    attackTargetId: string | null;
+    anchorX: number | null; // Last commanded position or spawn point
+    anchorY: number | null;
+    // attackRange: number; // Inherited from Character
+    // aggroRange: number; // Inherited from Character
+    // leashDistance: number; // Inherited from Character
+    // --- Attack Timing ---
+    // attackSpeed: number; // Inherited from Character
+    lastAttackTime: number; // Timestamp of the last attack (Date.now())
+    // --- Death State ---
+    timeOfDeath: number | null; // Timestamp when health reached 0
 }
 ```
 *(User, ItemTemplate, InventoryItem, Pet schemas remain unchanged)*
 
 **9. Key Concepts / Reusable Patterns (Updated)**
 
-*   **Entity Runtime State Management (`ZoneService`):** Core responsibility. Holds in-memory `Map`s for players and enemies within zones. State includes position, target, current health, AI state. Distinct from DB persistence.
+*   **Entity Runtime State Management (`ZoneService`):** Core responsibility. Holds in-memory `Map`s for players and enemies within zones. State includes position, target, current health, **combat state (`state`, `attackTargetId`, `anchorX/Y`, `lastAttackTime`, `timeOfDeath`)**, AI state. Distinct from DB persistence.
 *   **Service-Based Logic:** Core game mechanics are encapsulated in services:
     *   `CombatService`: Handles attack rules and outcomes.
-    *   `AIService` (NEW): Handles entity decision-making based on state and rules.
+    *   `AIService`: Handles entity decision-making based on state and rules (currently enemy AI).
     *   `ZoneService`: Manages runtime state and zone transitions.
-*   **Orchestration (`GameGateway`/`GameLoopService`):** The gateway (or a future dedicated loop service) coordinates the game tick, calling AI and Combat services, and broadcasting state changes based on their results.
-*   **Authoritative Server:** The backend dictates all game state (positions, health, AI state). The client only renders this state and sends input commands.
-*   **Client-Side Interpolation:** Sprites smoothly move towards `targetX`/`targetY` received from the server (`entityUpdate`).
-*   **Event-Driven Updates:** Frontend reacts to specific server events (`entityUpdate`, `combatAction`, `entityDied`, etc.) to update the visual representation.
-*   **Component-Based Sprites:** Sprites (`CharacterSprite`, `EnemySprite`) manage their own related visual components (labels, health bars).
+*   **Orchestration (`GameGateway`/`tickGameLoop`):** The gateway coordinates the game tick, **managing the character state machine (RTS logic)**, calling AI and Combat services, and broadcasting state changes based on their results.
+*   **Authoritative Server:** The backend dictates all game state (positions, health, AI state, combat state).
+*   **Client-Side Interpolation:** Sprites smoothly move towards `targetX`/`targetY`.
+*   **Event-Driven Updates:** Frontend reacts to specific server events (`entityUpdate`, `combatAction`, `entityDied`, etc.).
+*   **Component-Based Sprites:** Sprites manage their own visual components (labels, health bars, chat bubbles, death visuals).
+*   **State Machine (Server):** `GameGateway` uses a state machine (`idle`, `moving`, `attacking`, `dead`) for characters to manage behavior (movement, combat, leashing, respawn).
 
 **10. Testing Strategy (Unchanged - Paused)**
 
@@ -226,88 +259,99 @@ interface RuntimeCharacterData extends Character {
 *   Frontend unit testing (Vitest/Jest) for utilities. Manual testing for scenes.
 *   **Status:** Unit/Integration test implementation is currently paused to prioritize feature development, but the strategy remains defined for later implementation.
 
-**11. Core Real-time Update Flow (Example: Enemy Attack)**
+**11. Core Real-time Update Flow (Example: Character Auto-Attack)**
 
-1.  **AI Tick (`AIService` called by `GameGateway.tickGameLoop`):** Checks enemy state, range to players. Determines enemy should attack closest player. Returns `{ type: 'ATTACK', targetEntityId: 'char-uuid-123' }`.
-2.  **Loop Execution (`GameGateway.tickGameLoop`):** Receives 'ATTACK' action. Calls `this.combatService.handleAttack('enemy-uuid-456', 'enemy', 'char-uuid-123', 'character', 'zone-id')`.
-3.  **Combat Resolution (`CombatService.handleAttack`):**
-    *   Fetches attacker (enemy) stats from `EnemyService`/`ZoneService`.
-    *   Fetches defender (character) stats/state from `ZoneService`.
-    *   Calls `calculateDamage`.
-    *   Calls `zoneService.updateCharacterHealth('owner-uuid-abc', 'char-uuid-123', -damage)`.
-    *   Checks if character health <= 0.
-    *   Returns `CombatResult { damageDealt: 8, targetDied: false, targetCurrentHealth: 92 }`.
-4.  **Loop Broadcasting (`GameGateway.tickGameLoop`):**
+1.  **State Check (`GameGateway.tickGameLoop`):** Character is in `idle` state, not at anchor point.
+2.  **Aggro Scan (`GameGateway.tickGameLoop` - idle state):** Scans enemies within `aggroRange`. Finds living `EnemyInstance`.
+3.  **State Transition:** Sets `character.state` to `attacking`, sets `character.attackTargetId` to enemy's ID.
+4.  **State Check (`GameGateway.tickGameLoop` - next tick):** Character is in `attacking` state.
+5.  **Target Validation:** Confirms target enemy exists and is alive.
+6.  **Range Check:** Calculates distance. If outside `attackRange`, sets `character.targetX/Y` to enemy position. Character moves via Movement Simulation.
+7.  **Range Check (Later tick):** Character is now within `attackRange`.
+8.  **Cooldown Check:** Checks if `Date.now() >= character.lastAttackTime + character.attackSpeed`.
+9.  **Attack Execution:** If cooldown allows, calls `this.combatService.handleAttack(character, enemy, zoneId)`. Sets `character.lastAttackTime = Date.now()`.
+10. **Combat Resolution (`CombatService.handleAttack`):** Calculates damage, updates enemy health via `ZoneService`. Returns `CombatResult { damageDealt: 12, targetDied: false, targetCurrentHealth: 38 }`.
+11. **Loop Broadcasting (`GameGateway.tickGameLoop`):**
     *   Receives `CombatResult`.
-    *   Emits `combatAction` { attackerId: 'enemy-uuid-456', targetId: 'char-uuid-123', damage: 8, type: 'attack' }.
-    *   Adds `{ id: 'char-uuid-123', health: 92 }` to the `updates` array for `entityUpdate`.
-    *   (If targetDied was true, would also emit `entityDied`).
-5.  **Broadcast:** Gateway sends batched `entityUpdate` and the `combatAction` event to the zone room.
-6.  **Client Reception (`NetworkManager`):** Receives events, emits to local `EventBus`.
-7.  **Client State Update (`GameScene`):**
-    *   `entityUpdate` listener finds character sprite 'char-uuid-123', calls `sprite.setHealth(92)`.
-    *   `combatAction` listener finds target sprite 'char-uuid-123', calls visual effect (e.g., `setTintFill`).
-8.  **Client Rendering (`update`):** Health bar redraws based on new value. Tint effect plays and clears.
+    *   Emits `combatAction` { attackerId: `character.id`, targetId: `enemy.id`, ... }.
+    *   Adds `{ id: enemy.id, health: 38 }` to `updates` array for `entityUpdate`.
+12. **Broadcast:** Gateway sends batched `entityUpdate` and `combatAction`.
+13. **Client Reception/Update (`NetworkManager`, `GameScene`):** Updates enemy health bar, shows attack visual.
+
+**(Example: Enemy Death)**
+10. **Combat Resolution (`CombatService.handleAttack`):** Calculates damage, updates enemy health to 0. Returns `CombatResult { damageDealt: 15, targetDied: true, targetCurrentHealth: 0 }`.
+11. **Loop Processing (`GameGateway.tickGameLoop` - character attacking state):**
+    *   Receives `CombatResult` with `targetDied: true`.
+    *   Emits `combatAction`.
+    *   Adds enemy health update `{ id: enemy.id, health: 0 }` to `updates`.
+    *   Adds `{ entityId: enemy.id, type: 'enemy' }` to `deaths` array.
+    *   Sets `character.attackTargetId = null`, `character.state = 'idle'`.
+    *   Calls `this.zoneService.removeEnemy(zoneId, enemy.id)`.
+12. **Broadcast (`GameGateway.tickGameLoop`):** Sends `entityUpdate`, `combatAction`, and `entityDied` events.
+13. **Client Reception/Update (`NetworkManager`, `GameScene`):
+    *   `entityDied` handler finds enemy sprite by ID, calls `sprite.destroy()`, removes from map.
 
 **12. TODO List / Roadmap (Updated)**
 
-**Phase 0-4 (Partially Complete)**
+**Phase 0-5 (Partially Complete - Combat Core Implemented)**
 *   Auth, Character Mgmt, Party Select, Movement, Chat: Complete.
 *   Basic Enemies & Combat Backend: Implemented (`EnemyEntity`, spawn, `CombatService`).
-*   Basic Combat Frontend: Implemented (`EnemySprite`, health bars, attack input/visuals, death handling).
+*   Basic Combat Frontend: Implemented (`EnemySprite`, health bars, attack input/visuals).
+*   **RTS Character Combat Backend:** Implemented (State machine, aggro, attack, cooldown, leashing).
+*   **Enemy AI (`AIService`):** Implemented (Aggro, chase, attack, cooldown).
+*   **Death Handling:** Implemented (Enemy removal, Character dead state, `entityDied` event).
+*   **Basic Respawn:** Implemented (Character 5s timer, respawn at anchor).
+*   **Stat Configuration:** Implemented (Combat stats moved to `Character` entity).
+*   **Frontend Death Handling:** Implemented (Enemy sprite destruction, basic character visuals).
 
-**➡️ Phase 4 Refinement / Immediate Next Steps (AI Refactor):**
-1.  [ ] Backend: Create `AIService` within `GameModule` (or new `AIModule`).
-2.  [ ] Backend: Define `AIAction` interface (`IDLE`, `MOVE_TO`, `ATTACK`).
-3.  [ ] Backend: Move AI decision logic (aggro check, range checks, state determination) from `GameGateway.tickGameLoop` into `AIService.updateEnemyAI`. This method should return an `AIAction`.
-4.  [ ] Backend: Refactor `GameGateway.tickGameLoop` within the enemy loop:
-    *   Call `aiService.updateEnemyAI`.
-    *   Use a `switch` on the returned `AIAction.type` to execute the action:
-        *   `IDLE`: Update state via `ZoneService`.
-        *   `MOVE_TO`: Update target via `ZoneService`, calculate movement step, update position via `ZoneService`.
-        *   `ATTACK`: Call `CombatService.handleAttack`, process result (broadcast `combatAction`, `entityUpdate` health, `entityDied`).
-5.  [ ] Backend: Add attack cooldown logic (e.g., add `lastAttackTime` to `EnemyInstance`, check in `AIService` before returning `ATTACK` action).
-6.  Testing: (Low priority) Add basic unit tests for `AIService`.
+**➡️ Phase 6: Inventory, Loot & Equipment (Was Phase 5)**
+1.  [ ] Backend: Define `ItemTemplate` and `InventoryItem` entities & migrations.
+2.  [ ] Backend: Implement `InventoryModule` and `InventoryService` (add/remove items).
+3.  [ ] Backend: Implement `LootService` and configure basic loot tables.
+4.  [ ] Backend: Trigger loot drops on enemy death (`LootService`). Add `DroppedItem` state to `ZoneService`. Broadcast `itemDropped`.
+5.  [ ] Backend: Implement `pickupItemCommand` handler (validate range, add to inventory via `InventoryService`, remove from zone). Broadcast `itemPickedUp` and `inventoryUpdate`.
+6.  [ ] Frontend: Display dropped item sprites based on `itemDropped`.
+7.  [ ] Frontend: Handle clicking items -> send `pickupItemCommand`. Remove sprite on `itemPickedUp`.
+8.  [ ] Frontend: Basic Inventory UI (in `UIScene`) to display items from `inventoryUpdate`.
+9.  [ ] Backend: Add `equippedWeapon`, `equippedArmor` to `Character` entity.
+10. [ ] Backend: Implement `equipItem` / `unequipItem` logic in `InventoryService`/`CharacterService`. Broadcast `equipmentUpdate`.
+11. [ ] Frontend: Basic Equipment UI (in `UIScene`). Allow equipping/unequipping via drag/drop or buttons. Send commands. Update UI on `equipmentUpdate`.
 
-**Phase 5: Inventory, Loot & Equipment (Was Phase 5)**
-47. [ ] Backend: Define `ItemTemplate` and `InventoryItem` entities & migrations.
-48. [ ] Backend: Implement `InventoryModule` and `InventoryService` (add/remove items).
-49. [ ] Backend: Implement `LootService` and configure basic loot tables.
-50. [ ] Backend: Trigger loot drops on enemy death (`LootService`). Add `DroppedItem` state to `ZoneService`. Broadcast `itemDropped`.
-51. [ ] Backend: Implement `pickupItemCommand` handler (validate range, add to inventory via `InventoryService`, remove from zone). Broadcast `itemPickedUp` and `inventoryUpdate`.
-52. [ ] Frontend: Display dropped item sprites based on `itemDropped`.
-53. [ ] Frontend: Handle clicking items -> send `pickupItemCommand`. Remove sprite on `itemPickedUp`.
-54. [ ] Frontend: Basic Inventory UI (in `UIScene`) to display items from `inventoryUpdate`.
-55. [ ] Backend: Add `equippedWeapon`, `equippedArmor` to `Character` entity.
-56. [ ] Backend: Implement `equipItem` / `unequipItem` logic in `InventoryService`/`CharacterService`. Broadcast `equipmentUpdate`.
-57. [ ] Frontend: Basic Equipment UI (in `UIScene`). Allow equipping/unequipping via drag/drop or buttons. Send commands. Update UI on `equipmentUpdate`.
+**Phase 7: Experience & Leveling (NEW)**
+1.  [ ] Backend: Add `xpReward` to `Enemy` entity (Already done!).
+2.  [ ] Backend: Grant XP to player characters involved in killing an enemy (`CombatService` or `GameGateway`).
+3.  [ ] Backend: Implement leveling logic (check XP thresholds, increase level, maybe stats?) in `CharacterService` or `GameGateway`.
+4.  [ ] Backend: Broadcast level up event (`characterLevelUp`?) and update `entityUpdate` with new level/stats.
+5.  [ ] Frontend: Display level changes visually (e.g., on character sprite label, UI).
+6.  [ ] Frontend: Show level up visual effect.
 
-**Phase 6: Pets**
+**Phase 8: Pets (Was Phase 6)**
 *   [...] Define Pet entity, AI Service logic, feeding command.
 
 **Refinement / Future TODOs:**
 *   [ ] Refactor game loop out of `GameGateway` into a dedicated `GameLoopService`.
-*   [ ] Implement Player Character Auto-Attack AI (similar pattern using `AIService`).
-*   [ ] Integrate real Character Stats (from DB/`CharacterService`) into `CombatService`.
+*   [ ] Integrate real Character Stats (from DB/`CharacterService`) into `CombatService` (Partially done, base stats used). Define impact of other stats (Str, Agi etc.).
 *   [ ] Persist character position/zone periodically or on logout.
 *   [ ] Implement proper Tilemaps and Collision (Frontend & Backend).
 *   [ ] More sophisticated movement (Pathfinding).
 *   [ ] Different character types/classes (Melee, Ranged, Healer AI).
 *   [ ] Proper character/enemy sprites and animations.
 *   [ ] Server-side validation (movement, actions).
+*   [ ] More robust character death handling (prevent interaction fully, different visuals, maybe resurrection item/skill).
+*   [ ] Enemy respawning logic (currently just despawn on death).
 *   [ ] Scalability considerations (Redis, multiple instances).
 *   [ ] Comprehensive Unit and E2E Testing.
 
 **13. Continuing Development Guide (Updated)**
 
-*   **Focus:** Immediately address the "Phase 4 Refinement / Immediate Next Steps" to refactor AI logic into the `AIService`.
-*   **Backend:** Run `npm run start:dev`. Create `AIService`. Modify `GameGateway` and potentially `CombatService`/`ZoneService` as needed for the refactor.
-*   **Frontend:** Run `npm run dev`. No immediate frontend changes expected during the AI refactor, but keep it running to test the backend changes once complete.
-*   **Testing:** Manual testing is primary for now. Use `/debug/zones` and console logs to verify AI behavior changes after refactoring.
-*   **Key Files for AI Refactor:**
-    *   `backend/src/game/ai.service.ts` (New)
-    *   `backend/src/game/interfaces/ai-action.interface.ts` (New)
-    *   `backend/src/game/game.gateway.ts` (Modify `tickGameLoop`)
-    *   `backend/src/game/combat.service.ts` (Ensure `handleAttack` is robust)
-    *   `backend/src/game/zone.service.ts` (Ensure necessary getters/setters exist)
-    *   `backend/src/game/game.module.ts` (Add `AIService` to providers/exports)
+*   **Focus:** Next major phase is likely Inventory/Loot or XP/Leveling.
+*   **Backend:** Run `npm run start:dev`. Implement features based on the chosen phase.
+*   **Frontend:** Run `npm run dev`. Implement corresponding UI and event handling.
+*   **Testing:** Manual testing is primary. Use `/debug/zones` and console logs.
+*   **Key Files for Recent Combat Changes:**
+    *   `backend/src/game/game.gateway.ts` (Major changes in `tickGameLoop` for character state)
+    *   `backend/src/game/zone.service.ts` (Added fields to `RuntimeCharacterData`)
+    *   `backend/src/character/character.entity.ts` (Added combat stat columns)
+    *   `backend/src/game/ai.service.ts` (Updated target finding, dead checks)
+    *   `frontend/src/scenes/GameScene.ts` (Added `entityDied` handler)
+    *   `frontend/src/network/NetworkManager.ts` (Added `entityDied` listener)
