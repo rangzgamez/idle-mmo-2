@@ -7,10 +7,11 @@ import { ZoneService } from './zone.service';
 import { EnemyModule } from 'src/enemy/enemy.module';
 import { CombatService } from './combat.service';
 import { AIService } from './ai.service'; // Import the new AI Service
+import { GameLoopService } from './game-loop.service'; // <-- Add this import
 
 @Module({
   imports: [UserModule, CharacterModule, EnemyModule], // Make services available for injection
-  providers: [GameGateway, ZoneService, CombatService, AIService],
+  providers: [GameGateway, ZoneService, CombatService, AIService, GameLoopService],
   exports: [ZoneService, AIService]
 })
 export class GameModule {}
