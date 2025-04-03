@@ -12,6 +12,7 @@ import { CharacterStateService } from './character-state.service'; // <-- Add th
 import { MovementService } from './movement.service'; // <-- Add this import
 import { EnemyStateService } from './enemy-state.service'; // <-- Add this import
 import { SpawningService } from './spawning.service'; // <-- Add this import
+import { BroadcastService } from './broadcast.service'; // <-- Add this import
 
 @Module({
   imports: [UserModule, CharacterModule, EnemyModule], // Make services available for injection
@@ -25,6 +26,7 @@ import { SpawningService } from './spawning.service'; // <-- Add this import
     MovementService,
     EnemyStateService,
     SpawningService,
+    BroadcastService,
   ],
   exports: [ZoneService, AIService]
 })
