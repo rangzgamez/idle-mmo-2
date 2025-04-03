@@ -284,7 +284,9 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
                                                         // Clear target and go idle
                                                         character.attackTargetId = null;
                                                         character.state = 'idle';
-                                                        // Enemy removal might be handled elsewhere (e.g., after loop or by CombatService)
+                                                        // --- Remove enemy from zone state ---
+                                                        this.zoneService.removeEnemy(zoneId, targetEnemy.id);
+                                                        this.logger.debug(`Removed dead enemy ${targetEnemy.id} from zone ${zoneId}.`);
                                                     }
                                                     // TODO: Add lastAttackTime update for cooldown - REMOVED, handled above
                                                 } else if (combatResult?.error) {
@@ -296,9 +298,15 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
                                             } else {
                                                 this.logger.error(`CombatService or handleAttack method not available.`);
                                             }
+                                        } /* else { // Optional: Log cooldown state 
+                                            // this.logger.silly(`Character ${character.id} on attack cooldown.`);
+                                        } */ // End cooldown check
+                                        // REMOVE THE MISPLACED ELSE BLOCK BELOW
+                                        /*
                                         } else {
                                             this.logger.error(`CombatService or handleAttack method not available.`);
                                         }
+                                        */
 
                                     } else {
                                         // --- Out of Range: Move Towards Target ---
@@ -414,6 +422,11 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
 
             // --- Enemy Processing (Refactored) ---
             for (const enemy of enemies) {
+                // Skip processing if enemy is already dead (e.g. died earlier this tick)
+                if (enemy.currentHealth <= 0) {
+                    continue;
+                }
+
                 // --- Get Attacker Object --- 
                 // We already have the 'enemy' object (which is an EnemyInstance)
                 // Ensure it has baseAttack/baseDefense (added in ZoneService.addEnemy)
@@ -553,7 +566,8 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
             }
             // Broadcast batched deaths
             for (const death of deaths) {
-                this.server.to(zoneId).emit('entityDied', death);
+                 this.logger.log(`<<< Broadcasting entityDied event: ${JSON.stringify(death)} to zone ${zoneId}`);
+                 this.server.to(zoneId).emit('entityDied', death);
             }
         }
     } catch (error) {

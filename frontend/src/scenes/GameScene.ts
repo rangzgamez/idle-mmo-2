@@ -6,8 +6,10 @@ import { EventBus } from '../EventBus';
 import UIScene from './UIScene';
 import { EnemySprite } from '../gameobjects/EnemySprite';
 // Add the interface definitions if not shared
-interface ZoneCharacterState { id: string; ownerId: string; ownerName: string; name: string; level: number; x: number | null; y: number | null; }
+interface ZoneCharacterState { id: string; ownerId: string; ownerName: string; name: string; level: number; x: number | null; y: number | null; currentHealth?: number; baseHealth?: number; }
 interface EntityUpdateData { id: string; x?: number | null; y?: number | null; health?: number | null; }
+// --- Add Entity Death Interface ---
+interface EntityDeathData { entityId: string; type: 'character' | 'enemy'; }
 
 interface ChatMessageData {
     senderName: string;
@@ -86,6 +88,7 @@ export default class GameScene extends Phaser.Scene {
         EventBus.on('player-left', this.handlePlayerLeft, this);
         EventBus.on('entity-update', this.handleEntityUpdate, this);
         EventBus.on('chat-message-received', this.handleChatMessageForBubble, this); // Add listener for bubbles
+        EventBus.on('entity-died', this.handleEntityDied, this); // <-- ADD LISTENER FOR DEATHS
         // --- Launch UI Scene ---
         // Use scene.launch to run it in parallel with this scene
         console.log('Launching UIScene...');
@@ -367,6 +370,31 @@ export default class GameScene extends Phaser.Scene {
         });
     }
 
+    // --- ADD DEATH HANDLER ---
+    handleEntityDied(data: EntityDeathData) {
+        console.log('Entity Died:', data);
+        if (data.type === 'enemy') {
+            const deadEnemySprite = this.enemySprites.get(data.entityId);
+            if (deadEnemySprite) {
+                console.log(`Destroying enemy sprite: ${data.entityId}`);
+                deadEnemySprite.destroy(); // Remove from scene
+                this.enemySprites.delete(data.entityId); // Remove from map
+            } else {
+                console.warn(`Received entityDied for unknown enemy ID: ${data.entityId}`);
+            }
+        } else if (data.type === 'character') {
+            // Handle character death visuals (e.g., make sprite grey, disable interactions)
+             const deadCharSprite = this.playerCharacters.get(data.entityId) || this.otherCharacters.get(data.entityId);
+             if (deadCharSprite) {
+                console.log(`Handling character death visuals for: ${data.entityId}`);
+                // TODO: Implement visual change for dead character
+                 deadCharSprite.setAlpha(0.5); // Example: make semi-transparent
+                 deadCharSprite.disableInteractive(); // Prevent clicking
+                 // We might need a way to revert this on respawn later
+             }
+        }
+    }
+    // -------------------------
 
     handleDisconnectError(reason: string | any) {
         // Generic handler for disconnects or critical errors
@@ -397,12 +425,20 @@ export default class GameScene extends Phaser.Scene {
             existingSprite.updateTargetPosition(posX, posY);
         } else {
             // Create new sprite
+            // --- Prepare data for CharacterSprite constructor, ensuring health values --- 
+            const spriteData = {
+                ...charData,
+                // Provide default values if health info is missing
+                currentHealth: charData.currentHealth ?? 100, 
+                baseHealth: charData.baseHealth ?? 100, 
+            };
+            // -----------------------------------------------------------------------
             const newSprite = new CharacterSprite(
                 this,
                 posX,
                 posY,
                 'playerPlaceholder', // Use actual texture later
-                charData,
+                spriteData, // Pass the prepared data with guaranteed health values
                 isPlayer
             );
 
@@ -423,6 +459,7 @@ export default class GameScene extends Phaser.Scene {
         EventBus.off('player-left', this.handlePlayerLeft, this);
         EventBus.off('entity-update', this.handleEntityUpdate, this);
         EventBus.off('chat-message-received', this.handleChatMessageForBubble, this); // Remove bubble listener
+        EventBus.off('entity-died', this.handleEntityDied, this); // <-- REMOVE LISTENER FOR DEATHS
         // --- Clean up click marker ---
         if (this.markerFadeTween) {
             this.markerFadeTween.stop(); // Stop active tween on shutdown

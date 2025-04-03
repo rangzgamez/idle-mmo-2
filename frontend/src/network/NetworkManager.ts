@@ -90,6 +90,13 @@ export class NetworkManager {
             EventBus.emit('entity-update', data);
         });
 
+        // --- ADDED: Listen for entity deaths ---
+        this.socket.on('entityDied', (data: { entityId: string, type: 'character' | 'enemy' }) => {
+            console.log('>>> NetworkManager: Received "entityDied"', data);
+            EventBus.emit('entity-died', data); // Emit using the correct event name ('entity-died')
+        });
+        // -------------------------------------
+
         // Existing listeners (keep if needed)
         // this.socket.on('chatMessage', (data) => { /* ... */ });
     }

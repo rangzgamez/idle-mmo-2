@@ -4,6 +4,7 @@ import { ZoneService, ZoneCharacterState } from './zone.service';
 import { EnemyInstance } from './interfaces/enemy-instance.interface';
 import { AIAction } from './interfaces/ai-action.interface';
 import { Character } from 'src/character/character.entity'; // Needed for findCharacterFromPosition return type
+import { RuntimeCharacterData } from './zone.service'; // Correct import path
 
 @Injectable()
 export class AIService {
@@ -24,6 +25,16 @@ export class AIService {
    * Determines the next action for a given enemy instance based on its state and surroundings.
    */
   updateEnemyAI(enemyInstance: EnemyInstance, zoneId: string): AIAction {
+    // --- Pre-check: Is the enemy itself dead? ---
+    if (enemyInstance.currentHealth <= 0) {
+        // If the enemy is dead, it shouldn't do anything.
+        // This is a safeguard in case it hasn't been fully removed from processing yet.
+        if (enemyInstance.aiState !== 'DEAD') { // Avoid constant state setting
+             this.zoneService.setEnemyAiState(zoneId, enemyInstance.id, 'DEAD');
+        }
+        return { type: 'IDLE' }; // Dead enemies are idle
+    }
+
     // --- AI Decision Logic ---
 
     // 1. Check for targets and aggro
@@ -97,21 +108,43 @@ export class AIService {
 
   private findClosestPlayer(enemy: EnemyInstance, zoneId: string): ZoneCharacterState | undefined {
       let closestPlayer: ZoneCharacterState | undefined;
+      let closestCharacterRuntimeData: RuntimeCharacterData | undefined; // Store the full data too
       let minDistance = Infinity;
 
       // Get runtime character states which include position
-      const charactersInZone = this.zoneService.getZoneCharacterStates(zoneId);
+      const playersInZone = this.zoneService.getPlayersInZone(zoneId); // Get players with RuntimeCharacterData
 
-      for (const character of charactersInZone) {
-          if (!character.x || !character.y) continue; // Skip characters without position
+      for (const player of playersInZone) {
+          for (const character of player.characters) { // character is RuntimeCharacterData
+                // --- Check if character is alive and has position ---
+                if (character.currentHealth <= 0 || character.positionX === null || character.positionY === null) {
+                    continue;
+                }
 
-          const distance = this.calculateDistance(enemy.position, {x: character.x, y: character.y});
-          if (distance < minDistance) {
-              minDistance = distance;
-              closestPlayer = character;
+                const distance = this.calculateDistance(enemy.position, {x: character.positionX, y: character.positionY});
+                if (distance < minDistance) {
+                    minDistance = distance;
+                    closestCharacterRuntimeData = character; // Store the character with full data
+                }
           }
       }
-      return closestPlayer;
+
+       // If we found a character, create the simplified ZoneCharacterState for the return value
+       if (closestCharacterRuntimeData) {
+            // Find the owner user data (needed for ownerName)
+            const ownerUser = playersInZone.find(p => p.user.id === closestCharacterRuntimeData!.ownerId)?.user;
+            return {
+                id: closestCharacterRuntimeData.id,
+                ownerId: closestCharacterRuntimeData.ownerId,
+                ownerName: ownerUser?.username || 'Unknown', // Use owner name if found
+                name: closestCharacterRuntimeData.name,
+                level: closestCharacterRuntimeData.level,
+                x: closestCharacterRuntimeData.positionX,
+                y: closestCharacterRuntimeData.positionY,
+            };
+       }
+
+      return undefined; // No valid, alive target found
   }
 
   private calculateDistance(point1: {x:number, y:number}, point2: {x:number, y:number}): number {
