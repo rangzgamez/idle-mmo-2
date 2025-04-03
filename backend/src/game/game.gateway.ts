@@ -138,11 +138,174 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
             const combatActions: Array<any> = [];
             const deaths: Array<{ entityId: string, type: 'character' | 'enemy' }> = [];
 
-            // --- Character Movement ---
+            const enemies = this.zoneService.getZoneEnemies(zoneId); // Get enemies once per zone tick
+
+            // --- Character Processing (RTS Style) ---
             for (const player of zone.players.values()) {
                 for (const character of player.characters) { // character is RuntimeCharacterData
+                    let needsPositionUpdate = false;
+
+                     // --- 0. Basic Checks --- (Handle dead characters)
+                     if (character.currentHealth <= 0) {
+                        // TODO: Proper dead state handling - for now, just skip processing
+                        // Ensure dead characters are updated at least once? Or handled by death event?
+                        // Check if already in updates, if not add final state?
+                         const existingUpdateIndex = updates.findIndex(u => u.id === character.id);
+                         if (existingUpdateIndex === -1) {
+                             // Ensure the death state (health=0) is broadcast if not already
+                            // updates.push({ id: character.id, x: character.positionX, y: character.positionY, health: 0 });
+                         }
+                         continue; // Skip processing for dead characters
+                     }
+
+                    // --- 1. Leashing Check ---
+                    let isLeashing = false;
+                    if (character.anchorX !== null && character.anchorY !== null && character.leashDistance > 0) { // Check leashDistance > 0
+                        const distToAnchorSq = (character.positionX - character.anchorX)**2 + (character.positionY - character.anchorY)**2;
+                        if (distToAnchorSq > character.leashDistance * character.leashDistance) {
+                            isLeashing = true;
+                            // Only update state/target if not already moving back to anchor
+                            if (character.state !== 'moving' || character.targetX !== character.anchorX || character.targetY !== character.anchorY) {
+                                this.logger.debug(`Character ${character.id} [${character.name}] leash triggered. Returning to anchor (${character.anchorX.toFixed(0)}, ${character.anchorY.toFixed(0)}).`);
+                                character.state = 'moving';
+                                character.targetX = character.anchorX;
+                                character.targetY = character.anchorY;
+                                character.attackTargetId = null; // Stop attacking when leashing
+                            }
+                        }
+                    }
+
+                    // --- 2. State Logic (Only if NOT leashing) ---
+                    if (!isLeashing) {
+                        switch (character.state) {
+                            case 'attacking':
+                                const targetEnemy = character.attackTargetId ? this.zoneService.getEnemyInstanceById(zoneId, character.attackTargetId) : undefined;
+
+                                // Validate target
+                                if (!targetEnemy || targetEnemy.currentHealth <= 0) {
+                                    if (character.attackTargetId) {
+                                        this.logger.debug(`Character ${character.id} [${character.name}] target ${character.attackTargetId} invalid/dead. Switching to idle.`);
+                                    }
+                                    character.attackTargetId = null;
+                                    character.state = 'idle';
+                                    character.targetX = null; // Stop moving if was approaching
+                                    character.targetY = null;
+                                } else {
+                                    // Target is valid, check range
+                                    const distToTargetSq = (character.positionX - targetEnemy.position.x)**2 + (character.positionY - targetEnemy.position.y)**2;
+                                    const attackRangeSq = character.attackRange * character.attackRange;
+
+                                    if (distToTargetSq <= attackRangeSq) {
+                                        // --- In Range: Attack ---
+                                        if (character.targetX !== null || character.targetY !== null) {
+                                            character.targetX = null; // Stop moving
+                                            character.targetY = null;
+                                        }
+
+                                        // TODO: Implement attack cooldown check here
+
+                                        this.logger.debug(`Character ${character.id} [${character.name}] attacking enemy ${targetEnemy.id}`);
+                                        // Ensure combat service exists and can handle Character attacking Enemy
+                                        if (this.combatService && typeof this.combatService.handleAttack === 'function') {
+                                            const combatResult = await this.combatService.handleAttack(
+                                                character,   // Attacker (Character)
+                                                targetEnemy, // Defender (Enemy)
+                                                zoneId
+                                            );
+
+                                            if (combatResult && !combatResult.error) {
+                                                combatActions.push({
+                                                    attackerId: character.id,
+                                                    targetId: targetEnemy.id,
+                                                    damage: combatResult.damageDealt,
+                                                    type: 'character_attack', // Distinguish from enemy attack if needed
+                                                });
+                                                // Update target enemy's health in the updates array
+                                                const enemyUpdateIndex = updates.findIndex(u => u.id === targetEnemy.id);
+                                                if (enemyUpdateIndex > -1) {
+                                                    updates[enemyUpdateIndex].health = combatResult.targetCurrentHealth;
+                                                } else {
+                                                    updates.push({ id: targetEnemy.id, x: targetEnemy.position.x, y: targetEnemy.position.y, health: combatResult.targetCurrentHealth });
+                                                }
+
+                                                if (combatResult.targetDied) {
+                                                    this.logger.log(`Enemy ${targetEnemy.id} died from attack by character ${character.id} [${character.name}].`);
+                                                    deaths.push({ entityId: targetEnemy.id, type: 'enemy' });
+                                                    // Clear target and go idle
+                                                    character.attackTargetId = null;
+                                                    character.state = 'idle';
+                                                    // Enemy removal might be handled elsewhere (e.g., after loop or by CombatService)
+                                                }
+                                                // TODO: Add lastAttackTime update for cooldown
+                                            } else if (combatResult?.error) {
+                                                this.logger.error(`Combat Error (Char->Enemy): ${character.id} vs ${targetEnemy.id}: ${combatResult.error}`);
+                                                // Consider stopping attack on error? Maybe switch to idle.
+                                                // character.attackTargetId = null;
+                                                // character.state = 'idle';
+                                            }
+                                        } else {
+                                            this.logger.error(`CombatService or handleAttack method not available.`);
+                                        }
+
+                                    } else {
+                                        // --- Out of Range: Move Towards Target ---
+                                        // Only set target if not already moving to the correct spot
+                                        if (character.targetX !== targetEnemy.position.x || character.targetY !== targetEnemy.position.y) {
+                                            this.logger.debug(`Character ${character.id} [${character.name}] moving towards enemy ${targetEnemy.id}`);
+                                            character.targetX = targetEnemy.position.x;
+                                            character.targetY = targetEnemy.position.y;
+                                            // State remains 'attacking', movement simulation will handle moving
+                                        }
+                                    }
+                                }
+                                break; // End attacking state
+
+                            case 'idle':
+                                // --- Scan for Enemies --- (Only scan if not already targetting)
+                                if (!character.attackTargetId) { // Avoid scanning if already decided to attack
+                                     let closestEnemy: EnemyInstance | null = null;
+                                     let minDistSq = character.aggroRange * character.aggroRange; // Use squared distance
+
+                                     for (const enemy of enemies) { // Use pre-fetched enemy list
+                                         if (enemy.currentHealth <= 0) continue; // Skip dead enemies
+
+                                         const dx = enemy.position.x - character.positionX;
+                                         const dy = enemy.position.y - character.positionY;
+                                         const distSq = dx * dx + dy * dy;
+
+                                         if (distSq <= minDistSq) {
+                                             minDistSq = distSq;
+                                             closestEnemy = enemy;
+                                         }
+                                     }
+
+                                     if (closestEnemy) {
+                                         this.logger.debug(`Character ${character.id} [${character.name}] found target ${closestEnemy.id} via aggro. Switching to attacking.`);
+                                         character.attackTargetId = closestEnemy.id;
+                                         character.state = 'attacking';
+                                         // Movement towards target will be handled in the 'attacking' state logic or movement simulation
+                                     }
+                                }
+                                break; // End idle state
+
+                            case 'moving':
+                                // Movement simulation handles actual position change.
+                                // Check if the destination (which might be the anchor) is reached.
+                                if (character.targetX !== null && character.targetY !== null &&
+                                    character.positionX === character.targetX && character.positionY === character.targetY)
+                                {
+                                     this.logger.debug(`Character ${character.id} [${character.name}] reached move target (${character.targetX.toFixed(0)}, ${character.targetY.toFixed(0)}). Switching to idle.`);
+                                     character.targetX = null;
+                                     character.targetY = null;
+                                     character.state = 'idle';
+                                     // Important: Don't clear anchorX/Y here
+                                }
+                                break; // End moving state
+                        } // End switch(character.state)
+                    } // End if(!isLeashing)
+
+                    // --- 3. Movement Simulation (Applies if targetX/Y is set, regardless of state) ---
                     let moved = false;
-                    // --- Movement Simulation ---
                     if (character.targetX !== null && character.targetY !== null &&
                         (character.positionX !== character.targetX || character.positionY !== character.targetY))
                     {
@@ -152,11 +315,10 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
                         const maxMove = this.MOVEMENT_SPEED * deltaTime;
 
                         if (distance <= maxMove) {
-                            // Reached target
+                            // Reached target this tick
                             character.positionX = character.targetX;
                             character.positionY = character.targetY;
-                            character.targetX = null; // Clear Target
-                            character.targetY = null;
+                            // State transition ('moving' to 'idle') is handled in state logic above when pos === target
                             moved = true;
                         } else {
                             // Move towards target
@@ -166,26 +328,26 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
                             character.positionY += moveY;
                             moved = true;
                         }
-
-                        // Update the character's current position in ZoneService
-                        // (This updates the object directly since it's in memory)
-                        // No need to call zoneService.updateCharacterPosition here
+                        needsPositionUpdate = true;
                     }
-                    // -------------------------
 
-                    // Always include character in update for now (or only if moved)
-                    // if (moved) {
-                        updates.push({
-                            id: character.id,
-                            x: character.positionX,
-                            y: character.positionY,
-                        });
-                    // }
-                }
-            }
+                    // --- 4. Add Character Position to Updates Array (if needed) ---
+                    // Always update position for simplicity, mirroring previous logic.
+                    // Health updates for characters (from enemy attacks) happen in the enemy processing section.
+                    const existingUpdateIndex = updates.findIndex(u => u.id === character.id);
+                    if (existingUpdateIndex !== -1) {
+                         // Update position in existing entry (health might be added by enemy attacks later)
+                         updates[existingUpdateIndex].x = character.positionX;
+                         updates[existingUpdateIndex].y = character.positionY;
+                    } else {
+                         // Add new update entry if not present
+                         updates.push({ id: character.id, x: character.positionX, y: character.positionY, health: character.currentHealth }); // Include current health
+                    }
+
+                } // End character loop
+            } // End player loop
 
             // --- Enemy Processing (Refactored) ---
-            const enemies = this.zoneService.getZoneEnemies(zoneId);
             for (const enemy of enemies) {
                 // --- Get Attacker Object --- 
                 // We already have the 'enemy' object (which is an EnemyInstance)
@@ -580,14 +742,30 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     }
     // Handle > 3 characters later if needed
 
-    // --- Update target positions in ZoneService ---
+    // --- Update target positions AND anchor points in ZoneService ---
     for (const target of targets) {
-        this.zoneService.setCharacterTargetPosition(user.id, target.charId, target.targetX, target.targetY);
-         // Optional: Log the calculated target
-         // this.logger.log(`Set target for char ${target.charId} to ${target.targetX}, ${target.targetY}`);
+        // Find the full character data in memory to update it
+        const character = partyCharacters.find(c => c.id === target.charId);
+        if (character) {
+            // Set the movement target
+            character.targetX = target.targetX;
+            character.targetY = target.targetY;
+            // Set the anchor point (leash point) to the destination
+            character.anchorX = target.targetX;
+            character.anchorY = target.targetY;
+            // Clear any attack target, movement command overrides attacking
+            character.attackTargetId = null;
+            // Set state to moving
+            character.state = 'moving';
+
+            // Optional: Log the calculated target
+            this.logger.debug(`MoveCmd: Set state=moving, target/anchor for char ${target.charId} to ${target.targetX}, ${target.targetY}`);
+        } else {
+            this.logger.warn(`MoveCmd: Could not find character ${target.charId} in runtime data for user ${user.id}`);
+        }
     }
 
-    // The actual movement happens in the game loop based on these targets
+    // The actual movement happens in the game loop based on these targets and state
 }
    @SubscribeMessage('attackCommand')
     handleAttackCommand(
@@ -596,19 +774,37 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     ): void {
         const user = client.data.user as User;
         const partyCharacters = this.zoneService.getPlayerCharacters(user.id);
+        const zoneId = client.data.currentZoneId; // Use the zone ID stored on the socket
 
-        if (partyCharacters && partyCharacters.length > 0) {
-            const zoneId = partyCharacters[0].currentZoneId ? partyCharacters[0].currentZoneId : 'startZone';
-            const attacker = partyCharacters[0];
-            const target = this.zoneService.getEnemy(zoneId, data.targetId);
-
-            if (target) {
-                // Set the character's target for auto-attack in the game loop
-                attacker.targetX = target.position.x;
-                attacker.targetY = target.position.y;
-                client.data.attackTarget = target.id;
-            }
+        if (!user || !partyCharacters || partyCharacters.length === 0) {
+            this.logger.warn(`Attack command ignored for user ${user?.username}: No party found`);
+            return;
         }
+        if (!zoneId) {
+            this.logger.warn(`Attack command ignored for user ${user?.username}: Not currently in a zone`);
+            return;
+        }
+
+        // Validate the target enemy exists in the current zone
+        const targetEnemy = this.zoneService.getEnemyInstanceById(zoneId, data.targetId);
+
+        if (!targetEnemy) {
+            this.logger.warn(`Attack command ignored: Target enemy ${data.targetId} not found in zone ${zoneId}.`);
+            // TODO: Maybe send an acknowledgement back to the client indicating failure?
+            return;
+        }
+
+        // Set the target and state for ALL characters in the party
+        for (const character of partyCharacters) {
+            character.attackTargetId = data.targetId;
+            character.state = 'attacking';
+            // Clear any existing movement target, attacking takes priority
+            character.targetX = null;
+            character.targetY = null;
+            this.logger.debug(`AttackCmd: Set state=attacking, target=${data.targetId} for char ${character.id}`);
+        }
+
+        // The actual attacking/movement to target happens in the game loop
     }
 
         //  --------------------- AI ADDITIONS ---------------------

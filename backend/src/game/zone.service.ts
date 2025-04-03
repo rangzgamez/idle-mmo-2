@@ -41,6 +41,14 @@ export interface RuntimeCharacterData extends Character {
     ownerId: string; // Should always be present after addPlayerToZone
     baseAttack: number;
     baseDefense: number;
+    // --- RTS Combat State ---
+    state: 'idle' | 'moving' | 'attacking';
+    attackTargetId: string | null;
+    anchorX: number | null; // Last commanded position or spawn point
+    anchorY: number | null;
+    attackRange: number; // How close to attack
+    aggroRange: number; // How far to automatically look for targets when idle
+    leashDistance: number; // How far from anchor before returning
 }
 @Injectable()
 export class ZoneService {
@@ -74,6 +82,14 @@ export class ZoneService {
             currentHealth: char.baseHealth, // <-- INITIALIZE HEALTH
             baseAttack: char.baseAttack, // <-- ADD BASE STATS
             baseDefense: char.baseDefense, // <-- ADD BASE STATS
+            // --- Initialize RTS Combat State ---
+            state: 'idle',
+            attackTargetId: null,
+            anchorX: char.positionX ?? (100 + Math.random() * 50), // Initial anchor is spawn point
+            anchorY: char.positionY ?? (100 + Math.random() * 50),
+            attackRange: 50, // TODO: Make this configurable/stat-based
+            aggroRange: 150, // TODO: Make this configurable/stat-based
+            leashDistance: 400, // TODO: Make this configurable
         }));
 
         zone.players.set(user.id, { socket: playerSocket, user, characters: runtimeCharacters });
