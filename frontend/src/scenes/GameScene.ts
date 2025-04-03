@@ -18,6 +18,14 @@ interface ChatMessageData {
     timestamp?: number;
 }
 
+// +++ Add Combat Action Interface +++
+interface CombatActionData {
+    attackerId: string;
+    targetId: string;
+    damage: number;
+    type: string; // e.g., 'attack', 'heal' - currently only 'attack' expected
+}
+
 interface EnemySpawnData {
     id: string;
     templateId: string;
@@ -102,6 +110,7 @@ export default class GameScene extends Phaser.Scene {
         EventBus.on('chat-message-received', this.handleChatMessageForBubble, this); // Add listener for bubbles
         EventBus.on('entity-died', this.handleEntityDied, this); // <-- ADD LISTENER FOR DEATHS
         EventBus.on('enemy-spawned', this.handleEnemySpawned, this); // +++ ADD LISTENER +++
+        EventBus.on('combat-action', this.handleCombatAction, this); // +++ ADD LISTENER for ATTACK VISUAL +++
         // --- Launch UI Scene ---
         // Use scene.launch to run it in parallel with this scene
         console.log('Launching UIScene...');
@@ -458,6 +467,7 @@ export default class GameScene extends Phaser.Scene {
         EventBus.off('chat-message-received', this.handleChatMessageForBubble, this); // Remove bubble listener
         EventBus.off('entity-died', this.handleEntityDied, this); // <-- REMOVE LISTENER FOR DEATHS
         EventBus.off('enemy-spawned', this.handleEnemySpawned, this); // ++ REMOVE LISTENER ++
+        EventBus.off('combat-action', this.handleCombatAction, this); // +++ REMOVE LISTENER +++
         // --- Clean up click marker ---
         if (this.markerFadeTween) {
             this.markerFadeTween.stop(); // Stop active tween on shutdown
@@ -481,7 +491,8 @@ export default class GameScene extends Phaser.Scene {
 
     // Called automatically when the scene is shut down
     shutdown() {
-        this.shutdownScene();
+        console.log("GameScene shutdown called");
+        this.shutdownScene(); // Ensure cleanup runs even on scene.stop()
     }
 
     // +++ ADDED: Reusable enemy sprite creation logic +++
@@ -525,4 +536,79 @@ export default class GameScene extends Phaser.Scene {
         this.enemySprites.set(enemyData.id, newEnemy);
     }
     // +++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+    // +++ ADDED: Handler for Combat Action Visuals +++
+    private handleCombatAction(data: CombatActionData) {
+        console.log('[GameScene] Handling combat action event:', data); // <-- UNCOMMENT/ADD THIS LOG
+
+        // Find the target sprite
+        let targetSprite: CharacterSprite | EnemySprite | undefined;
+        targetSprite = this.playerCharacters.get(data.targetId) ||
+                       this.otherCharacters.get(data.targetId) ||
+                       this.enemySprites.get(data.targetId);
+
+        if (targetSprite && targetSprite.scene) { // Check if sprite exists and is part of the scene
+            console.log(`[GameScene] Found target sprite (${targetSprite.name}) for combat visual.`); // <-- ADD THIS LOG
+
+            // --- Attack Circle Visual (Existing) ---
+            const effect = this.add.graphics({ x: targetSprite.x, y: targetSprite.y });
+            effect.fillStyle(0xff0000, 0.8); // Red color, slightly transparent
+            effect.fillCircle(0, 0, 6); // Small circle at the graphic's origin (target's position)
+            effect.setDepth(targetSprite.depth + 1); // Ensure it's drawn above the target
+
+            this.tweens.add({
+                targets: effect,
+                alpha: { from: 0.8, to: 0 },
+                scale: { from: 1, to: 1.6 }, // Make it expand slightly
+                duration: 300, // Short duration (300ms)
+                ease: 'Quad.easeOut',
+                onComplete: () => {
+                    if (effect?.scene) { // Check if effect still exists before destroying
+                       effect.destroy(); // Clean up the graphics object
+                    }
+                }
+            });
+
+            // --- Floating Combat Text (NEW) ---
+            if (data.damage > 0) { // Only show text if there's damage
+                const damage = Math.round(data.damage); // Use rounded damage
+                // Determine color: Red if target is one of OUR characters, white otherwise
+                const isPlayerTarget = this.playerCharacters.has(data.targetId);
+                const textColor = isPlayerTarget ? '#ff0000' : '#ffffff'; // Red for player damage taken, white otherwise
+                const combatText = this.add.text(
+                    targetSprite.x,
+                    targetSprite.y - targetSprite.displayHeight / 2, // Start slightly above the sprite's center/top
+                    `${damage}`,
+                    {
+                        fontFamily: 'Arial, sans-serif', // Choose a suitable font
+                        fontSize: '14px',
+                        fontStyle: 'bold',
+                        color: textColor,
+                        stroke: '#000000', // Black stroke for visibility
+                        strokeThickness: 3
+                    }
+                );
+                combatText.setOrigin(0.5, 0.5); // Center the text
+                combatText.setDepth(targetSprite.depth + 2); // Ensure text is above the circle effect
+
+                // Tween for floating up and fading out
+                this.tweens.add({
+                    targets: combatText,
+                    y: combatText.y - 40, // Float upwards by 40 pixels
+                    alpha: { from: 1, to: 0 }, // Fade out
+                    duration: 1000, // 1 second duration
+                    ease: 'Quad.easeOut',
+                    onComplete: () => {
+                        if (combatText?.scene) { // Check if text still exists
+                            combatText.destroy(); // Clean up the text object
+                        }
+                    }
+                });
+            }
+            // ------------------------------------
+
+        } else {
+            console.warn(`[GameScene] Combat action target sprite not found or already removed: ${data.targetId}`); // <-- ADD/MODIFY THIS LOG
+        }
+    }
 }

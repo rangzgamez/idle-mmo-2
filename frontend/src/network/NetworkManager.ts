@@ -39,6 +39,14 @@ interface EnemySpawnData {
     baseHealth?: number; // Added baseHealth if available
 }
 
+// +++ ADD: CombatActionData interface (if not imported/shared) +++
+interface CombatActionData {
+    attackerId: string;
+    targetId: string;
+    damage: number;
+    type: string;
+}
+
 export class NetworkManager {
     private socket: Socket | null = null;
     private static instance: NetworkManager;
@@ -119,6 +127,21 @@ export class NetworkManager {
         this.socket.on('enemySpawned', (enemyData: EnemySpawnData) => {
             console.log('>>> NetworkManager: Received "enemySpawned"', enemyData);
             EventBus.emit('enemy-spawned', enemyData);
+        });
+        // +++++++++++++++++++++++++++++++++++++++
+
+        // +++ ADDED: Listen for combat actions (Handles BATCHED actions) +++
+        this.socket.on('combatAction', (data: { actions: CombatActionData[] }) => {
+            // Check if data and data.actions exist and is an array
+            if (data && Array.isArray(data.actions)) {
+                // Loop through each action in the received array
+                data.actions.forEach(action => {
+                    // console.log('>>> NetworkManager: Received single combatAction from batch:', action); // Optional log
+                    EventBus.emit('combat-action', action); // Emit each action individually
+                });
+            } else {
+                console.warn('>>> NetworkManager: Received combatAction event with unexpected payload format:', data);
+            }
         });
         // +++++++++++++++++++++++++++++++++++++++
 
