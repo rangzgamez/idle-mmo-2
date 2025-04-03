@@ -14,6 +14,7 @@ export interface EnemyInstance {
     baseAttack: number;
     baseDefense: number;
     name: string; // <-- ADDED: Name from the template for client display
+    baseSpeed: number; // <-- ADDED: Speed from the template for movement
     // Add speed? range? from template if needed elsewhere
     // name: string;
 

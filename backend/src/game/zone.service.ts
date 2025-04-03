@@ -249,6 +249,7 @@ export class ZoneService implements OnModuleInit {
           // Add base stats from template
           baseAttack: enemyTemplate.baseAttack,
           baseDefense: enemyTemplate.baseDefense,
+          baseSpeed: enemyTemplate.baseSpeed,
           // Add other relevant properties if needed
         };
     
@@ -568,6 +569,7 @@ export class ZoneService implements OnModuleInit {
             aiState: 'IDLE', // Start idle
             baseAttack: enemyTemplate.baseAttack,
             baseDefense: enemyTemplate.baseDefense,
+            baseSpeed: enemyTemplate.baseSpeed,
             nestId: nest.id, // <-- Link to nest
             anchorX: nest.center.x, // <-- Set anchor to nest center
             anchorY: nest.center.y,

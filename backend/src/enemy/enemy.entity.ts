@@ -21,7 +21,7 @@ export class Enemy {
   @Column({ type: 'integer', default: 5 })
   baseDefense: number;
 
-  @Column({ type: 'integer', default: 20 })
+  @Column({ type: 'integer', default: 75 })
   baseSpeed: number;
 
   @Column({ type: 'integer', default: 30 })

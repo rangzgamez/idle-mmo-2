@@ -5,6 +5,7 @@ import { CombatService } from './combat.service';
 import { AIService } from './ai.service';
 import { EnemyInstance } from './interfaces/enemy-instance.interface';
 import { CharacterStateService, CharacterTickResult } from './character-state.service';
+import { MovementService, MovementResult, Point } from './movement.service';
 
 @Injectable()
 export class GameLoopService implements OnApplicationShutdown {
@@ -15,8 +16,6 @@ export class GameLoopService implements OnApplicationShutdown {
 
     // --- Constants moved from Gateway ---
     private readonly TICK_RATE = 100; // ms (10 FPS)
-    private readonly MOVEMENT_SPEED = 150; // Pixels per second
-    private readonly ENEMY_MOVEMENT_SPEED = 75; // Pixels per second
     private readonly CHARACTER_HEALTH_REGEN_PERCENT_PER_SEC = 1.0; // Regenerate 1% of max health per second
     // ------------------------------------
 
@@ -25,6 +24,7 @@ export class GameLoopService implements OnApplicationShutdown {
         private combatService: CombatService,
         private aiService: AIService,
         private characterStateService: CharacterStateService,
+        private movementService: MovementService,
     ) {}
 
     // Method to start the loop, called by GameGateway
@@ -153,34 +153,40 @@ export class GameLoopService implements OnApplicationShutdown {
                             }
                         }
 
-                        // --- Movement Simulation (Still in GameLoopService for now) ---
+                        // --- Movement Simulation (Refactored) ---
                          let needsPositionUpdate = false;
-                         if (character.targetX !== null && character.targetY !== null) {
-                             const dx = character.targetX - character.positionX;
-                             const dy = character.targetY - character.positionY;
-                             const distance = this.calculateDistance({x: character.positionX, y: character.positionY}, {x: character.targetX, y: character.targetY});
-                             const moveAmount = this.MOVEMENT_SPEED * deltaTime;
+                         const currentPosition: Point = { x: character.positionX, y: character.positionY };
+                         const targetPosition: Point | null = (character.targetX !== null && character.targetY !== null) 
+                                                              ? { x: character.targetX, y: character.targetY } 
+                                                              : null;
 
-                             if (distance <= moveAmount) {
-                                 // Reached Target or close enough
-                                 character.positionX = character.targetX;
-                                 character.positionY = character.targetY;
-                                 const previousTargetX = character.targetX;
-                                 const previousTargetY = character.targetY;
+                         if (targetPosition) {
+                            // Get character speed from entity data (assuming it exists, else use default)
+                            // TODO: Add baseSpeed to Character entity later if needed
+                             const characterSpeed = 150; // Placeholder: Use character.baseSpeed eventually
+
+                             const moveResult: MovementResult = this.movementService.simulateMovement(
+                                 currentPosition,
+                                 targetPosition,
+                                 characterSpeed,
+                                 deltaTime
+                             );
+
+                             // Check if position actually changed
+                             if (moveResult.newPosition.x !== character.positionX || moveResult.newPosition.y !== character.positionY) {
+                                needsPositionUpdate = true;
+                                character.positionX = moveResult.newPosition.x;
+                                character.positionY = moveResult.newPosition.y;
+                                // Persist the updated position in ZoneService's runtime data
+                                this.zoneService.updateCharacterCurrentPosition(player.user.id, character.id, character.positionX, character.positionY);
+                             }
+
+                             // If target was reached, clear the target fields in the character data
+                             if (moveResult.reachedTarget) {
                                  character.targetX = null;
                                  character.targetY = null;
-
-                                // State transition (moving -> idle) is handled by CharacterStateService upon reaching destination
-                                // We just need to detect if position changed
-                                 needsPositionUpdate = true;
-                             } else {
-                                 // Move towards Target
-                                 character.positionX += (dx / distance) * moveAmount;
-                                 character.positionY += (dy / distance) * moveAmount;
-                                 needsPositionUpdate = true;
+                                 // State transition (e.g., moving -> idle) should be handled by CharacterStateService based on reaching the target
                              }
-                             // Persist the updated position in ZoneService's runtime data
-                             this.zoneService.updateCharacterCurrentPosition(player.user.id, character.id, character.positionX, character.positionY);
                          }
 
                         // --- Batch Update Preparation (Simplified) ---
@@ -268,37 +274,42 @@ export class GameLoopService implements OnApplicationShutdown {
                             break;
                     }
 
-                    // Enemy Movement Simulation
-                    if (enemy.target) {
-                        const dx = enemy.target.x - enemy.position.x;
-                        const dy = enemy.target.y - enemy.position.y;
-                        const distance = Math.sqrt(dx * dx + dy * dy);
-                        const moveAmount = this.ENEMY_MOVEMENT_SPEED * deltaTime;
-                        if (distance <= moveAmount) {
-                            // Reached Target
-                            enemy.position.x = enemy.target.x;
-                            enemy.position.y = enemy.target.y;
-                            const previousTarget = enemy.target; // Store before clearing
-                            enemy.target = null; // Clear target locally first
-                            this.zoneService.setEnemyTarget(zoneId, enemy.id, null); // Persist cleared target
-                            // If the AI state was move-related, transition back to IDLE
-                            // Let AIService decide next state based on reaching the destination
-                             if (enemy.aiState === 'WANDERING' || enemy.aiState === 'LEASHED') {
-                                 this.zoneService.setEnemyAiState(zoneId, enemy.id, 'IDLE'); // Reached wander/leash point
-                             } else if (enemy.aiState === 'CHASING') {
-                                 // Reaching the exact spot of a character might transition to ATTACKING next AI tick
-                                 // Or if character moved, might start CHASING again. Let AI decide.
-                             }
+                    // Enemy Movement Simulation (Refactored)
+                    const enemyCurrentPos: Point = { x: enemy.position.x, y: enemy.position.y };
+                    const enemyTargetPos: Point | null | undefined = enemy.target; // AI sets enemy.target
+
+                     if (enemyTargetPos) {
+                        // Get enemy speed from entity data (assuming it exists)
+                         const enemySpeed = enemy.baseSpeed || 75; // Use default if not set
+
+                         const enemyMoveResult: MovementResult = this.movementService.simulateMovement(
+                             enemyCurrentPos,
+                             enemyTargetPos,
+                             enemySpeed,
+                             deltaTime
+                         );
+
+                         if (enemyMoveResult.newPosition.x !== enemy.position.x || enemyMoveResult.newPosition.y !== enemy.position.y) {
                             enemyNeedsPositionUpdate = true;
-                        } else {
-                            // Move towards Target
-                            enemy.position.x += (dx / distance) * moveAmount;
-                            enemy.position.y += (dy / distance) * moveAmount;
-                            enemyNeedsPositionUpdate = true;
-                        }
-                        // Persist updated position
-                        this.zoneService.updateEnemyPosition(zoneId, enemy.id, enemy.position);
-                    }
+                            enemy.position.x = enemyMoveResult.newPosition.x;
+                            enemy.position.y = enemyMoveResult.newPosition.y;
+                            // Persist updated position
+                            this.zoneService.updateEnemyPosition(zoneId, enemy.id, enemy.position);
+                         }
+
+                         if (enemyMoveResult.reachedTarget) {
+                             const previousTarget = enemy.target; // Store before clearing
+                             enemy.target = null; // Clear target locally first
+                             this.zoneService.setEnemyTarget(zoneId, enemy.id, null); // Persist cleared target
+
+                              // Let AIService decide next state based on reaching the destination
+                              if (enemy.aiState === 'WANDERING' || enemy.aiState === 'LEASHED') {
+                                  this.zoneService.setEnemyAiState(zoneId, enemy.id, 'IDLE'); // Reached wander/leash point
+                              } else if (enemy.aiState === 'CHASING') {
+                                  // Reaching the exact spot might transition to ATTACKING or back to CHASING next AI tick
+                              }
+                         }
+                     }
 
                     // Add enemy to updates array if needed
                     if (enemyNeedsPositionUpdate) {
@@ -365,13 +376,4 @@ export class GameLoopService implements OnApplicationShutdown {
     }
 
     // --- Helper Functions ---
-    private calculateDistance(point1: {x:number, y:number}, point2: {x:number, y:number}): number {
-        if (typeof point1.x !== 'number' || typeof point1.y !== 'number' || typeof point2.x !== 'number' || typeof point2.y !== 'number') {
-            this.logger.error(`Invalid input for calculateDistance: p1=(${point1.x},${point1.y}), p2=(${point2.x},${point2.y})`);
-            return Infinity; // Return infinity to prevent invalid calculations downstream
-        }
-        const dx = point1.x - point2.x;
-        const dy = point1.y - point2.y;
-        return Math.sqrt(dx * dx + dy * dy);
-    }
 }
