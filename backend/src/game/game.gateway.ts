@@ -16,9 +16,17 @@ import { UserService } from '../user/user.service'; // Import UserService
 import { User } from '../user/user.entity'; // Import User entity
 import { CharacterService } from '../character/character.service'; // Import CharacterService
 import { Character } from '../character/character.entity'; // Import Character entity
-import { ZoneService, ZoneCharacterState } from './zone.service'; // Import ZoneService
+import { ZoneService, ZoneCharacterState, RuntimeCharacterData } from './zone.service'; // Import ZoneService & RuntimeCharacterData
 import * as sanitizeHtml from 'sanitize-html';
 import { GameLoopService } from './game-loop.service'; // Import the new GameLoopService
+import { InventoryService } from '../inventory/inventory.service'; // Import InventoryService
+import { BroadcastService } from './broadcast.service'; // Import BroadcastService
+import { DroppedItem } from './interfaces/dropped-item.interface'; // Import DroppedItem
+import { InventoryItem } from '../inventory/inventory.entity'; // Import InventoryItem
+import { calculateDistance } from './utils/geometry.utils'; // Import distance util
+
+// Add pickup range constant
+const ITEM_PICKUP_RANGE = 50; // pixels
 
 @WebSocketGateway({
   cors: { /* ... */ },
@@ -33,6 +41,8 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     private characterService: CharacterService, // Inject CharacterService
     private zoneService: ZoneService, // Inject ZoneService
     private gameLoopService: GameLoopService, // Inject GameLoopService
+    private inventoryService: InventoryService, // Inject InventoryService
+    private broadcastService: BroadcastService, // Inject BroadcastService
   ) {}
 
   afterInit(server: Server) {
@@ -106,6 +116,91 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     const username = client.data.user?.username; // Access authenticated user data
     this.logger.log(`Client connected: ${client.id} - User: ${username}`);
     // Proceed with game logic like adding to a lobby or requesting zone entry
+  }
+
+  // --- Pickup Item Handler ---
+  @SubscribeMessage('pickupItemCommand')
+  async handlePickupItem(
+      @MessageBody() data: { itemId: string },
+      @ConnectedSocket() client: Socket,
+  ): Promise<{ success: boolean; message?: string }> { // Ack structure
+    const user = client.data.user as User;
+    const party = client.data.selectedCharacters as RuntimeCharacterData[];
+    const zoneId = client.data.currentZoneId as string;
+    const itemIdToPickup = data?.itemId;
+
+    // --- Basic Validation ---
+    if (!user || !party || party.length === 0 || !zoneId) {
+      return { success: false, message: 'Invalid state (not authenticated, no party, or not in zone).' };
+    }
+    if (!itemIdToPickup) {
+      return { success: false, message: 'Missing item ID to pick up.' };
+    }
+
+    const character = this.zoneService.getCharacterStateById(zoneId, party[0].id);
+    const droppedItem = this.zoneService.getDroppedItems(zoneId).find(item => item.id === itemIdToPickup);
+
+    if (!character) {
+        return { success: false, message: 'Character not found in zone state.' };
+    }
+    if (!droppedItem) {
+        this.logger.verbose(`User ${user.username} tried to pick up non-existent/already picked item ${itemIdToPickup}`);
+        return { success: false, message: 'Item not found.' };
+    }
+
+    // --- Range Check ---
+    const distance = calculateDistance(
+        { x: character.positionX!, y: character.positionY! },
+        droppedItem.position
+    );
+
+    if (distance > ITEM_PICKUP_RANGE) {
+         this.logger.verbose(`User ${user.username} too far from item ${itemIdToPickup} (Dist: ${distance.toFixed(1)})`);
+        return { success: false, message: 'Too far away from the item.' };
+    }
+
+    // --- Attempt Pickup --- 
+    try {
+        // 1. Add item to user's inventory
+        // We need the ItemTemplate ID for this.
+        const addedInventoryItem = await this.inventoryService.addItemToUser(
+            user.id, // Use user.id
+            droppedItem.itemTemplateId,
+            droppedItem.quantity
+        );
+
+        // Check if adding was successful (it throws on error now, but keep check)
+        if (!addedInventoryItem) {
+            throw new Error('Failed to add item to user inventory service.');
+        }
+
+        // 2. Remove item from ground (ZoneService)
+        const removed = this.zoneService.removeDroppedItem(zoneId, itemIdToPickup);
+        if (!removed) {
+            // This *could* happen if another player picked it up in the same tick?
+            // Rollback? For now, log error and maybe let inventory keep item.
+            this.logger.error(`Failed to remove picked up item ${itemIdToPickup} from zone ${zoneId} after adding to inventory!`);
+            // Consider trying to remove item from inventory here if critical
+        } else {
+            this.logger.log(`Item ${removed.itemName} (${removed.id}) picked up by ${user.username}`);
+        }
+
+        // 3. Broadcast itemPickedUp to ZONE (for others to remove visual)
+        // Use broadcast service queuing for zone events
+        // We don't have a queueItemPickedUp yet, need to add it or reuse?
+        // Let's make a simple broadcast for now, queueing later if needed.
+        this.server.to(zoneId).emit('itemPickedUp', { itemId: itemIdToPickup });
+
+        // 4. Broadcast inventoryUpdate to the specific CLIENT
+        const latestInventory = await this.inventoryService.getUserInventory(user.id); // Use getUserInventory and user.id
+        client.emit('inventoryUpdate', { inventory: latestInventory }); // Direct emit to the socket
+
+        return { success: true };
+
+    } catch (error) {
+        this.logger.error(`Error picking up item ${itemIdToPickup} for user ${user.username}: ${error.message}`, error.stack);
+        return { success: false, message: 'An error occurred while picking up the item.' };
+    }
   }
 
   // --- Chat Handler ---

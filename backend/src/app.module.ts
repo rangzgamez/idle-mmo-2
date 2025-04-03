@@ -8,6 +8,9 @@ import { GameModule } from './game/game.module';
 import { CharacterModule } from './character/character.module';
 import { EnemyModule } from './enemy/enemy.module';
 import { DebugModule } from './debug/debug.module';
+import { ItemModule } from './item/item.module';
+import { InventoryModule } from './inventory/inventory.module';
+import { LootModule } from './loot/loot.module';
 
 @Module({
   imports: [
@@ -30,6 +33,9 @@ import { DebugModule } from './debug/debug.module';
     CharacterModule,
     EnemyModule,
     DebugModule,
+    ItemModule,
+    InventoryModule,
+    LootModule,
     // Add other modules here as you create them
     // AuthModule, UserModule, CharacterModule, GameModule, etc.
   ],

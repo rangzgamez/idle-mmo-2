@@ -15,6 +15,7 @@ export interface EnemyInstance {
     baseDefense: number;
     name: string; // <-- ADDED: Name from the template for client display
     baseSpeed: number; // <-- ADDED: Speed from the template for movement
+    lootTableId: string | null; // <-- ADDED: Loot table ID from template
     // Add speed? range? from template if needed elsewhere
     // name: string;
 

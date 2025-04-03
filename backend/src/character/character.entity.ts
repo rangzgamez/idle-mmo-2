@@ -7,8 +7,12 @@ import {
     UpdateDateColumn,
     ManyToOne, // To link to User
     JoinColumn, // To specify foreign key column name
+    OneToMany, // Add this import
+    OneToOne, // Add this import
   } from 'typeorm';
   import { User } from '../user/user.entity'; // Import User entity
+  import { InventoryItem } from '../inventory/inventory.entity'; // Re-add InventoryItem import for equipment slots
+  // import { EquipmentSlot } from '../item/item.types'; // We might need this for validation/logic later
   
   @Entity('characters') // Database table name
   export class Character {
@@ -65,6 +69,14 @@ import {
     leashDistance: number;
     // ------------------------------------------------------
   
+    // --- REMOVE Relation to Inventory Items ---
+    // @OneToMany(() => InventoryItem, (item) => item.character, {
+    //   cascade: true,
+    //   // lazy: true
+    // })
+    // inventoryItems: InventoryItem[];
+    // ------------------------------------
+  
     // TODO: Define stats later (hp, mp, str, int, def, speed, etc.)
     // @Column('jsonb', { default: {} })
     // stats: Record<string, any>;
@@ -82,6 +94,66 @@ import {
     // @JoinColumn()
     // equippedWeapon: InventoryItem | null;
     // @Column({ nullable: true }) equippedWeaponId: string | null;
+  
+    // --- Equipment Slots ---
+    // Using OneToOne allows eager loading the InventoryItem if needed,
+    // and TypeORM manages the foreign key column (`equippedMainHandItemId`) automatically via @JoinColumn.
+
+    @OneToOne(() => InventoryItem, { nullable: true, eager: true, onDelete: 'SET NULL' }) // Clear slot if item deleted
+    @JoinColumn({ name: 'equippedMainHandItemId' })
+    equippedMainHand: InventoryItem | null;
+    @Column({ type: 'uuid', nullable: true }) // Explicit FK column for potential direct queries
+    equippedMainHandItemId: string | null;
+
+    @OneToOne(() => InventoryItem, { nullable: true, eager: true, onDelete: 'SET NULL' })
+    @JoinColumn({ name: 'equippedOffHandItemId' })
+    equippedOffHand: InventoryItem | null;
+    @Column({ type: 'uuid', nullable: true })
+    equippedOffHandItemId: string | null;
+
+    @OneToOne(() => InventoryItem, { nullable: true, eager: true, onDelete: 'SET NULL' })
+    @JoinColumn({ name: 'equippedHelmItemId' })
+    equippedHelm: InventoryItem | null;
+    @Column({ type: 'uuid', nullable: true })
+    equippedHelmItemId: string | null;
+
+    @OneToOne(() => InventoryItem, { nullable: true, eager: true, onDelete: 'SET NULL' })
+    @JoinColumn({ name: 'equippedArmorItemId' })
+    equippedArmor: InventoryItem | null;
+    @Column({ type: 'uuid', nullable: true })
+    equippedArmorItemId: string | null;
+
+    @OneToOne(() => InventoryItem, { nullable: true, eager: true, onDelete: 'SET NULL' })
+    @JoinColumn({ name: 'equippedGlovesItemId' })
+    equippedGloves: InventoryItem | null;
+    @Column({ type: 'uuid', nullable: true })
+    equippedGlovesItemId: string | null;
+
+    @OneToOne(() => InventoryItem, { nullable: true, eager: true, onDelete: 'SET NULL' })
+    @JoinColumn({ name: 'equippedBootsItemId' })
+    equippedBoots: InventoryItem | null;
+    @Column({ type: 'uuid', nullable: true })
+    equippedBootsItemId: string | null;
+
+    @OneToOne(() => InventoryItem, { nullable: true, eager: true, onDelete: 'SET NULL' })
+    @JoinColumn({ name: 'equippedRing1ItemId' })
+    equippedRing1: InventoryItem | null;
+    @Column({ type: 'uuid', nullable: true })
+    equippedRing1ItemId: string | null;
+
+    @OneToOne(() => InventoryItem, { nullable: true, eager: true, onDelete: 'SET NULL' })
+    @JoinColumn({ name: 'equippedRing2ItemId' })
+    equippedRing2: InventoryItem | null;
+    @Column({ type: 'uuid', nullable: true })
+    equippedRing2ItemId: string | null;
+
+    @OneToOne(() => InventoryItem, { nullable: true, eager: true, onDelete: 'SET NULL' })
+    @JoinColumn({ name: 'equippedNecklaceItemId' })
+    equippedNecklace: InventoryItem | null;
+    @Column({ type: 'uuid', nullable: true })
+    equippedNecklaceItemId: string | null;
+
+    // ----------------------
   
     @CreateDateColumn()
     createdAt: Date;

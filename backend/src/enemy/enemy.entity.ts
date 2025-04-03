@@ -1,5 +1,6 @@
 // backend/src/enemy/enemy.entity.ts
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, ManyToOne, JoinColumn } from 'typeorm';
+import { LootTable } from '../loot/loot-table.entity';
 
 @Entity()
 export class Enemy {
@@ -37,8 +38,16 @@ export class Enemy {
     canFlee: boolean;
   };
 
-  @Column({ length: 50, nullable: true })
-  lootTableId?: string; //  Optional reference to a loot table.  (Later phase)
+  @ManyToOne(() => LootTable, (table) => table.enemies, {
+    nullable: true,
+    eager: false,
+    onDelete: 'SET NULL',
+  })
+  @JoinColumn({ name: 'lootTableId' })
+  lootTable: LootTable | null;
+
+  @Column({ type: 'uuid', nullable: true })
+  lootTableId: string | null;
 
   @Column({ length: 50 })
   spriteKey: string; // Key to use for the enemy's sprite in the frontend. (e.g. "goblin")

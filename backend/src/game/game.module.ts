@@ -1,5 +1,5 @@
 // backend/src/game/game.module.ts
-import { Module } from '@nestjs/common';
+import { Module, Logger } from '@nestjs/common';
 import { GameGateway } from './game.gateway';
 import { UserModule } from '../user/user.module'; // Import UserModule
 import { CharacterModule } from '../character/character.module'; // Import CharacterModule
@@ -13,9 +13,11 @@ import { MovementService } from './movement.service'; // <-- Add this import
 import { EnemyStateService } from './enemy-state.service'; // <-- Add this import
 import { SpawningService } from './spawning.service'; // <-- Add this import
 import { BroadcastService } from './broadcast.service'; // <-- Add this import
+import { InventoryModule } from 'src/inventory/inventory.module';
+import { LootModule } from 'src/loot/loot.module';
 
 @Module({
-  imports: [UserModule, CharacterModule, EnemyModule], // Make services available for injection
+  imports: [UserModule, CharacterModule, EnemyModule, InventoryModule, LootModule], // Make services available for injection
   providers: [
     GameGateway,
     ZoneService,
@@ -27,6 +29,7 @@ import { BroadcastService } from './broadcast.service'; // <-- Add this import
     EnemyStateService,
     SpawningService,
     BroadcastService,
+    Logger,
   ],
   exports: [ZoneService, AIService]
 })

@@ -8,6 +8,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { EnemyService } from '../enemy/enemy.service'; // Import EnemyService
 import { SpawnNest } from './interfaces/spawn-nest.interface'; // Import SpawnNest
 import { Enemy } from 'src/enemy/enemy.entity'; // Import Enemy entity
+import { DroppedItem } from './interfaces/dropped-item.interface'; // Import DroppedItem
 
 // Interface for player data within a zone
 interface PlayerInZone {
@@ -34,6 +35,7 @@ interface ZoneState {
     players: Map<string, PlayerInZone>; // Existing player state
     enemies: Map<string, EnemyInstance>; // Enemy instances, keyed by id
     nests: Map<string, SpawnNest>; // <-- ADD Nests map
+    droppedItems: Map<string, DroppedItem>; // <-- ADD Dropped Items map
     // Add items map/list later
 }
 // Export this interface so CombatService can use it
@@ -75,7 +77,8 @@ export class ZoneService implements OnModuleInit {
         this.zones.set('startZone', {
             players: new Map(),
             enemies: new Map(),
-            nests: new Map() // Initialize empty nests map
+            nests: new Map(), // Initialize empty nests map
+            droppedItems: new Map(), // <-- Initialize dropped items map
         });
     }
 
@@ -147,7 +150,12 @@ export class ZoneService implements OnModuleInit {
             // If creating a new zone, decide how/if to initialize nests
             // For now, only 'startZone' has predefined nests.
             // TODO: Maybe call initializeDynamicNests here if a new zone is created?
-            this.zones.set(zoneId, { players: new Map(), enemies: new Map(), nests: new Map() });
+            this.zones.set(zoneId, {
+                 players: new Map(),
+                 enemies: new Map(),
+                 nests: new Map(),
+                 droppedItems: new Map() // <-- Initialize dropped items for new zone
+            });
         }
         const zone = this.zones.get(zoneId)!; // Zone is guaranteed to exist now
 
@@ -250,7 +258,7 @@ export class ZoneService implements OnModuleInit {
           baseAttack: enemyTemplate.baseAttack,
           baseDefense: enemyTemplate.baseDefense,
           baseSpeed: enemyTemplate.baseSpeed,
-          // Add other relevant properties if needed
+          lootTableId: enemyTemplate.lootTableId,
         };
     
         zone.enemies.set(id, newEnemy);
@@ -539,55 +547,109 @@ export class ZoneService implements OnModuleInit {
     async addEnemyFromNest(nest: SpawnNest): Promise<EnemyInstance | null> {
         const zone = this.zones.get(nest.zoneId);
         if (!zone) {
-            console.warn(`Nest ${nest.id} references non-existent zone ${nest.zoneId}.`);
+            this.logger.error(`Zone ${nest.zoneId} not found for nest ${nest.id}`);
             return null;
         }
+        if (nest.currentEnemyIds.size >= nest.maxCapacity) {
+            // this.logger.warn(`Nest ${nest.id} is already at max capacity.`);
+            return null; // At capacity
+        }
 
-        const enemyTemplate = await this.enemyService.findOne(nest.templateId);
-        if (!enemyTemplate) {
-            console.warn(`Nest ${nest.id} references non-existent enemy template ${nest.templateId}.`);
-            nest.lastSpawnCheckTime = Date.now(); // Prevent spamming checks for bad template
+        const template = await this.enemyService.findOne(nest.templateId);
+        if (!template) {
+            this.logger.error(`Enemy template ${nest.templateId} for nest ${nest.id} not found.`);
             return null;
         }
 
         const id = uuidv4();
-        // Spawn within the nest radius
-        const angle = Math.random() * Math.PI * 2;
-        const distance = Math.random() * nest.radius;
-        const position = {
-            x: nest.center.x + Math.cos(angle) * distance,
-            y: nest.center.y + Math.sin(angle) * distance,
+        // Spawn near nest center
+        const spawnAngle = Math.random() * Math.PI * 2;
+        const spawnRadius = Math.random() * nest.radius * 0.8; // Spawn within 80% of radius
+        const spawnPos = {
+            x: nest.center.x + Math.cos(spawnAngle) * spawnRadius,
+            y: nest.center.y + Math.sin(spawnAngle) * spawnRadius,
         };
 
         const newEnemy: EnemyInstance = {
             id,
-            templateId: nest.templateId,
+            templateId: template.id,
             zoneId: nest.zoneId,
-            name: enemyTemplate.name,
-            currentHealth: enemyTemplate.baseHealth,
-            position,
-            aiState: 'IDLE', // Start idle
-            baseAttack: enemyTemplate.baseAttack,
-            baseDefense: enemyTemplate.baseDefense,
-            baseSpeed: enemyTemplate.baseSpeed,
-            nestId: nest.id, // <-- Link to nest
-            anchorX: nest.center.x, // <-- Set anchor to nest center
+            name: template.name, // <-- Populate Name
+            currentHealth: template.baseHealth,
+            position: spawnPos,
+            aiState: 'IDLE',
+            baseAttack: template.baseAttack, // <-- Populate Attack
+            baseDefense: template.baseDefense, // <-- Populate Defense
+            baseSpeed: template.baseSpeed, // <-- Populate Speed
+            lootTableId: template.lootTableId, // <-- Populate Loot Table ID
+            // Nest-specific properties
+            nestId: nest.id,
+            anchorX: nest.center.x,
             anchorY: nest.center.y,
-            wanderRadius: nest.radius, // <-- Set wander radius
-            // Add other relevant properties if needed
+            wanderRadius: nest.radius,
         };
 
         zone.enemies.set(id, newEnemy);
-        nest.currentEnemyIds.add(id); // <-- Track enemy in nest
-        nest.lastSpawnCheckTime = Date.now(); // Update last spawn time for this nest
-
+        nest.currentEnemyIds.add(id); // Track the enemy in its nest
+        this.logger.log(`Spawned enemy ${template.name} (${id}) from nest ${nest.id} in zone ${nest.zoneId}`);
         return newEnemy;
     }
 
     // Helper to get all nests in a zone (potentially for debug or AI)
     getZoneNests(zoneId: string): SpawnNest[] {
         const zone = this.zones.get(zoneId);
-        if (!zone) return [];
-        return Array.from(zone.nests.values());
+        return zone ? Array.from(zone.nests.values()) : [];
+    }
+
+    // --- Dropped Item Management ---
+
+    /**
+     * Adds a DroppedItem instance to the specified zone.
+     * @param zoneId The ID of the zone.
+     * @param item The DroppedItem object to add.
+     * @returns True if the item was added, false if the zone doesn't exist.
+     */
+    addDroppedItem(zoneId: string, item: DroppedItem): boolean {
+        const zone = this.zones.get(zoneId);
+        if (!zone) {
+            this.logger.warn(`Cannot add dropped item: Zone ${zoneId} not found.`);
+            return false;
+        }
+        zone.droppedItems.set(item.id, item);
+        this.logger.verbose(`Added dropped item ${item.itemName} (${item.id}) to zone ${zoneId}`);
+        return true;
+    }
+
+    /**
+     * Removes a DroppedItem instance from the specified zone by its unique ID.
+     * @param zoneId The ID of the zone.
+     * @param itemId The unique ID of the dropped item instance.
+     * @returns The removed DroppedItem object, or null if not found or zone doesn't exist.
+     */
+    removeDroppedItem(zoneId: string, itemId: string): DroppedItem | null {
+        const zone = this.zones.get(zoneId);
+        if (!zone) {
+            this.logger.warn(`Cannot remove dropped item: Zone ${zoneId} not found.`);
+            return null;
+        }
+        const item = zone.droppedItems.get(itemId);
+        if (!item) {
+            // This might happen if despawn timer competes, not necessarily an error
+            // this.logger.warn(`Dropped item ${itemId} not found in zone ${zoneId}.`);
+            return null;
+        }
+        zone.droppedItems.delete(itemId);
+        this.logger.verbose(`Removed dropped item ${item.itemName} (${item.id}) from zone ${zoneId}`);
+        return item;
+    }
+
+    /**
+     * Gets all dropped items currently in a zone.
+     * @param zoneId The ID of the zone.
+     * @returns An array of DroppedItem objects.
+     */
+    getDroppedItems(zoneId: string): DroppedItem[] {
+        const zone = this.zones.get(zoneId);
+        return zone ? Array.from(zone.droppedItems.values()) : [];
     }
 }

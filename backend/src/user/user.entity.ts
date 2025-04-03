@@ -1,5 +1,6 @@
 // backend/src/user/user.entity.ts
 import { Character } from 'src/character/character.entity';
+import { InventoryItem } from 'src/inventory/inventory.entity';
 import {
     Entity,
     PrimaryGeneratedColumn,
@@ -28,8 +29,15 @@ import {
     @OneToMany(() => Character, (character) => character.user)
     characters: Character[];
   
+    // --- Relation to Inventory Items ---
+    @OneToMany(() => InventoryItem, (item) => item.user, {
+      cascade: true, // If user is saved, save/update inventory items too?
+      // lazy: true // Might consider lazy loading later for performance
+    })
+    inventoryItems: InventoryItem[];
+    // ------------------------------------
+  
     // @OneToMany(() => InventoryItem, item => item.owner)
-    // inventory: InventoryItem[];
   
     // @OneToMany(() => Pet, pet => pet.owner)
     // pets: Pet[];

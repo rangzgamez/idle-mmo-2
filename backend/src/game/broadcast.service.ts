@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Server } from 'socket.io';
 import { EnemyInstance } from './interfaces/enemy-instance.interface'; // For spawn data type
+import { ItemType } from '../item/item.types'; // Import ItemType for payload
 
 // Define interfaces for the data structures used in updates (can be refined)
 interface EntityUpdateData {
@@ -23,6 +24,17 @@ interface DeathData {
     type: 'character' | 'enemy';
 }
 
+// Add payload interface for dropped items
+interface DroppedItemPayload {
+    id: string;
+    itemTemplateId: string;
+    itemName: string;
+    itemType: ItemType;
+    spriteKey: string;
+    position: { x: number; y: number };
+    quantity: number;
+}
+
 type SpawnData = EnemyInstance; // The full enemy instance data for a new spawn
 
 @Injectable()
@@ -34,6 +46,7 @@ export class BroadcastService {
     private combatActionQueue: Map<string, CombatActionData[]> = new Map();
     private deathQueue: Map<string, DeathData[]> = new Map();
     private spawnQueue: Map<string, SpawnData[]> = new Map();
+    private itemDroppedQueue: Map<string, DroppedItemPayload[]> = new Map(); // Add queue
 
     // Inject Logger through the constructor
     constructor(private readonly logger: Logger) {
@@ -98,6 +111,13 @@ export class BroadcastService {
         });
     }
 
+    queueItemDropped(zoneId: string, itemPayload: DroppedItemPayload): void {
+        if (!this.itemDroppedQueue.has(zoneId)) {
+            this.itemDroppedQueue.set(zoneId, []);
+        }
+        this.itemDroppedQueue.get(zoneId)?.push(itemPayload);
+    }
+
     // --- Broadcasting Method ---
 
     /**
@@ -115,6 +135,7 @@ export class BroadcastService {
         const actions = this.combatActionQueue.get(zoneId);
         const deaths = this.deathQueue.get(zoneId);
         const spawns = this.spawnQueue.get(zoneId);
+        const itemsDropped = this.itemDroppedQueue.get(zoneId); // Get dropped items
 
         // Emit events only if there's data for them
         if (updates && updates.length > 0) {
@@ -144,6 +165,12 @@ export class BroadcastService {
             });
             this.spawnQueue.delete(zoneId); // Clear queue
              // Note: The initial entityUpdate for the spawn was queued separately and sent above.
+        }
+
+        if (itemsDropped && itemsDropped.length > 0) {
+            // Client expects { items: [...] }
+            this.server.to(zoneId).emit('itemsDropped', { items: itemsDropped });
+            this.itemDroppedQueue.delete(zoneId); // Clear queue
         }
     }
 }
