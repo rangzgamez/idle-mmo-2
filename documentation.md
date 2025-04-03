@@ -1,13 +1,13 @@
 ## **Idle Browser MMO - Project Documentation**
 
-**Version:** 0.6 (RTS Character Combat & Basic Death Handling)
-**Date:** 2025-04-02 (Adjust date as needed)
+**Version:** 0.7 (Game Loop Refactoring)
+**Date:** 2025-04-03 (Adjust date as needed)
 
 **1. Overview**
 
 This document outlines the architecture, database schema, and development plan for an Idle Browser MMO game. The game features real-time multiplayer interaction in a top-down view, RTS-style character control with formation movement, **player and enemy combat with auto-attack**, basic death/respawn mechanics, and social features like zone-based chat with bubbles.
 
-**2. Core Features (Implemented - v0.6)**
+**2. Core Features (Implemented - v0.7)**
 
 *   **Authentication:** User registration and login (REST API with JWT).
 *   **WebSocket Auth:** Secure WebSocket connections using JWT.
@@ -49,6 +49,7 @@ This document outlines the architecture, database schema, and development plan f
     *   Attack visuals (tint flash) shown via `combatAction` event.
     *   Enemy sprites are removed on `entityDied` event.
     *   Character sprites fade slightly on `entityDied` event.
+*   **Refactored Game Loop:** Server-side simulation logic previously in `GameGateway` has been split into multiple dedicated services (`GameLoopService`, `CharacterStateService`, `EnemyStateService`, `MovementService`, `SpawningService`, `BroadcastService`) for better modularity and maintainability.
 
 **3. Technology Stack (Unchanged)**
 
@@ -77,11 +78,68 @@ This document outlines the architecture, database schema, and development plan f
 |                   |                         |     - ZoneService       |
 |                   |                         |     - CombatService     |
 |                   |                         |     - AIService         |
+|                   |                         |     - GameLoopService   |
+|                   |                         |     - CharacterStateService |
+|                   |                         |     - EnemyStateService |
+|                   |                         |     - MovementService   |
+|                   |                         |     - SpawningService   |
+|                   |                         |     - BroadcastService  |
 |                   |                         |   - Debug Module        |
 +-------------------+                         +-------------------------+
 ```
 
-**5. Backend Module Breakdown (Refined)**
+**4.5 Backend Interaction Diagram (Game Tick)**
+
+```mermaid
+graph TD
+    subgraph GameModule
+        GLS[GameLoopService] -->|1. Process Chars| CSS[CharacterStateService];
+        GLS -->|2. Process Enemies| ESS[EnemyStateService];
+        GLS -->|3. Process Movement| MS[MovementService];
+        GLS -->|4. Process Spawns| SpS[SpawningService];
+        GLS -->|5. Flush Events| BS[BroadcastService];
+        
+        CSS -->|Calls| CS[CombatService];
+        CSS -->|Reads| ZS[ZoneService];
+        
+        ESS -->|Calls| AIS[AIService];
+        ESS -->|Calls| CS;
+        ESS -->|Reads/Updates| ZS;
+        
+        AIS -->|Reads| ZS;
+        
+        MS;  // MovementService is mostly self-contained logic
+        
+        SpS -->|Calls| ZS;
+        SpS -->|Calls| ES[EnemyService];
+        
+        CS -->|Updates| ZS;
+        CS -->|Reads| ES;
+        
+        BS -->|Emits via| SIOServer(Socket.IO Server);
+
+        ZS -->|Reads/Updates| DB[(Database - Implicit)];
+        ES -->|Reads| DB;
+        
+    end
+    
+    GameGateway -->|Starts| GLS;
+    GameGateway -->|Sets Server| BS;
+    
+    style GLS fill:#f9f,stroke:#333,stroke-width:2px
+    style CSS fill:#ccf,stroke:#333,stroke-width:1px
+    style ESS fill:#ccf,stroke:#333,stroke-width:1px
+    style MS fill:#cfc,stroke:#333,stroke-width:1px
+    style SpS fill:#ffc,stroke:#333,stroke-width:1px
+    style BS fill:#fcc,stroke:#333,stroke-width:1px
+    style CS fill:#eef,stroke:#333,stroke-width:1px
+    style AIS fill:#eef,stroke:#333,stroke-width:1px
+    style ZS fill:#ddf,stroke:#333,stroke-width:1px
+    style ES fill:#ddf,stroke:#333,stroke-width:1px
+```
+*(Note: This diagram focuses on the backend game loop interactions. Frontend interaction remains primarily via WebSocket events managed by `GameGateway` and `BroadcastService`)*
+
+**5. Backend Module Breakdown (Updated)**
 
 *   `AppModule`: Root module, imports all other modules.
 *   `AuthModule`: Handles user registration, login, JWT (global).
@@ -89,8 +147,14 @@ This document outlines the architecture, database schema, and development plan f
 *   `CharacterModule`: Manages character entity (`CharacterService`, `CharacterController`). Exports service.
 *   `EnemyModule`: Manages enemy template entity (`EnemyService`, `EnemyController` (optional), `Enemy` entity). Exports service.
 *   `GameModule`: Core real-time logic.
-    *   `GameGateway`: Handles WebSocket connections, auth middleware, message routing (`enterZone`, `selectParty`, `moveCommand`, `sendMessage`, `attackCommand`). **Orchestrates** the main game loop (`tickGameLoop`), **managing character state machine (idle, moving, attacking, dead, leashing, aggro, respawn)**, calling `AIService` and `CombatService`. Handles state broadcasting (`entityUpdate`, `chatMessage`, `playerJoined`, `playerLeft`, `combatAction`, `entityDied`). Injects `ZoneService`, `CharacterService`, `EnemyService`, `CombatService`, `AIService`.
-    *   `ZoneService`: Manages **runtime state** of *all dynamic entities* (players, enemies, items-TODO) within zones in memory (Maps). Handles adding/removing entities, tracking positions, targets, health, **combat state (state, anchor, attackTargetId, lastAttackTime, timeOfDeath)**, etc. Provides state snapshots and update methods. Contains enemy spawning logic. Injects `EnemyService`.
+    *   `GameGateway`: **Reduced Role.** Handles WebSocket connections, auth middleware, routing client commands (`enterZone`, `selectParty`, `moveCommand`, `sendMessage`, `attackCommand`) to update `ZoneService` state. Initializes the `GameLoopService`. Injects `ZoneService`, `GameLoopService`, `BroadcastService`, `CharacterService` (for party validation), `UserService`, `JwtService`.
+    *   `GameLoopService`: **Orchestrator.** Runs the main game tick loop (`tickGameLoop`). Iterates through zones, players, enemies. Calls specialized services for character state, enemy state, movement, and spawning. Calls `BroadcastService` to flush events at the end of each zone tick. Injects `ZoneService`, `CharacterStateService`, `EnemyStateService`, `MovementService`, `SpawningService`, `BroadcastService`.
+    *   `CharacterStateService`: **NEW.** Handles processing a single character's state per tick (death, respawn, regen, leashing, state machine logic, aggro, initiating attacks). Injects `ZoneService`, `CombatService`.
+    *   `EnemyStateService`: **NEW.** Handles processing a single enemy's state per tick (getting AI action, executing attacks). Injects `ZoneService`, `CombatService`, `AIService`.
+    *   `MovementService`: **NEW.** Calculates new entity positions based on current position, target, speed, and delta time. Used by `GameLoopService` for both characters and enemies.
+    *   `SpawningService`: **NEW.** Handles logic for checking spawn nest timers and triggering new enemy spawns via `ZoneService`. Injects `ZoneService`.
+    *   `BroadcastService`: **NEW.** Queues game events (entity updates, deaths, spawns, combat actions) per zone during a tick. Flushes queued events by emitting formatted WebSocket messages via the Socket.IO server instance at the end of each zone tick. 
+    *   `ZoneService`: Manages **runtime state** of all dynamic entities (players, enemies, items-TODO) within zones in memory (Maps). Handles adding/removing entities, tracking positions, targets, health, combat state, etc. Provides state snapshots and update methods. Used by many other services. Injects `EnemyService`.
     *   `CombatService`: Handles combat resolution logic (`handleAttack`, `calculateDamage`). Injects `ZoneService`, `EnemyService`.
     *   `AIService`: Handles AI decision-making logic (`updateEnemyAI` for enemies). Returns AI actions. Injects `ZoneService`.
 *   `DebugModule`: Provides endpoints for inspecting runtime state (`/debug/zones`). Injects `ZoneService` (via `GameModule` import).
@@ -242,16 +306,20 @@ export interface RuntimeCharacterData extends Character {
 **9. Key Concepts / Reusable Patterns (Updated)**
 
 *   **Entity Runtime State Management (`ZoneService`):** Core responsibility. Holds in-memory `Map`s for players and enemies within zones. State includes position, target, current health, **combat state (`state`, `attackTargetId`, `anchorX/Y`, `lastAttackTime`, `timeOfDeath`)**, AI state. Distinct from DB persistence.
-*   **Service-Based Logic:** Core game mechanics are encapsulated in services:
+*   **Service-Based Logic:** Core game mechanics are encapsulated in highly granular services:
+    *   `CharacterStateService`, `EnemyStateService`: Handle entity-specific state logic.
+    *   `MovementService`: Handles position calculation.
+    *   `SpawningService`: Handles enemy spawning.
     *   `CombatService`: Handles attack rules and outcomes.
-    *   `AIService`: Handles entity decision-making based on state and rules (currently enemy AI).
+    *   `AIService`: Handles entity decision-making.
     *   `ZoneService`: Manages runtime state and zone transitions.
-*   **Orchestration (`GameGateway`/`tickGameLoop`):** The gateway coordinates the game tick, **managing the character state machine (RTS logic)**, calling AI and Combat services, and broadcasting state changes based on their results.
+    *   `BroadcastService`: Handles WebSocket event emission.
+*   **Orchestration (`GameLoopService`):** The `GameLoopService` coordinates the game tick, calling the specialized services in sequence to simulate one frame of the game world.
 *   **Authoritative Server:** The backend dictates all game state (positions, health, AI state, combat state).
 *   **Client-Side Interpolation:** Sprites smoothly move towards `targetX`/`targetY`.
-*   **Event-Driven Updates:** Frontend reacts to specific server events (`entityUpdate`, `combatAction`, `entityDied`, etc.).
+*   **Event-Driven Updates:** Frontend reacts to specific server events (`entityUpdate`, `combatAction`, `entityDied`, etc.) emitted by the `BroadcastService`.
 *   **Component-Based Sprites:** Sprites manage their own visual components (labels, health bars, chat bubbles, death visuals).
-*   **State Machine (Server):** `GameGateway` uses a state machine (`idle`, `moving`, `attacking`, `dead`) for characters to manage behavior (movement, combat, leashing, respawn).
+*   **State Machine (Server):** `CharacterStateService` uses a state machine (`idle`, `moving`, `attacking`, `dead`) for characters to manage behavior (movement, combat, leashing, respawn).
 
 **10. Testing Strategy (Unchanged - Paused)**
 
@@ -259,36 +327,50 @@ export interface RuntimeCharacterData extends Character {
 *   Frontend unit testing (Vitest/Jest) for utilities. Manual testing for scenes.
 *   **Status:** Unit/Integration test implementation is currently paused to prioritize feature development, but the strategy remains defined for later implementation.
 
-**11. Core Real-time Update Flow (Example: Character Auto-Attack)**
+**11. Core Real-time Update Flow (Example: Character Auto-Attack - Updated with Services)**
 
-1.  **State Check (`GameGateway.tickGameLoop`):** Character is in `idle` state, not at anchor point.
-2.  **Aggro Scan (`GameGateway.tickGameLoop` - idle state):** Scans enemies within `aggroRange`. Finds living `EnemyInstance`.
-3.  **State Transition:** Sets `character.state` to `attacking`, sets `character.attackTargetId` to enemy's ID.
-4.  **State Check (`GameGateway.tickGameLoop` - next tick):** Character is in `attacking` state.
-5.  **Target Validation:** Confirms target enemy exists and is alive.
-6.  **Range Check:** Calculates distance. If outside `attackRange`, sets `character.targetX/Y` to enemy position. Character moves via Movement Simulation.
-7.  **Range Check (Later tick):** Character is now within `attackRange`.
-8.  **Cooldown Check:** Checks if `Date.now() >= character.lastAttackTime + character.attackSpeed`.
-9.  **Attack Execution:** If cooldown allows, calls `this.combatService.handleAttack(character, enemy, zoneId)`. Sets `character.lastAttackTime = Date.now()`.
-10. **Combat Resolution (`CombatService.handleAttack`):** Calculates damage, updates enemy health via `ZoneService`. Returns `CombatResult { damageDealt: 12, targetDied: false, targetCurrentHealth: 38 }`.
-11. **Loop Broadcasting (`GameGateway.tickGameLoop`):**
-    *   Receives `CombatResult`.
-    *   Emits `combatAction` { attackerId: `character.id`, targetId: `enemy.id`, ... }.
-    *   Adds `{ id: enemy.id, health: 38 }` to `updates` array for `entityUpdate`.
-12. **Broadcast:** Gateway sends batched `entityUpdate` and `combatAction`.
-13. **Client Reception/Update (`NetworkManager`, `GameScene`):** Updates enemy health bar, shows attack visual.
+1.  **Loop Start (`GameLoopService.tickGameLoop`):** Iterates through players/characters.
+2.  **State Check (`CharacterStateService.processCharacterTick`):** Character is in `idle` state, not at anchor point.
+3.  **Aggro Scan (`CharacterStateService.processCharacterTick` - idle state):** Scans `enemiesInZone`. Finds living `EnemyInstance` within `aggroRange`.
+4.  **State Transition (`CharacterStateService.processCharacterTick`):** Sets `character.state` to `attacking`, sets `character.attackTargetId` to enemy's ID. Returns results.
+5.  **Movement (`GameLoopService.tickGameLoop`):** Calls `MovementService.simulateMovement`. Since character is attacking and likely out of range, target is set by `CharacterStateService`, movement occurs.
+6.  **Aggregation (`GameLoopService.tickGameLoop`):** Queues position update via `BroadcastService.queueEntityUpdate`.
 
-**(Example: Enemy Death)**
-10. **Combat Resolution (`CombatService.handleAttack`):** Calculates damage, updates enemy health to 0. Returns `CombatResult { damageDealt: 15, targetDied: true, targetCurrentHealth: 0 }`.
-11. **Loop Processing (`GameGateway.tickGameLoop` - character attacking state):**
-    *   Receives `CombatResult` with `targetDied: true`.
-    *   Emits `combatAction`.
-    *   Adds enemy health update `{ id: enemy.id, health: 0 }` to `updates`.
-    *   Adds `{ entityId: enemy.id, type: 'enemy' }` to `deaths` array.
-    *   Sets `character.attackTargetId = null`, `character.state = 'idle'`.
+**(Next Tick)**
+7.  **State Check (`CharacterStateService.processCharacterTick`):** Character is in `attacking` state.
+8.  **Target Validation (`CharacterStateService.processCharacterTick`):** Confirms target enemy exists and is alive via `ZoneService`.
+9.  **Range Check (`CharacterStateService.processCharacterTick`):** Calculates distance. Assume still outside `attackRange`. Target position remains set.
+10. **Movement (`GameLoopService.tickGameLoop`):** Calls `MovementService.simulateMovement`. Character moves closer.
+11. **Aggregation (`GameLoopService.tickGameLoop`):** Queues position update via `BroadcastService.queueEntityUpdate`.
+
+**(Later Tick)**
+12. **State Check (`CharacterStateService.processCharacterTick`):** Character is in `attacking` state.
+13. **Target Validation (`CharacterStateService.processCharacterTick`):** Confirms target enemy exists and is alive.
+14. **Range Check (`CharacterStateService.processCharacterTick`):** Character is now within `attackRange`.
+15. **Cooldown Check (`CharacterStateService.processCharacterTick`):** Checks if `now >= character.lastAttackTime + character.attackSpeed`.
+16. **Attack Execution (`CharacterStateService.processCharacterTick`):** If cooldown allows, calls `this.combatService.handleAttack(character, enemy, zoneId)`. Sets `character.lastAttackTime = now`.
+17. **Combat Resolution (`CombatService.handleAttack`):** Calculates damage, updates enemy health via `ZoneService`. Returns `CombatResult { damageDealt: 12, targetDied: false, targetCurrentHealth: 38 }`.
+18. **Result Processing (`CharacterStateService.processCharacterTick`):** Receives `CombatResult`. Prepares `CharacterTickResult` including combat action and enemy health update.
+19. **Aggregation (`GameLoopService.tickGameLoop`):** Processes `CharacterTickResult`:
+    *   Queues combat action via `BroadcastService.queueCombatAction`.
+    *   Queues enemy health update via `BroadcastService.queueEntityUpdate`.
+20. **Movement (`GameLoopService.tickGameLoop`):** Calls `MovementService.simulateMovement`. Character is in range, no target set, no movement.
+21. **Flush Events (`GameLoopService.tickGameLoop`):** At end of zone processing, calls `BroadcastService.flushZoneEvents(zoneId)`.
+22. **Broadcast (`BroadcastService.flushZoneEvents`):** Emits batched `entityUpdate` and `combatAction` events.
+23. **Client Reception/Update (`NetworkManager`, `GameScene`):** Updates enemy health bar, shows attack visual.
+
+**(Example: Enemy Death - Updated)**
+17. **Combat Resolution (`CombatService.handleAttack`):** Calculates damage, updates enemy health to 0. Returns `CombatResult { damageDealt: 15, targetDied: true, targetCurrentHealth: 0 }`.
+18. **Result Processing (`CharacterStateService.processCharacterTick`):** Receives `CombatResult` with `targetDied: true`. Sets `character.attackTargetId = null`, `character.state = 'idle'`. Prepares `CharacterTickResult` indicating `targetDied = true`, including combat action and final enemy health update.
+19. **Aggregation (`GameLoopService.tickGameLoop`):** Processes `CharacterTickResult`:
+    *   Queues combat action via `BroadcastService.queueCombatAction`.
+    *   Queues enemy health update (health: 0) via `BroadcastService.queueEntityUpdate`.
+    *   Detects `targetDied: true`, queues death event via `BroadcastService.queueDeath({ entityId: enemy.id, type: 'enemy' })`.
     *   Calls `this.zoneService.removeEnemy(zoneId, enemy.id)`.
-12. **Broadcast (`GameGateway.tickGameLoop`):** Sends `entityUpdate`, `combatAction`, and `entityDied` events.
-13. **Client Reception/Update (`NetworkManager`, `GameScene`):
+20. **Movement/Aggregation (`GameLoopService.tickGameLoop`):** Character is idle, may queue position update if returning to anchor.
+21. **Flush Events (`GameLoopService.tickGameLoop`):** Calls `BroadcastService.flushZoneEvents(zoneId)`.
+22. **Broadcast (`BroadcastService.flushZoneEvents`):** Emits `entityUpdate`, `combatAction`, and `entityDied` events.
+23. **Client Reception/Update (`NetworkManager`, `GameScene`):
     *   `entityDied` handler finds enemy sprite by ID, calls `sprite.destroy()`, removes from map.
 
 **12. TODO List / Roadmap (Updated)**
@@ -329,18 +411,19 @@ export interface RuntimeCharacterData extends Character {
 *   [...] Define Pet entity, AI Service logic, feeding command.
 
 **Refinement / Future TODOs:**
-*   [ ] Refactor game loop out of `GameGateway` into a dedicated `GameLoopService`.
-*   [ ] Integrate real Character Stats (from DB/`CharacterService`) into `CombatService` (Partially done, base stats used). Define impact of other stats (Str, Agi etc.).
-*   [ ] Persist character position/zone periodically or on logout.
-*   [ ] Implement proper Tilemaps and Collision (Frontend & Backend).
-*   [ ] More sophisticated movement (Pathfinding).
-*   [ ] Different character types/classes (Melee, Ranged, Healer AI).
-*   [ ] Proper character/enemy sprites and animations.
-*   [ ] Server-side validation (movement, actions).
-*   [ ] More robust character death handling (prevent interaction fully, different visuals, maybe resurrection item/skill).
-*   [ ] Enemy respawning logic (currently just despawn on death).
-*   [ ] Scalability considerations (Redis, multiple instances).
-*   [ ] Comprehensive Unit and E2E Testing.
+*   **NEW:** Add `baseSpeed` to `Character` entity and use it in `MovementService`.
+*   **NEW:** Ensure `EnemyInstance.baseSpeed` is correctly populated in `ZoneService` (check `addEnemy` if it exists, besides `addEnemyFromNest`).
+*   Integrate real Character Stats (from DB/`CharacterService`) into `CombatService` (Partially done, base stats used). Define impact of other stats (Str, Agi etc.).
+*   Persist character position/zone periodically or on logout.
+*   Implement proper Tilemaps and Collision (Frontend & Backend).
+*   More sophisticated movement (Pathfinding).
+*   Different character types/classes (Melee, Ranged, Healer AI).
+*   Proper character/enemy sprites and animations.
+*   Server-side validation (movement, actions).
+*   More robust character death handling (prevent interaction fully, different visuals, maybe resurrection item/skill).
+*   Enemy respawning logic (currently just despawn on death).
+*   Scalability considerations (Redis, multiple instances).
+*   Comprehensive Unit and E2E Testing.
 
 **13. Continuing Development Guide (Updated)**
 
@@ -348,10 +431,15 @@ export interface RuntimeCharacterData extends Character {
 *   **Backend:** Run `npm run start:dev`. Implement features based on the chosen phase.
 *   **Frontend:** Run `npm run dev`. Implement corresponding UI and event handling.
 *   **Testing:** Manual testing is primary. Use `/debug/zones` and console logs.
-*   **Key Files for Recent Combat Changes:**
-    *   `backend/src/game/game.gateway.ts` (Major changes in `tickGameLoop` for character state)
-    *   `backend/src/game/zone.service.ts` (Added fields to `RuntimeCharacterData`)
-    *   `backend/src/character/character.entity.ts` (Added combat stat columns)
-    *   `backend/src/game/ai.service.ts` (Updated target finding, dead checks)
-    *   `frontend/src/scenes/GameScene.ts` (Added `entityDied` handler)
-    *   `frontend/src/network/NetworkManager.ts` (Added `entityDied` listener)
+*   **Key Files for Recent Refactoring (Game Loop):**
+    *   `backend/src/game/game.gateway.ts` (Handles connections, commands)
+    *   `backend/src/game/game-loop.service.ts` (Orchestrates the tick)
+    *   `backend/src/game/character-state.service.ts` (Character logic)
+    *   `backend/src/game/enemy-state.service.ts` (Enemy logic)
+    *   `backend/src/game/movement.service.ts` (Movement calculation)
+    *   `backend/src/game/spawning.service.ts` (Nest spawning logic)
+    *   `backend/src/game/broadcast.service.ts` (WebSocket event emission)
+    *   `backend/src/game/zone.service.ts` (Runtime state management)
+    *   `backend/src/game/ai.service.ts` (AI decisions)
+    *   `backend/src/game/combat.service.ts` (Combat calculations)
+    *   `backend/src/game/game.module.ts` (Service registration)
