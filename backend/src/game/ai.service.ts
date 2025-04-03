@@ -39,35 +39,51 @@ export class AIService {
         return { type: 'IDLE' };
     }
 
-    // --- Handle Engaged States (Attacking, Cooldown, Chasing) --- 
-    if (enemy.aiState === 'ATTACKING' || enemy.aiState === 'COOLDOWN' || enemy.aiState === 'CHASING') {
+    // --- Handle Engaged States (Attacking, Chasing) ---
+    if (enemy.aiState === 'ATTACKING' || enemy.aiState === 'CHASING') {
         const targetCharacter = enemy.currentTargetId ? this.zoneService.getCharacterStateById(zoneId, enemy.currentTargetId) : null;
+
+        // Check if current target is valid
         if (!targetCharacter || targetCharacter.currentHealth <= 0 || targetCharacter.state === 'dead') {
+             this.logger.verbose(`Enemy ${enemy.id} lost/invalid target ${enemy.currentTargetId}. Becoming IDLE.`);
              this.setState(enemy, zoneId, 'IDLE', null);
              enemy.currentTargetId = null;
              return { type: 'IDLE' };
         }
 
-         if (enemy.aiState === 'COOLDOWN') {
-            const timeSinceLastAttack = now - (enemy.lastAttackTime || 0);
-            if (timeSinceLastAttack < this.ATTACK_COOLDOWN) {
-                return { type: 'IDLE' };
-            } else {
-                this.setState(enemy, zoneId, 'CHASING', null);
-            }
-        }
-
+        // Target is valid, check distance
         const distanceToTarget = this.calculateDistance(enemy.position, targetCharacter);
 
+        // Check if in Attack Range
         if (distanceToTarget <= this.ENEMY_ATTACK_RANGE) {
-             this.setState(enemy, zoneId, 'ATTACKING', null);
-             enemy.lastAttackTime = now;
-             this.zoneService.updateEnemyAttackTime(zoneId, enemy.id, now);
-             return { type: 'ATTACK', targetEntityId: targetCharacter.id, targetEntityType: 'character' };
+            // --- In Range --- 
+            // Check Attack Cooldown *before* deciding to attack
+            if (now >= (enemy.lastAttackTime || 0) + this.ATTACK_COOLDOWN) {
+                // Cooldown finished: ATTACK!
+                this.setState(enemy, zoneId, 'ATTACKING', null); // Ensure state is attacking, clear movement target
+                enemy.lastAttackTime = now; // Record attack time
+                this.zoneService.updateEnemyAttackTime(zoneId, enemy.id, now); // Persist attack time
+                this.logger.verbose(`Enemy ${enemy.id} attacking ${targetCharacter.id}`);
+                return {
+                    type: 'ATTACK',
+                    targetEntityId: targetCharacter.id,
+                    targetEntityType: 'character',
+                };
+            } else {
+                // Still on Cooldown: Remain in ATTACKING state but do nothing this tick
+                this.setState(enemy, zoneId, 'ATTACKING', null); // Ensure state stays attacking, clear movement target
+                 this.logger.verbose(`Enemy ${enemy.id} on attack cooldown.`); // Changed from silly to verbose
+                return { type: 'IDLE' }; // No action while cooling down
+            }
+        } else {
+            // --- Out of Range: CHASE --- 
+            this.setState(enemy, zoneId, 'CHASING', targetCharacter);
+            this.logger.verbose(`Enemy ${enemy.id} chasing ${targetCharacter.id}`);
+            return {
+               type: 'MOVE_TO',
+               target: { x: targetCharacter.positionX!, y: targetCharacter.positionY! },
+            };
         }
-
-         this.setState(enemy, zoneId, 'CHASING', targetCharacter);
-         return { type: 'MOVE_TO', target: { x: targetCharacter.positionX!, y: targetCharacter.positionY! } };
     }
 
     // --- Handle Non-Engaged States (Idle, Wandering, Leashed) ---
@@ -79,6 +95,7 @@ export class AIService {
 
             if (distToAnchorSq > leashDistance * leashDistance) {
                 if (enemy.aiState !== 'LEASHED') {
+                    this.logger.verbose(`Enemy ${enemy.id} is leashing back to anchor.`);
                     this.setState(enemy, zoneId, 'LEASHED', { x: enemy.anchorX, y: enemy.anchorY });
                 }
                 return { type: 'MOVE_TO', target: { x: enemy.anchorX, y: enemy.anchorY } };
@@ -87,21 +104,22 @@ export class AIService {
 
         // If was leashed but now back in range
         if (enemy.aiState === 'LEASHED') {
+            this.logger.verbose(`Enemy ${enemy.id} finished leashing. Becoming IDLE.`);
             this.setState(enemy, zoneId, 'IDLE', null);
             return { type: 'IDLE' };
         }
 
-        // Wandering Logic (Only if IDLE)
+        // Logic for IDLE and WANDERING
         if (enemy.aiState === 'IDLE') {
-             // Aggro Scan
+             // Aggro Scan first when IDLE
              const closestPlayer = this.findClosestPlayer(enemy, zoneId);
              if (closestPlayer && this.calculateDistance(enemy.position, closestPlayer) <= this.ENEMY_AGGRO_RANGE) {
+                 this.logger.verbose(`Enemy ${enemy.id} aggroed on ${closestPlayer.name}. Transitioning to CHASING.`);
                  enemy.currentTargetId = closestPlayer.id;
                  this.setState(enemy, zoneId, 'CHASING', closestPlayer);
                  return { type: 'MOVE_TO', target: { x: closestPlayer.positionX!, y: closestPlayer.positionY! } };
              }
-
-             // Wander Trigger
+             // Only Wander if IDLE and no aggro
              if (enemy.anchorX !== undefined && enemy.anchorY !== undefined && enemy.wanderRadius !== undefined) {
                 if (Math.random() < this.WANDER_CHANCE) {
                     const angle = Math.random() * Math.PI * 2;
@@ -115,16 +133,13 @@ export class AIService {
                 }
              }
         }
-
-        // If Wandering, keep going
+        // Continue wandering if already doing so
         if (enemy.aiState === 'WANDERING' && enemy.target) {
              return { type: 'MOVE_TO', target: enemy.target };
         }
 
-        // Default: Remain IDLE if no other state applies
-         if (enemy.aiState !== 'IDLE') {
-             this.setState(enemy, zoneId, 'IDLE', null);
-         }
+        // Default: Remain IDLE
+         if (enemy.aiState !== 'IDLE') { this.setState(enemy, zoneId, 'IDLE', null); }
          return { type: 'IDLE' };
     }
   }
