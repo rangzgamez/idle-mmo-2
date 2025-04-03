@@ -6,6 +6,8 @@ import { AIService } from './ai.service';
 import { EnemyInstance } from './interfaces/enemy-instance.interface';
 import { CharacterStateService, CharacterTickResult } from './character-state.service';
 import { MovementService, MovementResult, Point } from './movement.service';
+import { EnemyStateService, EnemyTickResult } from './enemy-state.service';
+import { SpawningService } from './spawning.service';
 
 @Injectable()
 export class GameLoopService implements OnApplicationShutdown {
@@ -25,6 +27,8 @@ export class GameLoopService implements OnApplicationShutdown {
         private aiService: AIService,
         private characterStateService: CharacterStateService,
         private movementService: MovementService,
+        private enemyStateService: EnemyStateService,
+        private spawningService: SpawningService,
     ) {}
 
     // Method to start the loop, called by GameGateway
@@ -218,65 +222,64 @@ export class GameLoopService implements OnApplicationShutdown {
                     } // End character loop
                 } // End player loop
 
-                // --- Enemy AI & Movement Processing ---
-                const currentEnemies = this.zoneService.getZoneEnemies(zoneId); // Fetch fresh list in case some died
+                // --- Enemy AI, State & Movement Processing (Refactored) ---
+                 // Fetch fresh list in case some died from player attacks earlier in the tick
+                 const currentEnemies = this.zoneService.getZoneEnemies(zoneId);
                 for (const enemy of currentEnemies) {
-                    if (enemy.currentHealth <= 0) continue; // Skip dead enemies processed above
+                    if (enemy.currentHealth <= 0) continue; // Skip dead enemies
 
-                    const action = this.aiService.updateEnemyAI(enemy, zoneId);
+                     // --- Enemy State Processing ---
+                     const enemyTickResult: EnemyTickResult = await this.enemyStateService.processEnemyTick(
+                         enemy, // Pass mutable enemy object
+                         zoneId,
+                         now,
+                         deltaTime
+                     );
+
+                     // Process results from EnemyStateService
+                     combatActions.push(...enemyTickResult.combatActions);
+
+                     // Merge character health updates into the main updates array
+                     enemyTickResult.characterHealthUpdates.forEach(charUpdate => {
+                        const existingUpdateIndex = updates.findIndex(u => u.id === charUpdate.id);
+                        if (existingUpdateIndex > -1) {
+                            // Avoid overwriting position if already updated
+                            updates[existingUpdateIndex].health = charUpdate.health;
+                        } else {
+                            // Need character position if creating a new update entry
+                            const charState = this.zoneService.getCharacterStateById(zoneId, charUpdate.id);
+                            updates.push({ id: charUpdate.id, x: charState?.positionX, y: charState?.positionY, health: charUpdate.health });
+                        }
+                     });
+
+                     // Handle character death initiated by enemy
+                     if (enemyTickResult.targetDied) {
+                        // Find the ID of the character that died
+                        const deadCharId = enemyTickResult.characterHealthUpdates.find(upd => upd.health <= 0)?.id;
+                        if (deadCharId) {
+                             // This log is redundant as it's in EnemyStateService
+                             // this.logger.log(`Character ${deadCharId} died from attack by Enemy ${enemy.id}`);
+                             // Add to deaths array if not already added by character processing
+                            if (!deaths.some(d => d.entityId === deadCharId && d.type === 'character')) {
+                                deaths.push({ entityId: deadCharId, type: 'character' });
+                            }
+                             // Mark character as dead in updates array (ensure it's there)
+                             const deadCharUpdateIndex = updates.findIndex(u => u.id === deadCharId);
+                             // Need position for the update
+                             const charState = this.zoneService.getCharacterStateById(zoneId, deadCharId);
+                             const deadUpdate = { id: deadCharId, x: charState?.positionX, y: charState?.positionY, health: 0, state: 'dead' };
+                             if (deadCharUpdateIndex > -1) { Object.assign(updates[deadCharUpdateIndex], deadUpdate); }
+                             else { updates.push(deadUpdate); }
+                        } else {
+                            this.logger.warn(`Enemy ${enemy.id} reported targetDied, but couldn't find dead character ID in health updates.`);
+                        }
+                     }
+
+                    // --- Enemy Movement Simulation ---
                     let enemyNeedsPositionUpdate = false;
-                    let enemyHealthChanged = false; // Track if health changed this tick (unlikely here, done via combat)
-
-                    switch (action.type) {
-                        case 'ATTACK':
-                            const targetCharacterState = this.zoneService.getCharacterStateById(zoneId, action.targetEntityId);
-                            // Ensure target exists and is NOT dead
-                            if (targetCharacterState && targetCharacterState.currentHealth > 0 && targetCharacterState.state !== 'dead') {
-                                const combatResult = await this.combatService.handleAttack(enemy, targetCharacterState, zoneId);
-                                combatActions.push({ attackerId: enemy.id, targetId: action.targetEntityId, damage: combatResult.damageDealt, type: 'attack' });
-
-                                // Update character health in the updates array
-                                const charUpdateIndex = updates.findIndex(u => u.id === action.targetEntityId);
-                                if (charUpdateIndex > -1) { updates[charUpdateIndex].health = combatResult.targetCurrentHealth; }
-                                else { updates.push({ id: action.targetEntityId, x: targetCharacterState.positionX, y: targetCharacterState.positionY, health: combatResult.targetCurrentHealth }); }
-
-                                if (combatResult.targetDied) {
-                                    this.logger.log(`Character ${action.targetEntityId} died from attack by Enemy ${enemy.id}`);
-                                    // Mark character as dead in updates array
-                                    const deadCharUpdateIndex = updates.findIndex(u => u.id === action.targetEntityId);
-                                    const deadUpdate = { id: action.targetEntityId, x: targetCharacterState.positionX, y: targetCharacterState.positionY, health: 0, state: 'dead' };
-                                    if (deadCharUpdateIndex > -1) { Object.assign(updates[deadCharUpdateIndex], deadUpdate); }
-                                    else { updates.push(deadUpdate); }
-                                    // Add to deaths array for explicit death event
-                                    deaths.push({ entityId: action.targetEntityId, type: 'character' });
-                                    // The character's state will be handled in their own processing block next tick
-                                }
-                            } else {
-                                 this.logger.warn(`Enemy ${enemy.id} AI tried to attack invalid/dead target ${action.targetEntityId}. AI state was ${enemy.aiState}`);
-                                 // Optionally force AI back to IDLE or re-evaluate target
-                                 this.zoneService.setEnemyAiState(zoneId, enemy.id, 'IDLE');
-                                 enemy.target = null; // Clear target
-                            }
-                            break;
-                        case 'MOVE_TO':
-                             // Update target only if it changed
-                             if (!enemy.target || enemy.target.x !== action.target.x || enemy.target.y !== action.target.y) {
-                                 this.zoneService.setEnemyTarget(zoneId, enemy.id, action.target);
-                                 enemy.target = action.target; // Update local copy
-                             }
-                            break;
-                        case 'IDLE':
-                            // Clear target if it wasn't already null
-                            if (enemy.target) {
-                                this.zoneService.setEnemyTarget(zoneId, enemy.id, null);
-                                enemy.target = null; // Update local copy
-                            }
-                            break;
-                    }
-
-                    // Enemy Movement Simulation (Refactored)
                     const enemyCurrentPos: Point = { x: enemy.position.x, y: enemy.position.y };
-                    const enemyTargetPos: Point | null | undefined = enemy.target; // AI sets enemy.target
+                    // Ensure target is Point | null, treating undefined as null
+                    const enemyTargetPos: Point | null = enemy.target ?? null; 
 
                      if (enemyTargetPos) {
                         // Get enemy speed from entity data (assuming it exists)
@@ -302,7 +305,8 @@ export class GameLoopService implements OnApplicationShutdown {
                              enemy.target = null; // Clear target locally first
                              this.zoneService.setEnemyTarget(zoneId, enemy.id, null); // Persist cleared target
 
-                              // Let AIService decide next state based on reaching the destination
+                              // State transitions (e.g., WANDERING -> IDLE) are handled here based on reaching target
+                              // (Could potentially move into EnemyStateService after movement simulation)
                               if (enemy.aiState === 'WANDERING' || enemy.aiState === 'LEASHED') {
                                   this.zoneService.setEnemyAiState(zoneId, enemy.id, 'IDLE'); // Reached wander/leash point
                               } else if (enemy.aiState === 'CHASING') {
@@ -311,45 +315,33 @@ export class GameLoopService implements OnApplicationShutdown {
                          }
                      }
 
-                    // Add enemy to updates array if needed
-                    if (enemyNeedsPositionUpdate) {
-                        const updateIndex = updates.findIndex(u => u.id === enemy.id);
-                        if (updateIndex > -1) {
-                            updates[updateIndex].x = enemy.position.x;
-                            updates[updateIndex].y = enemy.position.y;
-                            // Health should have been updated via combatResult handling if it changed
-                        } else {
-                            // If no existing update, push new one (position only unless health changed earlier)
-                            updates.push({ id: enemy.id, x: enemy.position.x, y: enemy.position.y });
-                        }
-                    }
+                    // --- Add enemy to updates array if needed ---
+                     // Only add if position actually changed
+                     if (enemyNeedsPositionUpdate) {
+                         const updateIndex = updates.findIndex(u => u.id === enemy.id);
+                         if (updateIndex > -1) {
+                             updates[updateIndex].x = enemy.position.x;
+                             updates[updateIndex].y = enemy.position.y;
+                             // Health should have been updated via combatResult handling if it changed
+                         } else {
+                             // If no existing update, push new one (position only unless health changed earlier)
+                             updates.push({ id: enemy.id, x: enemy.position.x, y: enemy.position.y });
+                         }
+                     }
                 } // End enemy loop
 
-                // --- Nest Spawning Check ---
-                const nests = this.zoneService.getZoneNests(zoneId);
-                if (nests) { // Check if nests exist for this zone
-                    for (const nest of nests) {
-                        if (nest.currentEnemyIds.size < nest.maxCapacity) {
-                            if (now >= nest.lastSpawnCheckTime + nest.respawnDelayMs) {
-                                const newEnemy = await this.zoneService.addEnemyFromNest(nest);
-                                if (newEnemy) {
-                                   spawnedEnemies.push(newEnemy);
-                                   // Add new enemy to the updates array immediately
-                                   updates.push({ id: newEnemy.id, x: newEnemy.position.x, y: newEnemy.position.y, health: newEnemy.currentHealth, state: newEnemy.aiState });
-                                }
-                                // Update check time even if spawn failed (e.g., DB error)
-                                nest.lastSpawnCheckTime = now;
-                            }
-                        } else {
-                            // Reset check time if full, so it checks again immediately after one dies
-                            nest.lastSpawnCheckTime = now;
-                        }
-                    } // End nest spawning check loop
-                } // End if(nests)
-
+                // --- Nest Spawning Check (Refactored) ---
+                const newlySpawnedEnemies = await this.spawningService.processNestSpawns(zoneId, now);
+                if (newlySpawnedEnemies.length > 0) {
+                    spawnedEnemies.push(...newlySpawnedEnemies);
+                     // Add new enemies to the updates array immediately so clients see them
+                     newlySpawnedEnemies.forEach(newEnemy => {
+                         updates.push({ id: newEnemy.id, x: newEnemy.position.x, y: newEnemy.position.y, health: newEnemy.currentHealth, state: newEnemy.aiState });
+                     });
+                }
 
                 // --- Broadcast Updates ---
-                if (updates.length > 0) { this.server.to(zoneId).emit('entityUpdate', { updates }); }
+                if (updates.length > 0) { this.server?.to(zoneId).emit('entityUpdate', { updates }); }
                 if (spawnedEnemies.length > 0) {
                     // Broadcast individual spawn events
                     spawnedEnemies.forEach(enemy => { this.server?.to(zoneId).emit('enemySpawned', enemy); });

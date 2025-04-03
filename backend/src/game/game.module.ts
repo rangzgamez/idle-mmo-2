@@ -10,10 +10,22 @@ import { AIService } from './ai.service'; // Import the new AI Service
 import { GameLoopService } from './game-loop.service'; // <-- Add this import
 import { CharacterStateService } from './character-state.service'; // <-- Add this import
 import { MovementService } from './movement.service'; // <-- Add this import
+import { EnemyStateService } from './enemy-state.service'; // <-- Add this import
+import { SpawningService } from './spawning.service'; // <-- Add this import
 
 @Module({
   imports: [UserModule, CharacterModule, EnemyModule], // Make services available for injection
-  providers: [GameGateway, ZoneService, CombatService, AIService, GameLoopService, CharacterStateService, MovementService],
+  providers: [
+    GameGateway,
+    ZoneService,
+    CombatService,
+    AIService,
+    GameLoopService,
+    CharacterStateService,
+    MovementService,
+    EnemyStateService,
+    SpawningService,
+  ],
   exports: [ZoneService, AIService]
 })
 export class GameModule {}
