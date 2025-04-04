@@ -252,11 +252,13 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     }
   }
 
-  @SubscribeMessage('unequipItemCommand')
+  @SubscribeMessage('unequipItem')
   async handleUnequipItem(
     @MessageBody() data: { slot: EquipmentSlot, characterId: string },
     @ConnectedSocket() client: Socket,
-  ): Promise<{ success: boolean; message?: string }> { // Ack structure
+  ): Promise<{ success: boolean; message?: string }> {
+    this.logger.log(`ENTERED handleUnequipItem with data: ${JSON.stringify(data)}`); 
+
     const user = client.data.user as User;
     const party = client.data.selectedCharacters as RuntimeCharacterData[];
     const slot = data?.slot;
