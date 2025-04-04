@@ -70,7 +70,9 @@ export class ZoneService implements OnModuleInit {
     // Define Zone Boundaries (adjust as needed)
     private readonly ZONE_WIDTH = 1000;
     private readonly ZONE_HEIGHT = 1000;
-    private readonly NESTS_PER_TEMPLATE = 6; // How many nests to create per enemy type
+    // --- Reduce nest density ---
+    private readonly NESTS_PER_TEMPLATE = 3; // Was 6
+    // -------------------------
 
     constructor(private readonly enemyService: EnemyService) {
         // Initialize default zone(s) structure first
@@ -120,8 +122,10 @@ export class ZoneService implements OnModuleInit {
                     y: Math.random() * this.ZONE_HEIGHT,
                 };
                 const radius = Math.floor(Math.random() * (120 - 70 + 1)) + 70; // 70-120
-                const maxCapacity = Math.floor(Math.random() * (18 - 8 + 1)) + 8; // 8-18
-                const respawnDelayMs = Math.floor(Math.random() * (15000 - 8000 + 1)) + 8000; // 8-15 seconds
+                // --- Reduce max capacity and increase respawn delay ---
+                const maxCapacity = Math.floor(Math.random() * (8 - 3 + 1)) + 3; // Now 3-8 (was 8-18)
+                const respawnDelayMs = Math.floor(Math.random() * (45000 - 20000 + 1)) + 20000; // Now 20-45s (was 8-15s)
+                // -----------------------------------------------------
 
                 const newNest: SpawnNest = {
                     id: nestId,

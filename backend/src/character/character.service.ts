@@ -104,10 +104,16 @@ export class CharacterService {
         throw new BadRequestException(`Item '${template.name}' (${template.itemType}) cannot be equipped in calculated slot ${targetSpecificSlot}.`);
     }
 
+    // --- Assign item to character/slot --- 
     itemToEquip.equippedByCharacterId = characterId; 
     itemToEquip.equippedSlotId = targetSpecificSlot;
+    // --- Clear inventory slot --- 
+    const originalInventorySlot = itemToEquip.inventorySlot; // For logging
+    itemToEquip.inventorySlot = null; 
+    // --------------------------
+
     await this.inventoryService.saveInventoryItem(itemToEquip); 
-    this.logger.log(`Marked InventoryItem ${itemToEquip.id} as equipped by Character ${characterId} in Slot ${targetSpecificSlot}.`);
+    this.logger.log(`Item ${itemToEquip.id} (from inv slot ${originalInventorySlot}) equipped by Character ${characterId} in Slot ${targetSpecificSlot}.`);
 
     return { success: true };
   }
@@ -119,13 +125,25 @@ export class CharacterService {
       if (itemToUnequip.userId !== userId) { throw new ForbiddenException('Cannot unequip item that does not belong to user.'); }
       if (!itemToUnequip.equippedByCharacterId) { return { success: false, message: 'Item is not currently equipped.', unequippedItemId: inventoryItemId }; }
       
+      // --- Find empty slot BEFORE modifying item ---
+      const emptySlot = await this.inventoryService.findFirstEmptyInventorySlot(userId);
+      if (emptySlot === null) {
+          this.logger.warn(`User ${userId} cannot unequip item ${inventoryItemId}: Inventory full.`);
+          throw new ConflictException("Inventory is full. Cannot unequip.");
+      }
+      // --------------------------------------------
+      
       const characterId = itemToUnequip.equippedByCharacterId;
       const originalSlotId = itemToUnequip.equippedSlotId;
       
+      // --- Now update item state ---
       itemToUnequip.equippedByCharacterId = null; 
       itemToUnequip.equippedSlotId = null;
+      itemToUnequip.inventorySlot = emptySlot; // Assign to empty slot
+      // ---------------------------
+
       await this.inventoryService.saveInventoryItem(itemToUnequip); 
-      this.logger.log(`Marked InventoryItem ${itemToUnequip.id} (from slot ${originalSlotId}) as unequipped.`);
+      this.logger.log(`Marked InventoryItem ${itemToUnequip.id} (from slot ${originalSlotId}) as unequipped and moved to inventory slot ${emptySlot}.`);
   
       return { success: true, unequippedItemId: inventoryItemId };
   }

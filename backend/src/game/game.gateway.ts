@@ -29,6 +29,12 @@ import { EquipmentSlot } from '../item/item.types'; // <-- Import EquipmentSlot
 // Add pickup range constant
 const ITEM_PICKUP_RANGE = 50; // pixels
 
+// Type for moveInventoryItem message body
+interface MoveInventoryItemPayload {
+  fromIndex: number;
+  toIndex: number;
+}
+
 @WebSocketGateway({
   cors: { /* ... */ },
 })
@@ -193,8 +199,10 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
         this.server.to(zoneId).emit('itemPickedUp', { itemId: itemIdToPickup });
 
         // 4. Broadcast inventoryUpdate to the specific CLIENT
-        const latestInventory = await this.inventoryService.getUserInventory(user.id); // Use getUserInventory and user.id
-        client.emit('inventoryUpdate', { inventory: latestInventory }); // Direct emit to the socket
+        // --- Use new slots method ---
+        const latestInventorySlots = await this.inventoryService.getUserInventorySlots(user.id);
+        client.emit('inventoryUpdate', { inventory: latestInventorySlots });
+        // -------------------------
 
         return { success: true };
 
@@ -241,8 +249,10 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
         const updatedEquipment = await this.characterService.getCharacterEquipment(characterId);
         client.emit('equipmentUpdate', { characterId: characterId, equipment: updatedEquipment });
         // Also update inventory since an item was removed
-        const updatedInventory = await this.inventoryService.getUserInventory(user.id);
-        client.emit('inventoryUpdate', { inventory: updatedInventory }); 
+        // --- Use new slots method ---
+        const updatedInventorySlotsEquip = await this.inventoryService.getUserInventorySlots(user.id);
+        client.emit('inventoryUpdate', { inventory: updatedInventorySlotsEquip }); 
+        // -------------------------
 
         return { success: true };
 
@@ -293,8 +303,10 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
         // *** Broadcast equipmentUpdate and inventoryUpdate ***
         const updatedEquipment = await this.characterService.getCharacterEquipment(characterId);
         client.emit('equipmentUpdate', { characterId: characterId, equipment: updatedEquipment });
-        const updatedInventory = await this.inventoryService.getUserInventory(user.id);
-        client.emit('inventoryUpdate', { inventory: updatedInventory });
+        // --- Use new slots method ---
+        const updatedInventorySlotsUnequip = await this.inventoryService.getUserInventorySlots(user.id);
+        client.emit('inventoryUpdate', { inventory: updatedInventorySlotsUnequip });
+        // -------------------------
 
         return { success: true };
 
@@ -304,26 +316,27 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     }
   }
 
-  // --- Handler to fetch initial inventory --- 
+  // --- Request Inventory Handler ---
   @SubscribeMessage('requestInventory')
   async handleRequestInventory(
     @ConnectedSocket() client: Socket,
-  ): Promise<void> { // No ack needed, just emit back
+  ): Promise<void> { // No explicit ack needed, just send update
     const user = client.data.user as User;
     if (!user) {
-      this.logger.warn(`requestInventory rejected: User not authenticated on socket ${client.id}`);
-      return; 
+        this.logger.warn(`requestInventory rejected: User not authenticated on socket ${client.id}`);
+        client.emit('operation_error', { message: 'Not authenticated.' }); 
+        return;
     }
+
     try {
-        this.logger.verbose(`User ${user.username} requested inventory.`);
-        const currentInventory = await this.inventoryService.getUserInventory(user.id);
-        // Emit directly back to the requesting client
-        client.emit('inventoryUpdate', { inventory: currentInventory }); 
-        this.logger.verbose(`Sent inventoryUpdate to ${user.username} after request.`);
+        this.logger.log(`User ${user.id} requested inventory.`);
+        // --- Use the new service method --- 
+        const currentInventorySlots = await this.inventoryService.getUserInventorySlots(user.id);
+        // ---------------------------------
+        client.emit('inventoryUpdate', { inventory: currentInventorySlots });
     } catch (error) {
-        this.logger.error(`Error fetching inventory for user ${user.username}: ${error.message}`, error.stack);
-        // Optionally emit an error event back to the client
-        // client.emit('inventoryError', { message: 'Failed to load inventory.' });
+        this.logger.error(`[requestInventory] Error processing request for user ${user.id}:`, error);
+        client.emit('operation_error', { message: 'Server error retrieving inventory.' }); 
     }
   }
 
@@ -642,5 +655,50 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
           this.logger.error(`Error fetching equipment for char ${characterId}: ${error.message}`, error.stack);
            // client.emit('equipmentError', { message: 'Failed to load equipment.' });
       }
+  }
+
+  // --- Move Item in Inventory Handler ---
+  @SubscribeMessage('moveInventoryItem')
+  async handleMoveInventoryItem(
+    @MessageBody() data: MoveInventoryItemPayload,
+    @ConnectedSocket() client: Socket,
+  ): Promise<void> { // No explicit ack needed, just update client
+    const user = client.data.user as User;
+    if (!user) {
+        this.logger.warn(`[moveInventoryItem] Unauthorized attempt from socket ${client.id}`);
+        // Optionally emit an error event to the client
+        client.emit('operation_error', { message: 'Not authenticated.' }); 
+        return;
+    }
+
+    if (typeof data?.fromIndex !== 'number' || typeof data?.toIndex !== 'number') {
+        this.logger.warn(`[moveInventoryItem] Invalid payload from user ${user.id}:`, data);
+         client.emit('operation_error', { message: 'Invalid move payload.' }); 
+        return;
+    }
+
+    try {
+        const success = await this.inventoryService.moveItemInInventory(
+            user.id,
+            data.fromIndex,
+            data.toIndex
+        );
+
+        if (success) {
+            this.logger.log(`User ${user.id} moved item from ${data.fromIndex} to ${data.toIndex}.`);
+            // Send updated inventory back to the client
+            const updatedInventorySlots = await this.inventoryService.getUserInventorySlots(user.id);
+            client.emit('inventoryUpdate', { inventory: updatedInventorySlots });
+        } else {
+            this.logger.warn(`[moveInventoryItem] Service reported failure for user ${user.id} moving ${data.fromIndex} -> ${data.toIndex}.`);
+            // Optionally send back the current inventory state anyway to resync client
+            const currentInventorySlots = await this.inventoryService.getUserInventorySlots(user.id);
+            client.emit('inventoryUpdate', { inventory: currentInventorySlots });
+            client.emit('operation_error', { message: 'Failed to move item.' }); 
+        }
+    } catch (error) {
+        this.logger.error(`[moveInventoryItem] Error processing request for user ${user.id}:`, error);
+        client.emit('operation_error', { message: 'Server error while moving item.' }); 
+    }
   }
 }

@@ -46,6 +46,12 @@ export default class UIScene extends Phaser.Scene {
     // private equipCharInfo: HTMLSpanElement | null = null;
     private equipmentTabsContainer: HTMLElement | null = null; 
     private receivedPartyData: any[] = []; // Store data received on init
+    // --- Drag state ---
+    private draggedItemData: { item: InventoryItem, originalSlot: number } | null = null; // Store original slot index
+    private draggedElementGhost: HTMLElement | null = null; // Visual ghost element
+    // --- Inventory Data ---
+    private inventorySlotsData: (InventoryItem | null)[] = []; // Store sparse array from backend
+    // ----------------
 
     constructor() {
         // Make sure the scene key is unique and matches the one in main.ts config
@@ -140,6 +146,21 @@ export default class UIScene extends Phaser.Scene {
              this.makeDraggable(invWindowGameObject, inventoryTitleBar);
         } else {
              console.error("[UIScene] Failed to attach drag handler to Inventory: Missing elements.");
+        }
+
+        // --- Inventory Drag Listeners (Attach to the grid container) ---
+        if (this.inventoryItemsElement) {
+            this.inventoryItemsElement.addEventListener('dragstart', this.handleDragStart.bind(this));
+            this.inventoryItemsElement.addEventListener('dragover', this.handleDragOver.bind(this));
+            this.inventoryItemsElement.addEventListener('dragleave', this.handleDragLeave.bind(this));
+            this.inventoryItemsElement.addEventListener('drop', this.handleDrop.bind(this));
+            this.inventoryItemsElement.addEventListener('dragend', this.handleDragEnd.bind(this));
+            // Need to prevent default for dragover for drop to work
+            this.inventoryItemsElement.addEventListener('dragover', (event) => { 
+                event.preventDefault(); 
+            });
+        } else {
+            console.error("Inventory grid element not found, cannot attach drag listeners.");
         }
 
         // --- Create Equipment Window DOM Element (Initially Hidden) ---
@@ -490,166 +511,151 @@ export default class UIScene extends Phaser.Scene {
     }
 
     // --- Inventory Display Update ---
-    private handleInventoryUpdate(data: InventoryUpdatePayload) { 
-        console.log('[UIScene] Handling inventory update:', data);
-        this.fullInventory = data.inventory || [];
-        this.totalPages = 6; // Always 6 pages
-        // Reset to page 1 or stay on current page if still valid?
+    private handleInventoryUpdate(data: { inventory: (InventoryItem | null)[] }) { 
+        console.log('[UIScene] Handling inventory update (sparse array):', data);
+        this.inventorySlotsData = data.inventory || []; // Store the sparse array
+        // We assume a fixed size for now based on rendering logic
+        const expectedSize = 36 * 6; // 6 pages of 36 slots
+        if (this.inventorySlotsData.length !== expectedSize) {
+            // Pad with nulls if backend sent a shorter array (e.g., only up to highest occupied slot)
+            // Or truncate if longer? For now, let's pad.
+            if (this.inventorySlotsData.length < expectedSize) {
+                this.inventorySlotsData.length = expectedSize; // Extends with empty slots if needed
+                for(let i=data.inventory.length; i < expectedSize; i++) { // Fill potential new empty slots explicitly with null
+                    if(this.inventorySlotsData[i] === undefined) this.inventorySlotsData[i] = null;
+                }
+            }
+            console.warn(`Inventory data length (${data.inventory?.length}) mismatch expected (${expectedSize}). Padded/adjusted.`);
+        }
+        
+        // Pagination logic might need adjustment if total pages isn't fixed
+        this.totalPages = 6; // Keep fixed 6 pages assumption
         this.currentPage = Math.max(1, Math.min(this.currentPage, this.totalPages)); 
-        this.renderCurrentInventoryPage();
+        
+        this.renderCurrentInventoryPage(); // Render based on the new sparse data
     }
 
     // --- Renders the items for the current page --- 
     private renderCurrentInventoryPage() {
-        console.log(`[UIScene] Rendering inventory page ${this.currentPage}/${this.totalPages}`);
+        console.log(`[UIScene] Rendering inventory page ${this.currentPage}/${this.totalPages} using sparse data`);
         if (!this.inventoryItemsElement || !this.invPrevButton || !this.invNextButton || !this.invPageInfo) {
             console.error("Cannot render inventory page, elements missing.");
             return;
         }
 
-        // Clear previous items
         this.inventoryItemsElement.innerHTML = '';
-
-        // Calculate items for the current page
         const startIndex = (this.currentPage - 1) * this.itemsPerPage;
-        const endIndex = startIndex + this.itemsPerPage;
-        const pageItems = this.fullInventory.slice(startIndex, endIndex);
 
-        // Update pagination controls visibility/state
         this.invPageInfo.textContent = `Page ${this.currentPage} / ${this.totalPages}`;
         this.invPrevButton.disabled = this.currentPage <= 1;
         this.invNextButton.disabled = this.currentPage >= this.totalPages;
         this.invPrevButton.style.cursor = this.currentPage <= 1 ? 'not-allowed' : 'pointer';
         this.invNextButton.style.cursor = this.currentPage >= this.totalPages ? 'not-allowed' : 'pointer';
 
-        // Populate grid - Create 36 slots, fill with items, leave others empty
         for (let i = 0; i < this.itemsPerPage; i++) {
             const slotElement = document.createElement('div');
             slotElement.style.width = '45px';
             slotElement.style.height = '45px';
             slotElement.style.backgroundColor = 'rgba(0, 0, 0, 0.3)';
             slotElement.style.border = '1px solid #666';
-            slotElement.style.position = 'relative'; // For quantity display
-            slotElement.style.display = 'flex'; // Center content (optional)
-            slotElement.style.alignItems = 'center'; // Center content (optional)
-            slotElement.style.justifyContent = 'center'; // Center content (optional)
+            slotElement.style.position = 'relative';
+            slotElement.style.display = 'flex';
+            slotElement.style.alignItems = 'center';
+            slotElement.style.justifyContent = 'center';
+            slotElement.classList.add('inventory-slot');
+            slotElement.dataset.slotIndexOnPage = String(i); // Index 0-35 on the current page view
 
-            const item = pageItems[i];
-            // Clear previous listeners first
+            const actualSlotIndex = startIndex + i;
+            // --- Use actualSlotIndex to get item from sparse array ---
+            slotElement.dataset.inventorySlot = String(actualSlotIndex); // Store the actual DB slot index
+            const item = this.inventorySlotsData[actualSlotIndex]; 
+
+            // Reset listeners/styles
             slotElement.onmouseenter = null;
             slotElement.onmouseleave = null;
             slotElement.oncontextmenu = null; 
             slotElement.style.cursor = 'default';
+            slotElement.draggable = false; // Default to not draggable
 
             if (item) {
-                // Add logging here
-                console.log(`[UIScene Inventory Render] Item: ${item.id}, Template Exists: ${!!item.itemTemplate}, EquipSlot Value: ${item.itemTemplate?.equipSlot}`);
+                 // --- Add Drag attributes using actualSlotIndex ---
+                 slotElement.draggable = true;
+                 slotElement.dataset.inventoryItemId = item.id; 
+                 // data-inventory-slot is already set above
+                 // ------------------------
 
-                // Standard Tooltip listeners
-                slotElement.onmouseenter = () => this.showItemTooltip(item, slotElement);
-                slotElement.onmouseleave = () => this.hideItemTooltip();
-                slotElement.style.cursor = 'pointer';
+                 // Listeners
+                 slotElement.onmouseenter = () => this.showItemTooltip(item, slotElement);
+                 slotElement.onmouseleave = () => this.hideItemTooltip();
+                 slotElement.style.cursor = 'grab';
 
-                // ** Use SVG for basic shapes based on itemType **
-                let itemVisualHtml = '';
-                const itemType = item.itemTemplate?.itemType;
-                const fillColor = '#aaa'; // Default color
+                 // Render SVG
+                 let itemVisualHtml = '';
+                 const itemType = item.itemTemplate?.itemType;
+                 const fillColor = '#aaa'; 
+                 itemVisualHtml = this.getItemSvgShape(itemType, fillColor, 30); // Use helper
+                 slotElement.innerHTML = itemVisualHtml;
+                 
+                 const itemName = item.itemTemplate?.name ?? 'Unknown Item';
+                 slotElement.title = itemName;
 
-                switch (itemType) {
-                    case 'MATERIAL': // Circle
-                        itemVisualHtml = `<svg width="30" height="30" viewBox="0 0 100 100"><circle cx="50" cy="50" r="45" fill="${fillColor}" /></svg>`;
-                        break;
-                    case 'WEAPON': // Triangle (simple)
-                         itemVisualHtml = `<svg width="30" height="30" viewBox="0 0 100 100"><polygon points="50,5 95,95 5,95" fill="${fillColor}" /></svg>`;
-                        break;
-                    case 'ARMOR': // Square
-                    case 'HELM':
-                    case 'GLOVES':
-                    case 'BOOTS':
-                    case 'OFFHAND': // Treat offhand as armor for shape
-                         itemVisualHtml = `<svg width="30" height="30" viewBox="0 0 100 100"><rect x="10" y="10" width="80" height="80" fill="${fillColor}" /></svg>`;
-                        break;
-                    case 'CONSUMABLE': // Cylinder (basic rectangle for now)
-                        itemVisualHtml = `<svg width="20" height="30" viewBox="0 0 66 100"><rect x="10" y="10" width="46" height="80" rx="15" ry="15" fill="${fillColor}" /></svg>`; // Rounded rectangle approximation
-                        break;
-                    case 'RING': // Smaller Circle
-                    case 'NECKLACE':
-                         itemVisualHtml = `<svg width="25" height="25" viewBox="0 0 100 100"><circle cx="50" cy="50" r="35" fill="${fillColor}" stroke="#666" stroke-width="10" /></svg>`; // Circle with hole
-                         break;
-                    default: // Default placeholder
-                         itemVisualHtml = `<span style="font-size: 10px;">?</span>`;
-                         break;
-                }
-                slotElement.innerHTML = itemVisualHtml; // Set SVG as content
-                // slotElement.textContent = itemName.substring(0, 3); // Remove text placeholder
-                // slotElement.style.fontSize = '10px';
-                // slotElement.style.overflow = 'hidden';
-                // slotElement.style.textAlign = 'center';
-                
-                const itemName = item.itemTemplate?.name ?? 'Unknown Item';
-                slotElement.title = itemName; // Tooltip for full name
+                 // Quantity
+                 if (item.quantity > 1) {
+                      const quantityElement = document.createElement('span');
+                      quantityElement.textContent = `${item.quantity}`;
+                      // ... quantity styling ...
+                      quantityElement.style.position = 'absolute';
+                      quantityElement.style.bottom = '2px';
+                      quantityElement.style.right = '2px';
+                      quantityElement.style.fontSize = '10px';
+                      quantityElement.style.color = 'white';
+                      quantityElement.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
+                      quantityElement.style.padding = '0 2px';
+                      quantityElement.style.borderRadius = '2px';
+                      slotElement.appendChild(quantityElement);
+                 }
 
-                // Display quantity if > 1
-                if (item.quantity > 1) {
-                    const quantityElement = document.createElement('span');
-                    quantityElement.textContent = `${item.quantity}`;
-                    quantityElement.style.position = 'absolute';
-                    quantityElement.style.bottom = '2px';
-                    quantityElement.style.right = '2px';
-                    quantityElement.style.fontSize = '10px';
-                    quantityElement.style.color = 'white';
-                    quantityElement.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
-                    quantityElement.style.padding = '0 2px';
-                    quantityElement.style.borderRadius = '2px';
-                    slotElement.appendChild(quantityElement);
-                }
-
-                // --- Add Right-Click Listener for Equipping --- 
-                const isEquippable = item.itemTemplate && item.itemTemplate.equipSlot;
-                 // Log if the equip listener is being added
-                 console.log(`[UIScene Inventory Render] Item: ${item.id}, Is Equippable (adding listener?): ${isEquippable}`);
-
-                if (isEquippable) {
-                    slotElement.oncontextmenu = (event) => {
-                        event.preventDefault(); // Prevent default browser menu
-                        
-                        // Determine target character (currently selected in equip window)
-                        const partySize = this.currentParty.length;
-                        if (!this.equipWindowGameObject?.visible || partySize === 0) {
-                             console.warn("Cannot equip item: Equipment window closed or no party selected.");
-                            this.showFeedbackMessage("Open Equipment window and select a character first."); // Provide user feedback
-                            return;
-                        }
-                        const targetCharacter = this.currentParty[this.currentEquipCharacterIndex];
-                        if (!targetCharacter) {
-                            console.error("Cannot equip item: Could not find target character data.");
-                            return;
-                        }
-                        const targetCharacterId = targetCharacter.id;
-                        const inventoryItemId = item.id; // The ID of the item being clicked
-
-                        console.log(`[UIScene] Right-clicked inventory item ${inventoryItemId} to equip on character ${targetCharacterId}`);
-                        
-                        // Send equip command to server
-                        this.networkManager.sendMessage('equipItemCommand', { 
-                            inventoryItemId: inventoryItemId, 
-                            characterId: targetCharacterId
-                        });
-                        // Optional: Add brief visual feedback here (e.g., highlight slot)
-                    };
-                } else {
-                     // If not equippable, ensure cursor is default and no context menu
-                     slotElement.style.cursor = 'default';
-                     slotElement.oncontextmenu = (e) => e.preventDefault(); // Still prevent default menu maybe?
-                }
-                // ------------------------------------------------
-
+                 // Right-Click Equip
+                 const isEquippable = item.itemTemplate && item.itemTemplate.equipSlot;
+                 if (isEquippable) {
+                      slotElement.oncontextmenu = (event) => {
+                         event.preventDefault(); // Prevent default browser menu
+                         
+                         // --- Restore Equip Logic ---
+                         // 1. Check if equipment window is open and party is selected
+                         if (!this.equipWindowGameObject?.visible || this.currentParty.length === 0) {
+                              console.warn("Cannot equip item: Equipment window closed or no party selected.");
+                              this.showTemporaryMessage("Open Equipment window and select character first.");
+                              return;
+                         }
+                         // 2. Get target character
+                         const targetCharacter = this.currentParty[this.currentEquipCharacterIndex];
+                         if (!targetCharacter || !targetCharacter.id) {
+                              console.error("Cannot equip item: Could not determine target character ID.");
+                              return;
+                         }
+                         const targetCharacterId = targetCharacter.id;
+                         // 3. Get inventory item ID (from the item variable in the loop scope)
+                         const inventoryItemId = item.id;
+                         if (!inventoryItemId) {
+                              console.error("Cannot equip item: Item ID is missing.");
+                              return;
+                         }
+                         console.log(`[UIScene] Right-clicked inventory item ${inventoryItemId} to equip on character ${targetCharacterId}`);
+                         // 4. Send command to server
+                         this.networkManager.sendMessage('equipItemCommand', { 
+                              inventoryItemId: inventoryItemId, 
+                              characterId: targetCharacterId
+                         });
+                         // --- End Restore Equip Logic ---
+                      };
+                 } else {
+                      slotElement.oncontextmenu = (e) => e.preventDefault();
+                 }
             } else {
-                 // Empty slot, ensure no listeners and default cursor
-                 slotElement.onmouseenter = null;
-                 slotElement.onmouseleave = null;
-                 slotElement.oncontextmenu = null; 
-                 slotElement.style.cursor = 'default';
+                 // Empty slot
+                 slotElement.classList.add('empty-slot');
+                 slotElement.innerHTML = ''; // Ensure it's visually empty
             }
             
             this.inventoryItemsElement.appendChild(slotElement);
@@ -956,4 +962,90 @@ export default class UIScene extends Phaser.Scene {
     // REMOVED - No longer needed
     // private changeEquipmentCharacter(delta: number) { ... }
 
+    // --- Drag and Drop Handlers ---
+    private handleDragStart(event: DragEvent) {
+        const target = event.target as HTMLElement;
+        // Use data-inventory-slot now
+        if (target.classList.contains('inventory-slot') && target.dataset.inventoryItemId && target.dataset.inventorySlot) {
+            const itemId = target.dataset.inventoryItemId;
+            const inventorySlot = parseInt(target.dataset.inventorySlot, 10);
+            const item = this.inventorySlotsData[inventorySlot]; // Get from sparse array
+
+            if (item && item.id === itemId) { 
+                this.draggedItemData = { item: item, originalSlot: inventorySlot }; // Store original slot
+                event.dataTransfer?.setData('text/plain', itemId);
+                event.dataTransfer!.effectAllowed = 'move';
+                target.style.opacity = '0.5';
+                console.log(`[Drag] Start: Item ${itemId} from slot ${inventorySlot}`);
+            } else {
+                event.preventDefault();
+            }
+        } else {
+            event.preventDefault();
+        }
+    }
+
+    private handleDragOver(event: DragEvent) {
+        event.preventDefault(); // Necessary to allow drop
+        const target = event.target as HTMLElement;
+        // Provide visual feedback by highlighting potential drop target
+        if (target.classList.contains('inventory-slot')) {
+            target.style.backgroundColor = 'rgba(255, 255, 255, 0.2)'; // Highlight effect
+        }
+    }
+
+    private handleDragLeave(event: DragEvent) {
+        const target = event.target as HTMLElement;
+        // Remove highlight when dragging leaves a slot
+        if (target.classList.contains('inventory-slot')) {
+            // Reset background - Check if it was empty or had an item originally?
+            // For simplicity, just reset to the default slot bg color
+            target.style.backgroundColor = 'rgba(0, 0, 0, 0.3)'; 
+        }
+    }
+
+    private handleDrop(event: DragEvent) {
+        event.preventDefault();
+        if (!this.draggedItemData) return;
+
+        const target = event.target as HTMLElement;
+        const targetSlotDiv = target.closest('.inventory-slot') as HTMLElement | null; 
+
+        // Case 1: Dropped onto an inventory slot
+        // Use data-inventory-slot now
+        if (targetSlotDiv && targetSlotDiv.dataset.inventorySlot) {
+            const targetInventorySlot = parseInt(targetSlotDiv.dataset.inventorySlot, 10);
+            targetSlotDiv.style.backgroundColor = 'rgba(0, 0, 0, 0.3)'; // Reset background
+
+            if (this.draggedItemData.originalSlot !== targetInventorySlot) {
+                console.log(`[Drop] Item ${this.draggedItemData.item.id} from slot ${this.draggedItemData.originalSlot} dropped onto slot ${targetInventorySlot}`);
+                this.networkManager.sendMessage('moveInventoryItem', { 
+                    fromIndex: this.draggedItemData.originalSlot,
+                    toIndex: targetInventorySlot 
+                });
+            } else {
+                console.log("[Drop] Item dropped onto its own slot.");
+            }
+        }
+        // Case 2: Dropped OUTSIDE the inventory window (Drop Item)
+        else {
+             console.log(`[Drop] Item ${this.draggedItemData.item.id} dropped outside inventory (from slot ${this.draggedItemData.originalSlot})`);
+              this.networkManager.sendMessage('dropInventoryItem', { 
+                  inventoryIndex: this.draggedItemData.originalSlot // Use original DB slot index
+              });
+        }
+    }
+
+    private handleDragEnd(event: DragEvent) {
+        if (this.draggedItemData) {
+             // Find original slot element using the correct data attribute
+            const originalSlot = this.inventoryItemsElement?.querySelector(`[data-inventory-slot="${this.draggedItemData.originalSlot}"]`) as HTMLElement | null;
+            if (originalSlot) {
+                 originalSlot.style.opacity = '1';
+                 originalSlot.style.backgroundColor = 'rgba(0, 0, 0, 0.3)';
+            }
+             console.log(`[DragEnd] Drag operation finished for item from slot ${this.draggedItemData.originalSlot}`);
+        }
+        this.draggedItemData = null;
+    }
 }

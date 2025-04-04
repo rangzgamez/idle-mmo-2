@@ -55,6 +55,11 @@ export class InventoryItem {
   @Column({ type: 'enum', enum: EquipmentSlot, nullable: true })
   equippedSlotId: EquipmentSlot | null;
 
+  // --- Add inventory slot position ---
+  @Column({ type: 'integer', nullable: true, comment: '0-based index in the main inventory grid' })
+  inventorySlot: number | null;
+  // ---------------------------------
+
   @CreateDateColumn()
   createdAt: Date;
 
