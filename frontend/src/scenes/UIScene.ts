@@ -3,10 +3,17 @@ import Phaser from 'phaser';
 import { NetworkManager } from '../network/NetworkManager';
 import { EventBus } from '../EventBus';
 import { InventoryItem } from '../../../backend/src/inventory/inventory.entity'; // Adjust path if needed
+import { EquipmentSlot } from '../../../backend/src/item/item.types'; // Import EquipmentSlot
 
 // Interface for the inventory update event payload
 interface InventoryUpdatePayload {
     inventory: InventoryItem[];
+}
+
+// Add interface for the equipment update event payload
+interface EquipmentUpdatePayload {
+    characterId: string; // ID of the character whose equipment was updated
+    equipment: Partial<Record<EquipmentSlot, InventoryItem>>; // Map from slot to item
 }
 
 export default class UIScene extends Phaser.Scene {
@@ -26,10 +33,27 @@ export default class UIScene extends Phaser.Scene {
     private invPageInfo: HTMLSpanElement | null = null;
     // Add reference for the tooltip element
     private itemTooltipElement: Phaser.GameObjects.DOMElement | null = null;
+    // Add references for Equipment UI
+    private equipWindowGameObject: Phaser.GameObjects.DOMElement | null = null;
+    private equipmentSlots: Map<EquipmentSlot, HTMLElement> = new Map(); // Map to hold slot elements
+    // Add state for pagination
+    private currentParty: any[] = []; // Store the selected party info
+    private currentEquipCharacterIndex: number = 0;
+    private allCharacterEquipment: Map<string, Partial<Record<EquipmentSlot, InventoryItem>>> = new Map();
+    private equipPrevButton: HTMLButtonElement | null = null;
+    private equipNextButton: HTMLButtonElement | null = null;
+    private equipCharInfo: HTMLSpanElement | null = null;
+    private receivedPartyData: any[] = []; // Store data received on init
 
     constructor() {
         // Make sure the scene key is unique and matches the one in main.ts config
         super({ key: 'UIScene', active: false }); // Start inactive initially
+    }
+
+    // *** Add init method ***
+    init(data: { selectedParty?: any[] }) {
+        console.log("UIScene init received data:", data);
+        this.receivedPartyData = data.selectedParty || []; // Store the passed data
     }
 
     create() {
@@ -40,12 +64,13 @@ export default class UIScene extends Phaser.Scene {
         const menuBarHtml = `
             <div id="menu-bar" style="position: absolute; top: 10px; left: 10px; display: flex; gap: 5px; background-color: rgba(0,0,0,0.6); padding: 5px; border-radius: 3px;">
                 <button id="inventory-button" style="padding: 3px 6px; font-size: 12px; background-color: #555; color: white; border: 1px solid #777;">Inventory</button>
-                <button style="padding: 3px 6px; font-size: 12px; background-color: #555; color: #aaa; border: 1px solid #777; cursor: not-allowed;">Equipment</button> <!-- Placeholder -->
-                <button style="padding: 3px 6px; font-size: 12px; background-color: #555; color: #aaa; border: 1px solid #777; cursor: not-allowed;">Settings</button> <!-- Placeholder -->
-                <button style="padding: 3px 6px; font-size: 12px; background-color: #555; color: #aaa; border: 1px solid #777; cursor: not-allowed;">Logout</button> <!-- Placeholder -->
+                <button id="equipment-button" style="padding: 3px 6px; font-size: 12px; background-color: #555; color: white; border: 1px solid #777;">Equipment</button> <!-- Enable this -->
+                <button style="padding: 3px 6px; font-size: 12px; background-color: #555; color: #aaa; border: 1px solid #777; cursor: not-allowed;">Settings</button> 
+                <button style="padding: 3px 6px; font-size: 12px; background-color: #555; color: #aaa; border: 1px solid #777; cursor: not-allowed;">Logout</button> 
             </div>
         `;
         const menuBar = this.add.dom(0, 0).createFromHTML(menuBarHtml).setOrigin(0, 0);
+        console.log("UIScene: Menu Bar HTML content:", menuBar.node.innerHTML); 
 
         // --- Create Inventory Window DOM Element (Initially Hidden) ---
         const invWindowHtml = `
@@ -110,6 +135,135 @@ export default class UIScene extends Phaser.Scene {
         // --- Inventory Drag Logic (pass Phaser DOM Object and HTML Handle) ---
         this.makeDraggable(invWindowGameObject, inventoryTitleBar);
 
+        // --- Create Equipment Window DOM Element (Initially Hidden) ---
+        const equipmentSlotsHtml = Object.values(EquipmentSlot).map(slot => 
+            `<div class="equip-slot" id="equip-slot-${slot}" title="${slot}" 
+                  style="width: 50px; height: 50px; background-color: rgba(0,0,0,0.4); border: 1px dashed #888; 
+                         display: flex; align-items: center; justify-content: center; color: #666; font-size: 10px; overflow: hidden;" 
+            >${slot.substring(0,3)}</div>` // Placeholder text
+        ).join('');
+
+        const equipWindowHtml = `
+            <div id="equipment-window" style="width: 220px; /* Slightly wider for pagination */ flex-direction: column; background-color: rgba(40, 40, 40, 0.9); border: 2px solid #888; border-radius: 5px; font-family: sans-serif; z-index: 99;">
+                <div id="equipment-title-bar" style="background-color: #333; color: white; padding: 5px; font-size: 14px; font-weight: bold; cursor: grab; display: flex; justify-content: space-between; align-items: center;">
+                    <span>Equipment</span>
+                    <button id="equipment-close-button" style="background: none; border: none; color: white; font-size: 16px; cursor: pointer; line-height: 1;">&times;</button>
+                </div>
+                <!-- Character Info and Pagination -->
+                 <div id="equipment-pagination" style="display: flex; justify-content: space-between; align-items: center; padding: 5px 10px; border-bottom: 1px solid #555; background-color: rgba(0,0,0,0.2);">
+                    <button id="equip-prev-button" style="padding: 2px 5px; font-size: 12px;">&lt;</button>
+                    <span id="equip-char-info" style="color: white; font-size: 12px; text-align: center; flex-grow: 1;">Character (1/1)</span>
+                    <button id="equip-next-button" style="padding: 2px 5px; font-size: 12px;">&gt;</button>
+                </div>
+                <!-- Equipment Slot Grid (Updated Layout) -->
+                <div style="padding: 10px; display: grid; grid-template-areas: 
+                    '. helm necklace' 
+                    'mainhand armor offhand' 
+                    'gloves boots .' 
+                    '. ring1 ring2'; 
+                    grid-template-columns: 1fr 1fr 1fr; gap: 8px; justify-items: center;" >
+                    ${equipmentSlotsHtml} 
+                </div> 
+            </div>
+        `;
+        this.equipWindowGameObject = this.add.dom(0, 0).createFromHTML(equipWindowHtml).setOrigin(0, 0);
+        this.equipWindowGameObject.setPosition(Number(this.sys.game.config.width) - 240, 50); // Adjusted for wider window
+        this.equipWindowGameObject.setVisible(false);
+
+        // Get references to equipment elements
+        const equipmentButton = menuBar.getChildByID('equipment-button') as HTMLElement;
+        console.log("UIScene: Found equipmentButton element via getChildByID:", !!equipmentButton); 
+
+        const equipmentCloseButton = this.equipWindowGameObject.getChildByID('equipment-close-button') as HTMLElement;
+        const equipmentTitleBar = this.equipWindowGameObject.getChildByID('equipment-title-bar') as HTMLElement;
+         // Get references to pagination controls
+        this.equipPrevButton = this.equipWindowGameObject.getChildByID('equip-prev-button') as HTMLButtonElement;
+        this.equipNextButton = this.equipWindowGameObject.getChildByID('equip-next-button') as HTMLButtonElement;
+        this.equipCharInfo = this.equipWindowGameObject.getChildByID('equip-char-info') as HTMLSpanElement;
+
+        // Store references to slot divs in the map
+        Object.values(EquipmentSlot).forEach(slot => {
+            const slotElement = this.equipWindowGameObject?.getChildByID(`equip-slot-${slot}`) as HTMLElement;
+            if (slotElement) {
+                // Assign grid area based on slot name
+                slotElement.style.gridArea = slot.toLowerCase();
+                this.equipmentSlots.set(slot, slotElement);
+            }
+        });
+
+        if (!equipmentButton || !equipmentCloseButton || !equipmentTitleBar || !this.equipPrevButton || !this.equipNextButton || !this.equipCharInfo || this.equipmentSlots.size !== Object.keys(EquipmentSlot).length) {
+            console.error("Failed to get all equipment UI elements (including pagination)!");
+            if (!equipmentButton) {
+                console.error("UIScene: Specifically, #equipment-button was NOT found via getChildByID!");
+            }
+            // Don't return here, other UI might still work
+        }
+
+        // --- Equipment Button Listener ---
+        if (equipmentButton) {
+            console.log("UIScene: Attaching click listener to equipmentButton"); 
+            equipmentButton.addEventListener('click', () => {
+                console.log("UIScene: Equipment button clicked!"); 
+                console.log("UIScene: equipWindowGameObject available:", !!this.equipWindowGameObject); 
+
+                if (this.equipWindowGameObject) {
+                    const currentVisibility = this.equipWindowGameObject.visible;
+                    this.equipWindowGameObject.setVisible(!currentVisibility); 
+                    const newVisibility = this.equipWindowGameObject.visible;
+
+                    if (newVisibility) {
+                        console.log("UIScene: Equipment window opened."); 
+
+                        // *** Use receivedPartyData ***
+                        this.currentParty = this.receivedPartyData; // Use data passed via init
+                        console.log("UIScene: Using party data received via init:", this.currentParty); 
+                        
+                        this.currentEquipCharacterIndex = 0;
+                        this.renderCurrentCharacterEquipment(); // Render initial character
+
+                        if (this.currentParty.length > 0) {
+                            const firstCharId = this.currentParty[0].id;
+                            console.log(`UIScene: Requesting initial equipment for characterId: ${firstCharId}`); 
+                            this.networkManager.sendMessage('requestEquipment', { characterId: firstCharId });
+                        } else {
+                            console.warn("UIScene: Cannot request equipment, no party data received via init.");
+                        }
+                    } else {
+                         console.log("UIScene: Equipment window closed."); 
+                    }
+                } else {
+                     console.error("UIScene: equipWindowGameObject is null or undefined when button clicked!"); 
+                }
+            });
+        } else {
+            console.error("UIScene: Could not find #equipment-button to attach listener."); 
+        }
+        
+        // --- Equipment Close Button Listener ---
+        // Need this listener explicitly now
+        if(equipmentCloseButton) {
+            equipmentCloseButton.addEventListener('click', () => {
+                this.equipWindowGameObject?.setVisible(false);
+            });
+        }
+
+        // --- Equipment Pagination Button Listeners ---
+        if (this.equipPrevButton) {
+            this.equipPrevButton.addEventListener('click', () => {
+                this.changeEquipmentCharacter(-1);
+            });
+        }
+        if (this.equipNextButton) {
+            this.equipNextButton.addEventListener('click', () => {
+                this.changeEquipmentCharacter(1);
+            });
+        }
+
+        // --- Equipment Drag Logic ---
+        if (this.equipWindowGameObject && equipmentTitleBar) {
+            this.makeDraggable(this.equipWindowGameObject, equipmentTitleBar);
+        }
+
         // --- Create Chat DOM Elements ---
         // Use Phaser's DOM Element feature. Position it at the bottom-left corner.
         const chatContainer = this.add.dom(10, Number(this.sys.game.config.height) - 10).createFromHTML(`
@@ -144,7 +298,8 @@ export default class UIScene extends Phaser.Scene {
         // --- EventBus Listeners ---
         EventBus.on('chat-message-received', this.handleChatMessage, this);
         EventBus.on('focus-chat-input', this.focusChatInput, this);
-        EventBus.on('inventory-update', this.handleInventoryUpdate, this); // <-- Add inventory listener
+        EventBus.on('inventory-update', this.handleInventoryUpdate, this); 
+        EventBus.on('equipment-update', this.handleEquipmentUpdate, this); // <-- Add equipment listener
 
         console.log('UI Elements Created (Chat, Menu, Inventory Window).');
         if (!this.chatLogElement || !this.chatInputElement) {
@@ -222,8 +377,9 @@ export default class UIScene extends Phaser.Scene {
     shutdown() {
         console.log('UIScene shutting down, removing listeners.');
         EventBus.off('chat-message-received', this.handleChatMessage, this);
-        EventBus.off('focus-chat-input', this.focusChatInput, this); // <-- Remove focus listener
-        EventBus.off('inventory-update', this.handleInventoryUpdate, this); // <-- Remove inventory listener
+        EventBus.off('focus-chat-input', this.focusChatInput, this);
+        EventBus.off('inventory-update', this.handleInventoryUpdate, this); 
+        EventBus.off('equipment-update', this.handleEquipmentUpdate, this); // <-- Remove equipment listener
         // DOM elements added via this.add.dom are usually cleaned up automatically by Phaser
     }
 
@@ -498,6 +654,101 @@ export default class UIScene extends Phaser.Scene {
                  return `<svg width="${Math.floor(size * 0.8)}" height="${Math.floor(size * 0.8)}" viewBox="0 0 100 100"><circle cx="50" cy="50" r="35" fill="${fillColor}" stroke="#666" stroke-width="10" /></svg>`;
             default: 
                  return `<span style="font-size: ${size * 0.4}px;">?</span>`;
+        }
+    }
+
+    // --- Equipment Display Update ---
+    private handleEquipmentUpdate(data: EquipmentUpdatePayload) {
+        console.log('[UIScene] Handling equipment update for char:', data.characterId, data.equipment);
+        // Store the updated equipment data for the specific character
+        this.allCharacterEquipment.set(data.characterId, data.equipment);
+
+        // If the update is for the currently viewed character, re-render
+        const currentCharacter = this.currentParty[this.currentEquipCharacterIndex];
+        if (currentCharacter && currentCharacter.id === data.characterId) {
+            console.log('[UIScene] Equipment update is for current view, re-rendering.');
+            this.renderCurrentCharacterEquipment();
+        }
+    }
+
+    // --- Render Equipment for Current Character --- 
+    private renderCurrentCharacterEquipment() {
+        if (!this.equipWindowGameObject || !this.equipCharInfo || !this.equipPrevButton || !this.equipNextButton) {
+            console.error("Equipment window elements not ready for rendering.");
+            return;
+        }
+
+        const partySize = this.currentParty.length;
+        if (partySize === 0) {
+            this.equipCharInfo.textContent = 'No Party Selected';
+            this.equipmentSlots.forEach((slotElement, slot) => {
+                slotElement.innerHTML = '';
+                slotElement.textContent = slot.substring(0, 3);
+                slotElement.style.borderColor = '#888';
+                slotElement.title = slot;
+            });
+            this.equipPrevButton.disabled = true;
+            this.equipNextButton.disabled = true;
+            return;
+        }
+
+        // Ensure index is valid
+        this.currentEquipCharacterIndex = Math.max(0, Math.min(this.currentEquipCharacterIndex, partySize - 1));
+
+        const character = this.currentParty[this.currentEquipCharacterIndex];
+        const characterId = character?.id;
+        const characterName = character?.name ?? 'Unknown';
+        const equipmentData = this.allCharacterEquipment.get(characterId) || {};
+
+        // Update character info display
+        this.equipCharInfo.textContent = `${characterName} (${this.currentEquipCharacterIndex + 1}/${partySize})`;
+
+        console.log(`[UIScene] Rendering equipment for ${characterName} (Index: ${this.currentEquipCharacterIndex})`, equipmentData);
+
+        // Update slots
+        this.equipmentSlots.forEach((slotElement, slot) => {
+            const item = equipmentData[slot]; // Get item for this slot, if any
+            slotElement.innerHTML = ''; // Clear previous content
+            slotElement.title = slot; // Set default title to slot name
+            
+            if (item && item.itemTemplate) {
+                const template = item.itemTemplate;
+                slotElement.innerHTML = this.getItemSvgShape(template.itemType, '#ddd', 35); // Use SVG helper
+                slotElement.title = `${template.name}\n(${slot})`; // Set tooltip
+                // TODO: Add click/drag handlers later for unequipping
+                slotElement.style.borderColor = '#ccc'; // Indicate filled slot
+            } else {
+                // Show placeholder text if empty
+                slotElement.textContent = slot.substring(0, 3);
+                slotElement.style.borderColor = '#888'; // Default border color
+            }
+        });
+
+        // Update pagination button states
+        this.equipPrevButton.disabled = this.currentEquipCharacterIndex <= 0;
+        this.equipNextButton.disabled = this.currentEquipCharacterIndex >= partySize - 1;
+        this.equipPrevButton.style.cursor = this.equipPrevButton.disabled ? 'not-allowed' : 'pointer';
+        this.equipNextButton.style.cursor = this.equipNextButton.disabled ? 'not-allowed' : 'pointer';
+    }
+
+    // --- Change Character View --- 
+    private changeEquipmentCharacter(delta: number) {
+        if (!this.currentParty || this.currentParty.length <= 1) return; // No change if no party or only 1 char
+
+        const newIndex = this.currentEquipCharacterIndex + delta;
+        const partySize = this.currentParty.length;
+
+        // Clamp the index
+        this.currentEquipCharacterIndex = Math.max(0, Math.min(newIndex, partySize - 1));
+
+        console.log(`[UIScene] Changing equipment view to index: ${this.currentEquipCharacterIndex}`);
+        this.renderCurrentCharacterEquipment();
+
+        // Optional: Request equipment for the newly viewed character if we don't have it yet
+        const characterId = this.currentParty[this.currentEquipCharacterIndex]?.id;
+        if (characterId && !this.allCharacterEquipment.has(characterId)) {
+            console.log(`[UIScene] Requesting equipment for newly viewed character: ${characterId}`);
+            this.networkManager.sendMessage('requestEquipment', { characterId: characterId });
         }
     }
 }

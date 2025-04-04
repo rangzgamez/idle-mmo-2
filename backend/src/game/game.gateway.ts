@@ -24,6 +24,7 @@ import { BroadcastService } from './broadcast.service'; // Import BroadcastServi
 import { DroppedItem } from './interfaces/dropped-item.interface'; // Import DroppedItem
 import { InventoryItem } from '../inventory/inventory.entity'; // Import InventoryItem
 import { calculateDistance } from './utils/geometry.utils'; // Import distance util
+import { EquipmentSlot } from '../item/item.types'; // <-- Import EquipmentSlot
 
 // Add pickup range constant
 const ITEM_PICKUP_RANGE = 50; // pixels
@@ -200,6 +201,104 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     } catch (error) {
         this.logger.error(`Error picking up item ${itemIdToPickup} for user ${user.username}: ${error.message}`, error.stack);
         return { success: false, message: 'An error occurred while picking up the item.' };
+    }
+  }
+
+  // --- Equip/Unequip Handlers ---
+  @SubscribeMessage('equipItemCommand')
+  async handleEquipItem(
+    @MessageBody() data: { inventoryItemId: string, characterId: string /* Equip for specific char */ },
+    @ConnectedSocket() client: Socket,
+  ): Promise<{ success: boolean; message?: string }> { // Ack structure
+    const user = client.data.user as User;
+    const party = client.data.selectedCharacters as RuntimeCharacterData[]; // Use runtime data
+    const inventoryItemId = data?.inventoryItemId;
+    const characterId = data?.characterId; // ID of character equipping the item
+
+    if (!user || !party || party.length === 0) {
+      return { success: false, message: 'Invalid state.' };
+    }
+    if (!inventoryItemId || !characterId) {
+      return { success: false, message: 'Missing inventory item ID or character ID.' };
+    }
+     // Validate character ID belongs to user's party
+     const characterInParty = party.find(c => c.id === characterId);
+     if (!characterInParty) {
+        return { success: false, message: 'Character not in current party.' };
+     }
+
+    try {
+        console.log(`User ${user.username} trying to equip item ${inventoryItemId} on char ${characterId}`);
+        // *** Call CharacterService ***
+        const result = await this.characterService.equipItem(user.id, characterId, inventoryItemId);
+        // No need to check result.success, service throws on error
+        
+        // TEMP Removed
+        // await new Promise(res => setTimeout(res, 50));
+        // console.log(`PLACEHOLDER: Equip successful`);
+
+        // *** Broadcast equipmentUpdate ***
+        const updatedEquipment = await this.characterService.getCharacterEquipment(characterId);
+        client.emit('equipmentUpdate', { characterId: characterId, equipment: updatedEquipment });
+        // Also update inventory since an item was removed
+        const updatedInventory = await this.inventoryService.getUserInventory(user.id);
+        client.emit('inventoryUpdate', { inventory: updatedInventory }); 
+
+        return { success: true };
+
+    } catch (error: any) {
+        this.logger.error(`Error equipping item ${inventoryItemId} for user ${user.username}: ${error.message}`, error.stack);
+        return { success: false, message: error.message || 'Failed to equip item.' };
+    }
+  }
+
+  @SubscribeMessage('unequipItemCommand')
+  async handleUnequipItem(
+    @MessageBody() data: { slot: EquipmentSlot, characterId: string },
+    @ConnectedSocket() client: Socket,
+  ): Promise<{ success: boolean; message?: string }> { // Ack structure
+    const user = client.data.user as User;
+    const party = client.data.selectedCharacters as RuntimeCharacterData[];
+    const slot = data?.slot;
+    const characterId = data?.characterId;
+
+    if (!user || !party || party.length === 0) {
+      return { success: false, message: 'Invalid state.' };
+    }
+    if (!slot || !characterId) {
+      return { success: false, message: 'Missing slot or character ID.' };
+    }
+    // Validate slot value is a valid EquipmentSlot enum key?
+    if (!Object.values(EquipmentSlot).includes(slot)) {
+        return { success: false, message: 'Invalid equipment slot specified.' };
+    }
+     // Validate character ID belongs to user's party
+     const characterInParty = party.find(c => c.id === characterId);
+     if (!characterInParty) {
+        return { success: false, message: 'Character not in current party.' };
+     }
+
+    try {
+        console.log(`User ${user.username} trying to unequip slot ${slot} on char ${characterId}`);
+        // *** Call CharacterService ***
+        const result = await this.characterService.unequipItem(user.id, characterId, slot);
+        // No need to check result.success, service throws on error
+        
+        // TEMP Removed
+        // await new Promise(res => setTimeout(res, 50));
+        // console.log(`PLACEHOLDER: Unequip successful`);
+
+        // *** Broadcast equipmentUpdate and inventoryUpdate ***
+        const updatedEquipment = await this.characterService.getCharacterEquipment(characterId);
+        client.emit('equipmentUpdate', { characterId: characterId, equipment: updatedEquipment });
+        const updatedInventory = await this.inventoryService.getUserInventory(user.id);
+        client.emit('inventoryUpdate', { inventory: updatedInventory });
+
+        return { success: true };
+
+    } catch (error: any) {
+        this.logger.error(`Error unequipping slot ${slot} for user ${user.username}: ${error.message}`, error.stack);
+        return { success: false, message: error.message || 'Failed to unequip item.' };
     }
   }
 
@@ -510,5 +609,36 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
         }
 
         // The actual attacking/movement to target happens in the game loop
+  }
+
+  // --- Handler to request equipment state --- 
+  @SubscribeMessage('requestEquipment')
+  async handleRequestEquipment(
+      @MessageBody() data: { characterId: string },
+      @ConnectedSocket() client: Socket,
+  ): Promise<void> {
+      const user = client.data.user as User;
+      const characterId = data?.characterId;
+      if (!user || !characterId) {
+          this.logger.warn(`requestEquipment rejected: Invalid state or missing characterId.`);
+          return;
+      }
+       // Validate character belongs to user (important!)
+       const character = await this.characterService.findCharacterByIdAndUserId(characterId, user.id);
+       if (!character) {
+          this.logger.warn(`requestEquipment rejected: Character ${characterId} not found or not owned by ${user.username}.`);
+           // client.emit('equipmentError', { message: 'Character not found or invalid.' });
+           return;
+       }
+
+      try {
+          this.logger.verbose(`User ${user.username} requested equipment for char ${characterId}.`);
+          const currentEquipment = await this.characterService.getCharacterEquipment(characterId);
+          client.emit('equipmentUpdate', { characterId: characterId, equipment: currentEquipment });
+          this.logger.verbose(`Sent equipmentUpdate to ${user.username} after request.`);
+      } catch (error) {
+          this.logger.error(`Error fetching equipment for char ${characterId}: ${error.message}`, error.stack);
+           // client.emit('equipmentError', { message: 'Failed to load equipment.' });
+      }
   }
 }

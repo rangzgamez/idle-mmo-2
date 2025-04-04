@@ -181,6 +181,18 @@ export class NetworkManager {
         });
         // ++++++++++++++++++++++++++++++++++++++++
 
+        // +++ ADDED: Listen for equipment updates +++
+        this.socket.on('equipmentUpdate', (data: { characterId: string, equipment: any }) => { // Use 'any' for now, refine later
+            console.log('[NetworkManager] Received "equipmentUpdate" event:', data);
+            if (data && data.characterId && data.equipment) {
+                EventBus.emit('equipment-update', data);
+                console.log('[NetworkManager] Emitted "equipment-update" to EventBus.');
+            } else {
+                console.warn('[NetworkManager] Received invalid "equipmentUpdate" data format:', data);
+            }
+        });
+        // +++++++++++++++++++++++++++++++++++++++
+
         // Existing listeners (keep if needed)
         // this.socket.on('chatMessage', (data) => { /* ... */ });
     }

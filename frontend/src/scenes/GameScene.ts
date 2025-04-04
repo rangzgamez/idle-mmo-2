@@ -123,7 +123,7 @@ export default class GameScene extends Phaser.Scene {
         // --- Launch UI Scene ---
         // Use scene.launch to run it in parallel with this scene
         console.log('Launching UIScene...');
-        this.scene.launch('UIScene');
+        this.scene.launch('UIScene', { selectedParty: this.selectedPartyData });
         this.uiSceneRef = this.scene.get('UIScene') as UIScene; // Get reference
 
         // --- Global Enter Key Listener ---
