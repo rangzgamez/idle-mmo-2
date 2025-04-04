@@ -172,6 +172,11 @@ export default class GameScene extends Phaser.Scene {
                      this.cameras.main.setZoom(1.7); // Zoom in a bit
                  }
 
+                 // --- Request Initial Inventory --- 
+                 console.log('[GameScene] Requesting initial inventory...');
+                 this.networkManager.sendMessage('requestInventory');
+                 // --------------------------------
+
             } else {
                 console.error(`Failed to enter zone ${zoneId}:`, response?.message);
                 // Handle error - maybe go back to character select?

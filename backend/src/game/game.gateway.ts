@@ -203,6 +203,29 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     }
   }
 
+  // --- Handler to fetch initial inventory --- 
+  @SubscribeMessage('requestInventory')
+  async handleRequestInventory(
+    @ConnectedSocket() client: Socket,
+  ): Promise<void> { // No ack needed, just emit back
+    const user = client.data.user as User;
+    if (!user) {
+      this.logger.warn(`requestInventory rejected: User not authenticated on socket ${client.id}`);
+      return; 
+    }
+    try {
+        this.logger.verbose(`User ${user.username} requested inventory.`);
+        const currentInventory = await this.inventoryService.getUserInventory(user.id);
+        // Emit directly back to the requesting client
+        client.emit('inventoryUpdate', { inventory: currentInventory }); 
+        this.logger.verbose(`Sent inventoryUpdate to ${user.username} after request.`);
+    } catch (error) {
+        this.logger.error(`Error fetching inventory for user ${user.username}: ${error.message}`, error.stack);
+        // Optionally emit an error event back to the client
+        // client.emit('inventoryError', { message: 'Failed to load inventory.' });
+    }
+  }
+
   // --- Chat Handler ---
   @SubscribeMessage('sendMessage')
   handleSendMessage(

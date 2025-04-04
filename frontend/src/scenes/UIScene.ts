@@ -38,50 +38,52 @@ export default class UIScene extends Phaser.Scene {
 
         // --- Create Inventory Window DOM Element (Initially Hidden) ---
         const invWindowHtml = `
-            <div id="inventory-window" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 300px; max-height: 400px; display: none; flex-direction: column; background-color: rgba(40, 40, 40, 0.9); border: 2px solid #888; border-radius: 5px; font-family: sans-serif; z-index: 100;">
+            <div id="inventory-window" style="width: 300px; max-height: 400px; flex-direction: column; background-color: rgba(40, 40, 40, 0.9); border: 2px solid #888; border-radius: 5px; font-family: sans-serif; z-index: 100;"> 
                 <div id="inventory-title-bar" style="background-color: #333; color: white; padding: 5px; font-size: 14px; font-weight: bold; cursor: grab; display: flex; justify-content: space-between; align-items: center;">
                     <span>Inventory</span>
                     <button id="inventory-close-button" style="background: none; border: none; color: white; font-size: 16px; cursor: pointer; line-height: 1;">&times;</button>
                 </div>
                 <div id="inventory-items" style="padding: 10px; color: white; font-size: 12px; overflow-y: auto; flex-grow: 1;">
-                    <!-- Items will be populated here -->
                     Inventory is empty.
                 </div>
             </div>
         `;
-        const invWindow = this.add.dom(0, 0).createFromHTML(invWindowHtml).setOrigin(0, 0);
-        // Move inventory window to center initially (setOrigin(0,0) makes position relative to top-left)
-        invWindow.setPosition(Number(this.sys.game.config.width)/2 - 150, Number(this.sys.game.config.height)/2 - 200); 
+        // Create the Phaser DOM Element
+        const invWindowGameObject = this.add.dom(0, 0).createFromHTML(invWindowHtml).setOrigin(0, 0);
+        // Position the Phaser DOM Element (wrapper) - Under menu bar
+        const initialInvX = 10;
+        const initialInvY = 50; // Approx below menu bar (10px top + ~30px height + 10px gap)
+        invWindowGameObject.setPosition(initialInvX, initialInvY); 
+        invWindowGameObject.setVisible(false); // Start hidden using Phaser's visibility
 
-        // Get references to inventory elements
-        this.inventoryWindowElement = invWindow.getChildByID('inventory-window') as HTMLElement;
-        this.inventoryItemsElement = invWindow.getChildByID('inventory-items') as HTMLElement;
+        // Get references to HTML elements INSIDE the container
+        const inventoryWindowElement = invWindowGameObject.getChildByID('inventory-window') as HTMLElement;
+        this.inventoryItemsElement = invWindowGameObject.getChildByID('inventory-items') as HTMLElement;
         const inventoryButton = menuBar.getChildByID('inventory-button') as HTMLElement;
-        const inventoryCloseButton = invWindow.getChildByID('inventory-close-button') as HTMLElement;
-        const inventoryTitleBar = invWindow.getChildByID('inventory-title-bar') as HTMLElement;
+        const inventoryCloseButton = invWindowGameObject.getChildByID('inventory-close-button') as HTMLElement;
+        const inventoryTitleBar = invWindowGameObject.getChildByID('inventory-title-bar') as HTMLElement;
 
-        if (!this.inventoryWindowElement || !this.inventoryItemsElement || !inventoryButton || !inventoryCloseButton || !inventoryTitleBar) {
+        if (!inventoryWindowElement || !this.inventoryItemsElement || !inventoryButton || !inventoryCloseButton || !inventoryTitleBar) {
             console.error("Failed to get all inventory UI elements!");
-            return;
+            return; // Exit early if elements aren't found
         }
+
+        // Store reference if needed elsewhere (maybe not necessary now)
+        // this.inventoryWindowElement = inventoryWindowElement;
 
         // --- Inventory Button Listener ---
         inventoryButton.addEventListener('click', () => {
-            if (this.inventoryWindowElement) {
-                const currentDisplay = this.inventoryWindowElement.style.display;
-                this.inventoryWindowElement.style.display = (currentDisplay === 'none' || currentDisplay === '') ? 'flex' : 'none';
-            }
+            // Toggle visibility using Phaser DOM element
+            invWindowGameObject.setVisible(!invWindowGameObject.visible);
         });
 
         // --- Inventory Close Button Listener ---
         inventoryCloseButton.addEventListener('click', () => {
-            if (this.inventoryWindowElement) {
-                this.inventoryWindowElement.style.display = 'none';
-            }
+             invWindowGameObject.setVisible(false);
         });
 
-        // --- Inventory Drag Logic ---
-        this.makeDraggable(this.inventoryWindowElement, inventoryTitleBar);
+        // --- Inventory Drag Logic (pass Phaser DOM Object and HTML Handle) ---
+        this.makeDraggable(invWindowGameObject, inventoryTitleBar);
 
         // --- Create Chat DOM Elements ---
         // Use Phaser's DOM Element feature. Position it at the bottom-left corner.
@@ -101,14 +103,15 @@ export default class UIScene extends Phaser.Scene {
         // --- Input Handling ---
         chatContainer.addListener('click'); // Dummy listener to allow focus
         this.input.keyboard?.on('keydown', (event: KeyboardEvent) => {
-            if (document.activeElement === this.chatInputElement || document.activeElement === this.inventoryWindowElement || this.inventoryWindowElement?.contains(document.activeElement)) {
+            // Update focus check for nested elements
+            if (document.activeElement === this.chatInputElement || invWindowGameObject.node.contains(document.activeElement)) {
                 event.stopPropagation(); // Stop Phaser if chat or inventory window elements have focus
                 if (event.key === 'Enter' && document.activeElement === this.chatInputElement) {
                     this.handleSendMessage();
                 }
                  // Add ESC key to close inventory if it's open
-                 if (event.key === 'Escape' && this.inventoryWindowElement && this.inventoryWindowElement.style.display !== 'none') {
-                    this.inventoryWindowElement.style.display = 'none';
+                 if (event.key === 'Escape' && invWindowGameObject.visible) { // Check Phaser visibility
+                    invWindowGameObject.setVisible(false);
                 }
             }
         });
@@ -219,7 +222,8 @@ export default class UIScene extends Phaser.Scene {
     }
 
     // Method to make the inventory window draggable
-    private makeDraggable(element: HTMLElement, handle: HTMLElement) {
+    // Takes the Phaser DOM Element and the HTML Handle element
+    private makeDraggable(domGameObject: Phaser.GameObjects.DOMElement, handle: HTMLElement) {
         let isDragging = false;
         let offsetX = 0;
         let offsetY = 0;
@@ -227,34 +231,35 @@ export default class UIScene extends Phaser.Scene {
         handle.style.cursor = 'grab';
 
         handle.onmousedown = (e) => {
+            // No need for extensive logging now, hopefully this works
             isDragging = true;
-            // Calculate offset from the element's top-left corner to the mouse click point
-            offsetX = e.clientX - element.offsetLeft;
-            offsetY = e.clientY - element.offsetTop;
+            // Calculate offset based on mouse click relative to the DOM Element's top-left (x, y)
+            offsetX = e.clientX - domGameObject.x;
+            offsetY = e.clientY - domGameObject.y;
+            
             handle.style.cursor = 'grabbing';
-            // Prevent text selection while dragging
             e.preventDefault(); 
         };
 
         document.onmousemove = (e) => {
             if (!isDragging) return;
 
-            // Calculate new position based on mouse position and initial offset
+            // Calculate new *absolute* position for the DOM Element
             let newX = e.clientX - offsetX;
             let newY = e.clientY - offsetY;
 
-            // Basic boundary check (optional, can be improved)
-            const gameWidth = Number(this.sys.game.config.width);
-            const gameHeight = Number(this.sys.game.config.height);
-            newX = Math.max(0, Math.min(newX, gameWidth - element.offsetWidth));
-            newY = Math.max(0, Math.min(newY, gameHeight - element.offsetHeight));
+            // Boundary check using scale manager and element *visual* dimensions
+            const gameWidth = this.scale.width;
+            const gameHeight = this.scale.height;
+            // Use offsetWidth/Height of the actual #inventory-window div for size
+            const elementWidth = (domGameObject.node as HTMLElement)?.querySelector('#inventory-window')?.clientWidth ?? 300; // Fallback width
+            const elementHeight = (domGameObject.node as HTMLElement)?.querySelector('#inventory-window')?.clientHeight ?? 400; // Fallback height
+            
+            newX = Math.max(0, Math.min(newX, gameWidth - elementWidth));
+            newY = Math.max(0, Math.min(newY, gameHeight - elementHeight));
 
-            element.style.left = `${newX}px`;
-            element.style.top = `${newY}px`;
-             // Important: Remove transform after initial positioning if dragging
-             if (element.style.transform) {
-                 element.style.transform = ''; 
-             }
+            // Apply the new position using Phaser's method
+            domGameObject.setPosition(newX, newY);
         };
 
         document.onmouseup = () => {
@@ -264,7 +269,6 @@ export default class UIScene extends Phaser.Scene {
             }
         };
 
-        // Release drag if mouse leaves the window (important!)
         document.onmouseleave = () => {
             if (isDragging) {
                 isDragging = false;
