@@ -169,6 +169,18 @@ export class NetworkManager {
         });
         // ++++++++++++++++++++++++++++++++++++++++
 
+        // +++ ADDED: Listen for inventory updates (direct to player) +++
+        this.socket.on('inventoryUpdate', (data: { inventory: any[] }) => {
+            console.log('[NetworkManager] Received "inventoryUpdate" event:', data);
+            if (data && data.inventory && Array.isArray(data.inventory)) {
+                EventBus.emit('inventory-update', data);
+                console.log('[NetworkManager] Emitted "inventory-update" to EventBus.');
+            } else {
+                console.warn('[NetworkManager] Received invalid "inventoryUpdate" data format:', data);
+            }
+        });
+        // ++++++++++++++++++++++++++++++++++++++++
+
         // Existing listeners (keep if needed)
         // this.socket.on('chatMessage', (data) => { /* ... */ });
     }
