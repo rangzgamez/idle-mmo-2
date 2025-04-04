@@ -493,11 +493,11 @@ export class InventoryItem {
 **➡️ Phase 6: Inventory, Loot & Equipment (Partially Complete)**
 1.  [X] Backend: Define `ItemTemplate` and `InventoryItem` entities & migrations. (**Added `inventorySlot`**)
 2.  [X] Backend: Implement `InventoryModule` and `InventoryService` (add/remove items, **manage slots**).
-3.  [ ] Backend: Implement `LootService` and configure basic loot tables.
-4.  [ ] Backend: Trigger loot drops on enemy death (`LootService`). Add `DroppedItem` state to `ZoneService`. Broadcast `itemDropped`.
-5.  [ ] Backend: Implement `pickupItemCommand` handler (validate range, add to inventory via `InventoryService`, remove from zone). Broadcast `itemPickedUp` and `inventoryUpdate`.
-6.  [ ] Frontend: Display dropped item sprites based on `itemDropped`.
-7.  [ ] Frontend: Handle clicking items -> send `pickupItemCommand`. Remove sprite on `itemPickedUp`.
+3.  [X] Backend: Implement `LootService` and configure basic loot tables. (**Basic implementation done**)
+4.  [X] Backend: Trigger loot drops on enemy death (`LootService`). Add `DroppedItem` state to `ZoneService`. Broadcast `itemDropped`. (**Basic implementation done**)
+5.  [X] Backend: Implement `pickupItemCommand` handler (validate range, add to inventory via `InventoryService`, remove from zone). Broadcast `itemPickedUp` and `inventoryUpdate`. (**Basic implementation done**)
+6.  [X] Frontend: Display dropped item sprites based on `itemDropped`. (**Basic implementation done**)
+7.  [X] Frontend: Handle clicking items -> send `pickupItemCommand`. Remove sprite on `itemPickedUp`. (**Basic implementation done**)
 8.  [X] Frontend: Basic Inventory UI (in `UIScene`) to display items from `inventoryUpdate` (**Grid, Slots, Drag/Drop Move**).
 9.  [X] Backend: Add `equippedSlotId` and `inventorySlot` to `InventoryItem` entity.
 10. [X] Backend: Implement `equipItem` / `unequipItem` logic in `InventoryService`/`CharacterService`. Broadcast `equipmentUpdate` & `inventoryUpdate`. (**Handles `inventorySlot` clearing/assignment**)
@@ -517,6 +517,7 @@ export class InventoryItem {
 **Refinement / Future TODOs:**
 *   **NEW:** Add `baseSpeed` to `Character` entity and use it in `MovementService`.
 *   **NEW:** Ensure `EnemyInstance.baseSpeed` is correctly populated in `ZoneService` (check `addEnemy` if it exists, besides `addEnemyFromNest`).
+*   **NEW:** Loot System Enhancements (e.g., proper tables, rarity, dropped item persistence/visuals).
 *   Integrate real Character Stats (from DB/`CharacterService`) into `CombatService` (Partially done, base stats used). Define impact of other stats (Str, Agi etc.).
 *   Persist character position/zone periodically or on logout.
 *   Implement proper Tilemaps and Collision (Frontend & Backend).
@@ -531,7 +532,7 @@ export class InventoryItem {
 
 **13. Continuing Development Guide (Updated)**
 
-*   **Focus:** Next steps are the remaining items in Phase 6: Loot Drops and Pickup.
+*   **Focus:** Next steps are Phase 7: Experience & Leveling.
 *   **Backend:** Run `npm run start:dev`. Implement features based on the chosen phase.
 *   **Frontend:** Run `npm run dev`. Implement corresponding UI and event handling.
 *   **Testing:** Manual testing is primary. Use `/debug/zones` and console logs.
