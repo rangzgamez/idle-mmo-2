@@ -99,59 +99,59 @@ import {
     // Using OneToOne allows eager loading the InventoryItem if needed,
     // and TypeORM manages the foreign key column (`equippedMainHandItemId`) automatically via @JoinColumn.
 
-    @OneToOne(() => InventoryItem, { nullable: true, eager: true, onDelete: 'SET NULL' }) // Clear slot if item deleted
-    @JoinColumn({ name: 'equippedMainHandItemId' })
-    equippedMainHand: InventoryItem | null;
-    @Column({ type: 'uuid', nullable: true }) // Explicit FK column for potential direct queries
-    equippedMainHandItemId: string | null;
+    // @OneToOne(() => InventoryItem, { nullable: true, eager: true, onDelete: 'SET NULL' }) // Clear slot if item deleted
+    // @JoinColumn({ name: 'equippedMainHandItemId' })
+    // equippedMainHand: InventoryItem | null;
+    // @Column({ type: 'uuid', nullable: true }) // Explicit FK column for potential direct queries
+    // equippedMainHandItemId: string | null;
 
-    @OneToOne(() => InventoryItem, { nullable: true, eager: true, onDelete: 'SET NULL' })
-    @JoinColumn({ name: 'equippedOffHandItemId' })
-    equippedOffHand: InventoryItem | null;
-    @Column({ type: 'uuid', nullable: true })
-    equippedOffHandItemId: string | null;
+    // @OneToOne(() => InventoryItem, { nullable: true, eager: true, onDelete: 'SET NULL' })
+    // @JoinColumn({ name: 'equippedOffHandItemId' })
+    // equippedOffHand: InventoryItem | null;
+    // @Column({ type: 'uuid', nullable: true })
+    // equippedOffHandItemId: string | null;
 
-    @OneToOne(() => InventoryItem, { nullable: true, eager: true, onDelete: 'SET NULL' })
-    @JoinColumn({ name: 'equippedHelmItemId' })
-    equippedHelm: InventoryItem | null;
-    @Column({ type: 'uuid', nullable: true })
-    equippedHelmItemId: string | null;
+    // @OneToOne(() => InventoryItem, { nullable: true, eager: true, onDelete: 'SET NULL' })
+    // @JoinColumn({ name: 'equippedHelmItemId' })
+    // equippedHelm: InventoryItem | null;
+    // @Column({ type: 'uuid', nullable: true })
+    // equippedHelmItemId: string | null;
 
-    @OneToOne(() => InventoryItem, { nullable: true, eager: true, onDelete: 'SET NULL' })
-    @JoinColumn({ name: 'equippedArmorItemId' })
-    equippedArmor: InventoryItem | null;
-    @Column({ type: 'uuid', nullable: true })
-    equippedArmorItemId: string | null;
+    // @OneToOne(() => InventoryItem, { nullable: true, eager: true, onDelete: 'SET NULL' })
+    // @JoinColumn({ name: 'equippedArmorItemId' })
+    // equippedArmor: InventoryItem | null;
+    // @Column({ type: 'uuid', nullable: true })
+    // equippedArmorItemId: string | null;
 
-    @OneToOne(() => InventoryItem, { nullable: true, eager: true, onDelete: 'SET NULL' })
-    @JoinColumn({ name: 'equippedGlovesItemId' })
-    equippedGloves: InventoryItem | null;
-    @Column({ type: 'uuid', nullable: true })
-    equippedGlovesItemId: string | null;
+    // @OneToOne(() => InventoryItem, { nullable: true, eager: true, onDelete: 'SET NULL' })
+    // @JoinColumn({ name: 'equippedGlovesItemId' })
+    // equippedGloves: InventoryItem | null;
+    // @Column({ type: 'uuid', nullable: true })
+    // equippedGlovesItemId: string | null;
 
-    @OneToOne(() => InventoryItem, { nullable: true, eager: true, onDelete: 'SET NULL' })
-    @JoinColumn({ name: 'equippedBootsItemId' })
-    equippedBoots: InventoryItem | null;
-    @Column({ type: 'uuid', nullable: true })
-    equippedBootsItemId: string | null;
+    // @OneToOne(() => InventoryItem, { nullable: true, eager: true, onDelete: 'SET NULL' })
+    // @JoinColumn({ name: 'equippedBootsItemId' })
+    // equippedBoots: InventoryItem | null;
+    // @Column({ type: 'uuid', nullable: true })
+    // equippedBootsItemId: string | null;
 
-    @OneToOne(() => InventoryItem, { nullable: true, eager: true, onDelete: 'SET NULL' })
-    @JoinColumn({ name: 'equippedRing1ItemId' })
-    equippedRing1: InventoryItem | null;
-    @Column({ type: 'uuid', nullable: true })
-    equippedRing1ItemId: string | null;
+    // @OneToOne(() => InventoryItem, { nullable: true, eager: true, onDelete: 'SET NULL' })
+    // @JoinColumn({ name: 'equippedRing1ItemId' })
+    // equippedRing1: InventoryItem | null;
+    // @Column({ type: 'uuid', nullable: true })
+    // equippedRing1ItemId: string | null;
 
-    @OneToOne(() => InventoryItem, { nullable: true, eager: true, onDelete: 'SET NULL' })
-    @JoinColumn({ name: 'equippedRing2ItemId' })
-    equippedRing2: InventoryItem | null;
-    @Column({ type: 'uuid', nullable: true })
-    equippedRing2ItemId: string | null;
+    // @OneToOne(() => InventoryItem, { nullable: true, eager: true, onDelete: 'SET NULL' })
+    // @JoinColumn({ name: 'equippedRing2ItemId' })
+    // equippedRing2: InventoryItem | null;
+    // @Column({ type: 'uuid', nullable: true })
+    // equippedRing2ItemId: string | null;
 
-    @OneToOne(() => InventoryItem, { nullable: true, eager: true, onDelete: 'SET NULL' })
-    @JoinColumn({ name: 'equippedNecklaceItemId' })
-    equippedNecklace: InventoryItem | null;
-    @Column({ type: 'uuid', nullable: true })
-    equippedNecklaceItemId: string | null;
+    // @OneToOne(() => InventoryItem, { nullable: true, eager: true, onDelete: 'SET NULL' })
+    // @JoinColumn({ name: 'equippedNecklaceItemId' })
+    // equippedNecklace: InventoryItem | null;
+    // @Column({ type: 'uuid', nullable: true })
+    // equippedNecklaceItemId: string | null;
 
     // ----------------------
   

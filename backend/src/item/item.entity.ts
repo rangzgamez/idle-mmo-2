@@ -21,23 +21,14 @@ export class ItemTemplate {
   @Column({ length: 100 }) // Assuming sprite keys are strings like 'sword_01'
   spriteKey: string;
 
-  @Column({ type: 'boolean', default: false })
-  stackable: boolean;
-
-  @Column({
-    type: 'enum',
-    enum: ItemType,
-    default: ItemType.MATERIAL,
-  })
+  @Column({ type: 'enum', enum: ItemType })
   itemType: ItemType;
 
-  @Column({
-    type: 'enum',
-    enum: EquipmentSlot,
-    nullable: true, // Only set if itemType makes sense (WEAPON, ARMOR, etc.)
-    comment: 'Which slot this item occupies when equipped, if any.',
-  })
-  equipSlot: EquipmentSlot | null;
+  @Column({ type: 'varchar', length: 50, nullable: true })
+  equipSlot: string | null;
+
+  @Column({ default: true })
+  stackable: boolean;
 
   @Column({ type: 'integer', default: 0, comment: 'Bonus physical attack' })
   attackBonus: number;

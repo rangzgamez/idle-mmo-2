@@ -1,9 +1,10 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, IsNull } from 'typeorm';
 import { InventoryItem } from './inventory.entity';
 import { ItemTemplate } from '../item/item.entity';
 import { ItemService } from '../item/item.service';
+import { EquipmentSlot } from '../item/item.types';
 
 @Injectable()
 export class InventoryService {
@@ -20,44 +21,39 @@ export class InventoryService {
    * @param quantity The quantity to add (default 1).
    * @returns The created or updated InventoryItem.
    * @throws NotFoundException if the item template doesn't exist.
-   * @throws Error for other invalid arguments.
+   * @throws ConflictException for invalid quantity.
    */
   async addItemToUser(
     userId: string,
     itemTemplateId: string,
     quantity: number = 1,
   ): Promise<InventoryItem> {
-    if (!userId || !itemTemplateId || quantity <= 0) {
-      throw new Error('Invalid arguments for adding item to user.');
+    if (quantity <= 0) {
+      throw new ConflictException('Quantity must be positive.');
     }
 
     const itemTemplate = await this.itemService.findTemplateById(itemTemplateId);
     if (!itemTemplate) {
-        throw new NotFoundException(`Item template ${itemTemplateId} not found.`);
+      throw new NotFoundException(`Item template with ID ${itemTemplateId} not found.`);
     }
 
-    let inventoryItem: InventoryItem | null = null;
-
-    // If the item is stackable, check if the user already has a stack
-    if (itemTemplate.stackable) {
-      inventoryItem = await this.inventoryItemRepository.findOne({
-        where: {
-          userId: userId,
-          itemTemplateId: itemTemplate.id,
-        },
-      });
-    }
+    let inventoryItem = await this.inventoryItemRepository.findOne({
+      where: {
+        userId: userId,
+        itemTemplateId: itemTemplate.id,
+        equippedByCharacterId: IsNull(),
+      },
+    });
 
     if (inventoryItem) {
-      // Update existing stack
       inventoryItem.quantity += quantity;
       return this.inventoryItemRepository.save(inventoryItem);
     } else {
-      // Create new inventory item entry
       const newItem = this.inventoryItemRepository.create({
         userId: userId,
         itemTemplateId: itemTemplate.id,
         quantity: quantity,
+        equippedByCharacterId: null,
       });
       return this.inventoryItemRepository.save(newItem);
     }
@@ -69,38 +65,35 @@ export class InventoryService {
    * @param itemTemplateId The ID of the item template to remove.
    * @param quantity The quantity to remove (default 1).
    * @returns True if the item was successfully removed/decremented, false otherwise (not found or not enough quantity).
-   * @throws Error for invalid arguments.
+   * @throws ConflictException for invalid quantity.
    */
   async removeItemFromUser(
     userId: string,
     itemTemplateId: string,
     quantity: number = 1,
   ): Promise<boolean> {
-     if (!userId || !itemTemplateId || quantity <= 0) {
-      throw new Error('Invalid arguments for removing item from user.');
+    if (quantity <= 0) {
+      throw new ConflictException('Quantity must be positive.');
     }
 
-    const inventoryItem = await this.inventoryItemRepository.findOne({
-      where: { userId, itemTemplateId },
+    let inventoryItem = await this.inventoryItemRepository.findOne({
+      where: {
+        userId: userId,
+        itemTemplateId: itemTemplateId,
+        equippedByCharacterId: IsNull(),
+      },
     });
 
-    if (!inventoryItem) {
-      console.warn(`Item ${itemTemplateId} not found in inventory for user ${userId}`);
-      return false; // Item not found
-    }
-
-    if (inventoryItem.quantity < quantity) {
-       console.warn(`Not enough quantity of item ${itemTemplateId} for user ${userId}`);
-      return false; // Not enough quantity
+    if (!inventoryItem || inventoryItem.quantity < quantity) {
+      console.warn(`User ${userId} tried to remove ${quantity} of item ${itemTemplateId}, but has insufficient quantity or item is equipped.`);
+      return false;
     }
 
     inventoryItem.quantity -= quantity;
 
     if (inventoryItem.quantity <= 0) {
-      // Remove the item entirely
       await this.inventoryItemRepository.remove(inventoryItem);
     } else {
-      // Update the quantity
       await this.inventoryItemRepository.save(inventoryItem);
     }
     return true;
@@ -112,11 +105,14 @@ export class InventoryService {
    * @returns An array of InventoryItem objects, including their item templates.
    */
   async getUserInventory(userId: string): Promise<InventoryItem[]> {
-     return this.inventoryItemRepository.find({
-       where: { userId },
-       relations: ['itemTemplate'],
-       order: { itemTemplate: { name: 'ASC' } }
-     });
+    return this.inventoryItemRepository.find({
+      where: {
+        userId: userId,
+        equippedByCharacterId: IsNull(),
+      },
+      relations: ['itemTemplate'],
+      order: { createdAt: 'ASC' },
+    });
   }
 
   /**
@@ -125,10 +121,32 @@ export class InventoryService {
    * @returns The InventoryItem object including template and user, or null if not found.
    */
   async findInventoryItemById(inventoryItemId: string): Promise<InventoryItem | null> {
-     return this.inventoryItemRepository.findOne({
-        where: { id: inventoryItemId },
-        relations: ['itemTemplate', 'user']
-     });
+    return this.inventoryItemRepository.findOne({
+      where: { id: inventoryItemId },
+    });
+  }
+
+  async saveInventoryItem(item: InventoryItem): Promise<InventoryItem> {
+    return this.inventoryItemRepository.save(item);
+  }
+
+  // Find ALL items equipped by a specific character
+  async findEquippedItemsByCharacterId(characterId: string): Promise<InventoryItem[]> {
+    return this.inventoryItemRepository.find({
+      where: { equippedByCharacterId: characterId },
+      relations: ['itemTemplate'],
+    });
+  }
+
+  // Find the ONE item equipped by a character in a SPECIFIC slot
+  async findEquippedItemBySlot(characterId: string, specificSlotId: EquipmentSlot): Promise<InventoryItem | null> {
+    return this.inventoryItemRepository.findOne({
+      where: { 
+        equippedByCharacterId: characterId,
+        equippedSlotId: specificSlotId 
+      },
+      relations: ['itemTemplate'],
+    });
   }
 
   // TODO: Add methods for equip/unequip later

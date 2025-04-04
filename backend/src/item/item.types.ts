@@ -15,11 +15,12 @@ export enum ItemType {
 export enum EquipmentSlot {
   MAINHAND = 'MAINHAND',
   OFFHAND = 'OFFHAND',
-  ARMOR = 'ARMOR',
   HELM = 'HELM',
+  ARMOR = 'ARMOR',
   GLOVES = 'GLOVES',
   BOOTS = 'BOOTS',
   RING1 = 'RING1',
   RING2 = 'RING2',
   NECKLACE = 'NECKLACE',
+  // Add other slots as needed
 } 

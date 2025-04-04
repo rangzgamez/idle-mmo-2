@@ -772,17 +772,42 @@ export default class UIScene extends Phaser.Scene {
             const item = equipmentData[slot]; // Get item for this slot, if any
             slotElement.innerHTML = ''; // Clear previous content
             slotElement.title = slot; // Set default title to slot name
+            slotElement.style.cursor = 'default'; // Default cursor
+            // Remove any previous right-click listener to prevent duplicates
+            slotElement.oncontextmenu = null; 
             
             if (item && item.itemTemplate) {
                 const template = item.itemTemplate;
                 slotElement.innerHTML = this.getItemSvgShape(template.itemType, '#ddd', 35); // Use SVG helper
                 slotElement.title = `${template.name}\n(${slot})`; // Set tooltip
-                // TODO: Add click/drag handlers later for unequipping
                 slotElement.style.borderColor = '#ccc'; // Indicate filled slot
+                slotElement.style.cursor = 'pointer'; // Indicate interactivity
+
+                // --- Add Right-Click Listener for Unequipping ---
+                slotElement.oncontextmenu = (event) => {
+                    event.preventDefault(); // Prevent default browser menu
+                    const charId = this.currentParty[this.currentEquipCharacterIndex]?.id;
+                    if (!charId) {
+                        console.error("Cannot unequip: Current character ID not found.");
+                        return;
+                    }
+                    console.log(`[UIScene] Right-clicked to unequip item from slot ${slot} for character ${charId}`);
+                    // Send unequip command to server
+                    this.networkManager.sendMessage('unequipItem', { 
+                        characterId: charId, 
+                        slot: slot // The slot key from the loop
+                    });
+                    // Optional: Add brief visual feedback here (e.g., highlight)
+                };
+                // -----------------------------------------------
+
             } else {
                 // Show placeholder text if empty
                 slotElement.textContent = slot.substring(0, 3);
                 slotElement.style.borderColor = '#888'; // Default border color
+                // Ensure no listener and default cursor on empty slots
+                slotElement.oncontextmenu = null; 
+                slotElement.style.cursor = 'default';
             }
         });
 

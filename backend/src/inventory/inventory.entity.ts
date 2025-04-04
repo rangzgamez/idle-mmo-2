@@ -9,6 +9,8 @@ import {
 } from 'typeorm';
 import { User } from '../user/user.entity';
 import { ItemTemplate } from '../item/item.entity';
+import { Character } from '../character/character.entity';
+import { EquipmentSlot } from '../item/item.types';
 
 @Entity('inventory_items')
 export class InventoryItem {
@@ -40,6 +42,18 @@ export class InventoryItem {
 
   @Column({ type: 'integer', default: 1 })
   quantity: number;
+
+  // Add nullable relation to the Character equipping this item
+  @ManyToOne(() => Character, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'equippedByCharacterId' })
+  equippedByCharacter: Character | null;
+
+  @Column({ type: 'uuid', nullable: true })
+  equippedByCharacterId: string | null;
+
+  // Add the specific slot ID where the item is equipped
+  @Column({ type: 'enum', enum: EquipmentSlot, nullable: true })
+  equippedSlotId: EquipmentSlot | null;
 
   @CreateDateColumn()
   createdAt: Date;
