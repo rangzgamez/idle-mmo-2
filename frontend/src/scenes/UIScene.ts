@@ -134,8 +134,13 @@ export default class UIScene extends Phaser.Scene {
              invWindowGameObject.setVisible(false);
         });
 
-        // --- Inventory Drag Logic (pass Phaser DOM Object and HTML Handle) ---
-        this.makeDraggable(invWindowGameObject, inventoryTitleBar);
+        // --- Inventory Drag Logic ---
+        if (invWindowGameObject && inventoryTitleBar) {
+             console.log("[UIScene] Attaching drag handler to Inventory Window");
+             this.makeDraggable(invWindowGameObject, inventoryTitleBar);
+        } else {
+             console.error("[UIScene] Failed to attach drag handler to Inventory: Missing elements.");
+        }
 
         // --- Create Equipment Window DOM Element (Initially Hidden) ---
         const equipmentSlotsHtml = Object.values(EquipmentSlot).map(slot => 
@@ -257,7 +262,10 @@ export default class UIScene extends Phaser.Scene {
 
         // --- Equipment Drag Logic ---
         if (this.equipWindowGameObject && equipmentTitleBar) {
+             console.log("[UIScene] Attaching drag handler to Equipment Window");
             this.makeDraggable(this.equipWindowGameObject, equipmentTitleBar);
+        } else {
+             console.error("[UIScene] Failed to attach drag handler to Equipment: Missing elements.");
         }
 
         // --- Create Chat DOM Elements ---
@@ -413,7 +421,7 @@ export default class UIScene extends Phaser.Scene {
         });
     }
 
-    // Method to make the inventory window draggable
+    // Method to make DOM elements draggable
     // Takes the Phaser DOM Element and the HTML Handle element
     private makeDraggable(domGameObject: Phaser.GameObjects.DOMElement, handle: HTMLElement) {
         let isDragging = false;
@@ -422,51 +430,63 @@ export default class UIScene extends Phaser.Scene {
 
         handle.style.cursor = 'grab';
 
-        handle.onmousedown = (e) => {
-            // No need for extensive logging now, hopefully this works
+        const onMouseDown = (e: MouseEvent) => {
+            // Prevent starting drag on buttons within the handle (like close buttons)
+            if ((e.target as HTMLElement)?.tagName === 'BUTTON') {
+                return;
+            }
             isDragging = true;
-            // Calculate offset based on mouse click relative to the DOM Element's top-left (x, y)
             offsetX = e.clientX - domGameObject.x;
             offsetY = e.clientY - domGameObject.y;
-            
             handle.style.cursor = 'grabbing';
-            e.preventDefault(); 
+            // Add listeners to document for move/up
+            document.addEventListener('mousemove', onMouseMove);
+            document.addEventListener('mouseup', onMouseUp);
+            // Prevent text selection during drag
+            e.preventDefault();
         };
 
-        document.onmousemove = (e) => {
+        const onMouseMove = (e: MouseEvent) => {
             if (!isDragging) return;
 
-            // Calculate new *absolute* position for the DOM Element
             let newX = e.clientX - offsetX;
             let newY = e.clientY - offsetY;
 
-            // Boundary check using scale manager and element *visual* dimensions
+            // --- Boundary check using the dragged element's dimensions ---
             const gameWidth = this.scale.width;
             const gameHeight = this.scale.height;
-            // Use offsetWidth/Height of the actual #inventory-window div for size
-            const elementWidth = (domGameObject.node as HTMLElement)?.querySelector('#inventory-window')?.clientWidth ?? 300; // Fallback width
-            const elementHeight = (domGameObject.node as HTMLElement)?.querySelector('#inventory-window')?.clientHeight ?? 400; // Fallback height
-            
+            // Get the main content div within the Phaser DOM wrapper
+            const contentElement = domGameObject.node.firstElementChild as HTMLElement;
+            const elementWidth = contentElement?.clientWidth ?? domGameObject.width; // Fallback to DOM object width
+            const elementHeight = contentElement?.clientHeight ?? domGameObject.height; // Fallback to DOM object height
+
             newX = Math.max(0, Math.min(newX, gameWidth - elementWidth));
             newY = Math.max(0, Math.min(newY, gameHeight - elementHeight));
+            // -------------------------------------------------------------
 
-            // Apply the new position using Phaser's method
             domGameObject.setPosition(newX, newY);
         };
 
-        document.onmouseup = () => {
+        const onMouseUp = () => {
             if (isDragging) {
                 isDragging = false;
                 handle.style.cursor = 'grab';
+                // Remove listeners from document
+                document.removeEventListener('mousemove', onMouseMove);
+                document.removeEventListener('mouseup', onMouseUp);
             }
         };
+        
+        // Attach the initial mousedown listener to the handle
+        handle.addEventListener('mousedown', onMouseDown);
 
-        document.onmouseleave = () => {
-            if (isDragging) {
-                isDragging = false;
-                handle.style.cursor = 'grab';
-            }
-        };
+        // Store cleanup function to remove listener when scene shuts down
+        // (Requires modifying shutdown method later if not already handled)
+        this.events.once('shutdown', () => {
+           handle.removeEventListener('mousedown', onMouseDown);
+           document.removeEventListener('mousemove', onMouseMove); // Ensure cleanup
+           document.removeEventListener('mouseup', onMouseUp);      // Ensure cleanup
+        });
     }
 
     // --- Inventory Display Update ---
@@ -515,11 +535,20 @@ export default class UIScene extends Phaser.Scene {
             slotElement.style.justifyContent = 'center'; // Center content (optional)
 
             const item = pageItems[i];
+            // Clear previous listeners first
+            slotElement.onmouseenter = null;
+            slotElement.onmouseleave = null;
+            slotElement.oncontextmenu = null; 
+            slotElement.style.cursor = 'default';
+
             if (item) {
-                // Add hover listeners for tooltip
+                // Add logging here
+                console.log(`[UIScene Inventory Render] Item: ${item.id}, Template Exists: ${!!item.itemTemplate}, EquipSlot Value: ${item.itemTemplate?.equipSlot}`);
+
+                // Standard Tooltip listeners
                 slotElement.onmouseenter = () => this.showItemTooltip(item, slotElement);
                 slotElement.onmouseleave = () => this.hideItemTooltip();
-                slotElement.style.cursor = 'pointer'; // Indicate interactivity
+                slotElement.style.cursor = 'pointer';
 
                 // ** Use SVG for basic shapes based on itemType **
                 let itemVisualHtml = '';
@@ -574,7 +603,53 @@ export default class UIScene extends Phaser.Scene {
                     quantityElement.style.borderRadius = '2px';
                     slotElement.appendChild(quantityElement);
                 }
-                // TODO: Add click/drag handlers for items later
+
+                // --- Add Right-Click Listener for Equipping --- 
+                const isEquippable = item.itemTemplate && item.itemTemplate.equipSlot;
+                 // Log if the equip listener is being added
+                 console.log(`[UIScene Inventory Render] Item: ${item.id}, Is Equippable (adding listener?): ${isEquippable}`);
+
+                if (isEquippable) {
+                    slotElement.oncontextmenu = (event) => {
+                        event.preventDefault(); // Prevent default browser menu
+                        
+                        // Determine target character (currently selected in equip window)
+                        const partySize = this.currentParty.length;
+                        if (!this.equipWindowGameObject?.visible || partySize === 0) {
+                             console.warn("Cannot equip item: Equipment window closed or no party selected.");
+                            this.showFeedbackMessage("Open Equipment window and select a character first."); // Provide user feedback
+                            return;
+                        }
+                        const targetCharacter = this.currentParty[this.currentEquipCharacterIndex];
+                        if (!targetCharacter) {
+                            console.error("Cannot equip item: Could not find target character data.");
+                            return;
+                        }
+                        const targetCharacterId = targetCharacter.id;
+                        const inventoryItemId = item.id; // The ID of the item being clicked
+
+                        console.log(`[UIScene] Right-clicked inventory item ${inventoryItemId} to equip on character ${targetCharacterId}`);
+                        
+                        // Send equip command to server
+                        this.networkManager.sendMessage('equipItemCommand', { 
+                            inventoryItemId: inventoryItemId, 
+                            characterId: targetCharacterId
+                        });
+                        // Optional: Add brief visual feedback here (e.g., highlight slot)
+                    };
+                } else {
+                     // If not equippable, ensure cursor is default and no context menu
+                     slotElement.style.cursor = 'default';
+                     slotElement.oncontextmenu = (e) => e.preventDefault(); // Still prevent default menu maybe?
+                }
+                // ------------------------------------------------
+
+            } else {
+                 // Empty slot, ensure no listeners and default cursor
+                 slotElement.onmouseenter = null;
+                 slotElement.onmouseleave = null;
+                 slotElement.oncontextmenu = null; 
+                 slotElement.style.cursor = 'default';
             }
             
             this.inventoryItemsElement.appendChild(slotElement);
@@ -599,12 +674,11 @@ export default class UIScene extends Phaser.Scene {
         // Add other stats (health, etc.) here if implemented
 
         const tooltipHtml = `
-            <div id="item-tooltip" style="position: absolute; left: 0; top: 0; /* Positioned by JS */ width: 200px; background-color: rgba(0,0,0,0.85); border: 1px solid #aaa; border-radius: 4px; color: white; padding: 8px; font-size: 12px; z-index: 110; pointer-events: none;">
+            <div id="item-tooltip" style="position: absolute; left: 0; top: 0; width: 200px; background-color: rgba(0,0,0,0.85); border: 1px solid #aaa; border-radius: 4px; color: white; padding: 8px; font-size: 12px; z-index: 110; pointer-events: none;">
                 <div style="font-weight: bold; color: #eee; margin-bottom: 5px;">${template.name}</div>
                 <div style="margin-bottom: 8px; display: flex; align-items: center;">
-                     <!-- Placeholder for larger image/shape -->
                      <div style="width: 40px; height: 40px; background-color: #333; border: 1px solid #555; margin-right: 8px; display: flex; align-items: center; justify-content: center;">
-                         ${this.getItemSvgShape(template.itemType, '#ccc', 30)} <!-- Use helper for shape -->
+                         ${this.getItemSvgShape(template.itemType, '#ccc', 30)}
                      </div>
                      <div style="flex-grow: 1; font-style: italic; color: #bbb;">${template.description || ''}</div>
                 </div>
@@ -612,22 +686,46 @@ export default class UIScene extends Phaser.Scene {
             </div>
         `;
 
-        // Calculate position near the slot element
+        // Create the tooltip DOM element temporarily at 0,0 to measure it
+        this.itemTooltipElement = this.add.dom(0, 0).createFromHTML(tooltipHtml).setOrigin(0, 0);
+        const tooltipNode = this.itemTooltipElement.node as HTMLElement;
+        const tooltipRect = tooltipNode.getBoundingClientRect(); // Measure its size
+        
+        // Calculate desired position relative to the slot
         const slotRect = slotElement.getBoundingClientRect();
         const gameCanvas = this.sys.game.canvas;
-        const tooltipX = slotRect.right + 5; // Position to the right of the slot
-        const tooltipY = slotRect.top;
+        const margin = 10; // Space between slot and tooltip
 
-        this.itemTooltipElement = this.add.dom(tooltipX, tooltipY).createFromHTML(tooltipHtml).setOrigin(0, 0);
+        let desiredX = slotRect.right + margin;
+        let desiredY = slotRect.top;
 
-        // Adjust position if tooltip goes off-screen (basic check)
-        const tooltipRect = this.itemTooltipElement.node.getBoundingClientRect();
-        if (tooltipRect.right > gameCanvas.clientWidth) {
-            this.itemTooltipElement.x = slotRect.left - tooltipRect.width - 5;
+        // --- Comprehensive Boundary Checks ---
+        // Check Right Edge
+        if (desiredX + tooltipRect.width > gameCanvas.clientWidth) {
+            desiredX = slotRect.left - tooltipRect.width - margin; // Flip to left
         }
-        if (tooltipRect.bottom > gameCanvas.clientHeight) {
-            this.itemTooltipElement.y = slotRect.bottom - tooltipRect.height;
+        // Check Left Edge (after potentially flipping)
+        if (desiredX < 0) {
+            desiredX = margin; // Clamp to left edge
         }
+
+        // Check Bottom Edge
+        if (desiredY + tooltipRect.height > gameCanvas.clientHeight) {
+             // Try placing above ONLY if it fits there, otherwise clamp to bottom
+             if (slotRect.top - tooltipRect.height - margin >= 0) {
+                 desiredY = slotRect.top - tooltipRect.height - margin; // Place above
+             } else {
+                 desiredY = gameCanvas.clientHeight - tooltipRect.height - margin; // Clamp to bottom edge
+             }
+        }
+         // Check Top Edge (after potentially moving)
+         if (desiredY < 0) {
+            desiredY = margin; // Clamp to top edge
+         }
+        // ------------------------------------
+
+        // Set the final calculated position
+        this.itemTooltipElement.setPosition(desiredX, desiredY);
     }
 
     private hideItemTooltip() {
@@ -651,6 +749,36 @@ export default class UIScene extends Phaser.Scene {
             default: 
                  return `<span style="font-size: ${size * 0.4}px;">?</span>`;
         }
+    }
+
+    // --- Method to show temporary feedback messages ---
+    private showFeedbackMessage(message: string, duration: number = 2000) {
+        // Reuse error display logic, maybe change color?
+        const x = this.cameras.main.centerX;
+        const y = 50; // Position near the top-center
+
+        const text = this.add.text(x, y, message, {
+            fontSize: '16px',
+            fontFamily: 'Arial, sans-serif',
+            color: '#eeeeee', // White/light gray for general feedback
+            backgroundColor: '#000000aa',
+            padding: { x: 10, y: 5 },
+            align: 'center'
+        });
+        text.setOrigin(0.5, 0.5);
+        text.setDepth(1000); // Ensure it's on top of other UI
+
+        // Fade out and destroy
+        this.tweens.add({
+            targets: text,
+            alpha: { from: 1, to: 0 },
+            delay: duration - 500, // Start fading 500ms before duration ends
+            duration: 500,
+            ease: 'Power1',
+            onComplete: () => {
+                text.destroy();
+            }
+        });
     }
 
     // --- Equipment Display Update ---
@@ -767,23 +895,25 @@ export default class UIScene extends Phaser.Scene {
 
         console.log(`[UIScene] Rendering equipment for ${characterName} (Index: ${this.currentEquipCharacterIndex})`, equipmentData);
 
-        // Update slots (NO CHANGES NEEDED HERE)
+        // Update slots 
         this.equipmentSlots.forEach((slotElement, slot) => {
-            const item = equipmentData[slot]; // Get item for this slot, if any
-            slotElement.innerHTML = ''; // Clear previous content
-            slotElement.title = slot; // Set default title to slot name
-            slotElement.style.cursor = 'default'; // Default cursor
-            // Remove any previous right-click listener to prevent duplicates
+            const item = equipmentData[slot]; 
+            // Clear previous content and listeners
+            slotElement.innerHTML = ''; 
+            slotElement.title = slot; 
+            slotElement.style.cursor = 'default'; 
             slotElement.oncontextmenu = null; 
+            slotElement.onmouseenter = null; // Clear hover listener
+            slotElement.onmouseleave = null; // Clear hover listener
             
             if (item && item.itemTemplate) {
                 const template = item.itemTemplate;
-                slotElement.innerHTML = this.getItemSvgShape(template.itemType, '#ddd', 35); // Use SVG helper
-                slotElement.title = `${template.name}\n(${slot})`; // Set tooltip
-                slotElement.style.borderColor = '#ccc'; // Indicate filled slot
-                slotElement.style.cursor = 'pointer'; // Indicate interactivity
+                slotElement.innerHTML = this.getItemSvgShape(template.itemType, '#ddd', 35); 
+                slotElement.title = `${template.name}\n(${slot})`; 
+                slotElement.style.borderColor = '#ccc'; 
+                slotElement.style.cursor = 'pointer'; 
 
-                // --- Add Right-Click Listener for Unequipping ---
+                // Add Right-Click Listener for Unequipping (already exists)
                 slotElement.oncontextmenu = (event) => {
                     event.preventDefault(); // Prevent default browser menu
                     const charId = this.currentParty[this.currentEquipCharacterIndex]?.id;
@@ -799,14 +929,20 @@ export default class UIScene extends Phaser.Scene {
                     });
                     // Optional: Add brief visual feedback here (e.g., highlight)
                 };
-                // -----------------------------------------------
+
+                // --- Add Hover Listeners for Tooltip --- 
+                slotElement.onmouseenter = () => this.showItemTooltip(item, slotElement);
+                slotElement.onmouseleave = () => this.hideItemTooltip();
+                // ------------------------------------------
 
             } else {
-                // Show placeholder text if empty
+                // Empty slot: Show placeholder text
                 slotElement.textContent = slot.substring(0, 3);
-                slotElement.style.borderColor = '#888'; // Default border color
-                // Ensure no listener and default cursor on empty slots
+                slotElement.style.borderColor = '#888'; 
+                // Ensure listeners and cursor are reset for empty slots
                 slotElement.oncontextmenu = null; 
+                slotElement.onmouseenter = null;
+                slotElement.onmouseleave = null;
                 slotElement.style.cursor = 'default';
             }
         });

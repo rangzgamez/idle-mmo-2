@@ -27,7 +27,7 @@ export class ItemTemplate {
   @Column({ type: 'varchar', length: 50, nullable: true })
   equipSlot: string | null;
 
-  @Column({ default: true })
+  @Column({ default: false })
   stackable: boolean;
 
   @Column({ type: 'integer', default: 0, comment: 'Bonus physical attack' })

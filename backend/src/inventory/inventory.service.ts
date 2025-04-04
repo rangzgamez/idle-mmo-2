@@ -23,40 +23,59 @@ export class InventoryService {
    * @throws NotFoundException if the item template doesn't exist.
    * @throws ConflictException for invalid quantity.
    */
-  async addItemToUser(
-    userId: string,
-    itemTemplateId: string,
-    quantity: number = 1,
-  ): Promise<InventoryItem> {
+  async addItemToUser(userId: string, itemTemplateId: string, quantity: number = 1): Promise<InventoryItem | InventoryItem[]> {
+    // Allow adding multiple *non-stackable* items as separate rows
     if (quantity <= 0) {
       throw new ConflictException('Quantity must be positive.');
     }
 
-    const itemTemplate = await this.itemService.findTemplateById(itemTemplateId);
-    if (!itemTemplate) {
+    const template = await this.itemService.findTemplateById(itemTemplateId); 
+    if (!template) {
       throw new NotFoundException(`Item template with ID ${itemTemplateId} not found.`);
     }
 
-    let inventoryItem = await this.inventoryItemRepository.findOne({
-      where: {
-        userId: userId,
-        itemTemplateId: itemTemplate.id,
-        equippedByCharacterId: IsNull(),
-      },
-    });
-
-    if (inventoryItem) {
-      inventoryItem.quantity += quantity;
-      return this.inventoryItemRepository.save(inventoryItem);
-    } else {
-      const newItem = this.inventoryItemRepository.create({
-        userId: userId,
-        itemTemplateId: itemTemplate.id,
-        quantity: quantity,
-        equippedByCharacterId: null,
+    // --- Handle Stackable vs Non-Stackable --- 
+    if (template.stackable) {
+      // Logic for stackable items (find existing stack or create new)
+      let existingItem = await this.inventoryItemRepository.findOne({
+        where: { 
+            userId: userId, 
+            itemTemplateId: itemTemplateId, 
+            equippedByCharacterId: IsNull() // Ensure we only stack with unequipped items
+          }
       });
-      return this.inventoryItemRepository.save(newItem);
+      
+      if (existingItem) {
+        // TODO: Handle maxStackSize from template if implemented
+        existingItem.quantity += quantity;
+        return this.inventoryItemRepository.save(existingItem);
+      } else {
+        // Create a new stack
+        const newItem = this.inventoryItemRepository.create({
+          userId,
+          itemTemplateId,
+          quantity, // Start stack with the given quantity
+          equippedByCharacterId: null 
+        });
+        return this.inventoryItemRepository.save(newItem);
+      }
+    } else {
+        // Logic for non-stackable items (always create new rows)
+        const addedItems: InventoryItem[] = [];
+        for (let i = 0; i < quantity; i++) {
+            const newItem = this.inventoryItemRepository.create({
+                userId,
+                itemTemplateId,
+                quantity: 1, // Non-stackable items always have quantity 1
+                equippedByCharacterId: null 
+            });
+            const savedItem = await this.inventoryItemRepository.save(newItem);
+            addedItems.push(savedItem);
+        }
+        // Return array if multiple added, or single item if quantity was 1
+        return quantity === 1 ? addedItems[0] : addedItems;
     }
+    // -----------------------------------------
   }
 
   /**
