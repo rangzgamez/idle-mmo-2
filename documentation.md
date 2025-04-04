@@ -144,10 +144,10 @@ graph TD
 *   `AppModule`: Root module, imports all other modules.
 *   `AuthModule`: Handles user registration, login, JWT (global).
 *   `UserModule`: Manages user entity (`UserService`). Exports service.
-*   `CharacterModule`: Manages character entity (`CharacterService`, `CharacterController`). Exports service.
+*   `CharacterModule`: Manages character entity (`CharacterService`, `CharacterController`). Exports service. **Injects `InventoryService`.**
 *   `EnemyModule`: Manages enemy template entity (`EnemyService`, `EnemyController` (optional), `Enemy` entity). Exports service.
 *   `GameModule`: Core real-time logic.
-    *   `GameGateway`: **Reduced Role.** Handles WebSocket connections, auth middleware, routing client commands (`enterZone`, `selectParty`, `moveCommand`, `sendMessage`, `attackCommand`) to update `ZoneService` state. Initializes the `GameLoopService`. Injects `ZoneService`, `GameLoopService`, `BroadcastService`, `CharacterService` (for party validation), `UserService`, `JwtService`.
+    *   `GameGateway`: **Reduced Role.** Handles WebSocket connections, auth middleware, routing client commands (`enterZone`, `selectParty`, `moveCommand`, `sendMessage`, `attackCommand`, **`moveInventoryItem`, `dropInventoryItem`, `pickupItemCommand`, `equipItemCommand`, `unequipItem`, `requestEquipment`**) to update `ZoneService` / `CharacterService` / `InventoryService` state. Initializes the `GameLoopService`. Injects `ZoneService`, `GameLoopService`, `BroadcastService`, `CharacterService` (for party validation), `UserService`, `JwtService`, **`InventoryService`**.
     *   `GameLoopService`: **Orchestrator.** Runs the main game tick loop (`tickGameLoop`). Iterates through zones, players, enemies. Calls specialized services for character state, enemy state, movement, and spawning. Calls `BroadcastService` to flush events at the end of each zone tick. Injects `ZoneService`, `CharacterStateService`, `EnemyStateService`, `MovementService`, `SpawningService`, `BroadcastService`.
     *   `CharacterStateService`: **NEW.** Handles processing a single character's state per tick (death, respawn, regen, leashing, state machine logic, aggro, initiating attacks). Injects `ZoneService`, `CombatService`.
     *   `EnemyStateService`: **NEW.** Handles processing a single enemy's state per tick (getting AI action, executing attacks). Injects `ZoneService`, `CombatService`, `AIService`.
@@ -157,6 +157,8 @@ graph TD
     *   `ZoneService`: Manages **runtime state** of all dynamic entities (players, enemies, items-TODO) within zones in memory (Maps). Handles adding/removing entities, tracking positions, targets, health, combat state, etc. Provides state snapshots and update methods. Used by many other services. Injects `EnemyService`.
     *   `CombatService`: Handles combat resolution logic (`handleAttack`, `calculateDamage`). Injects `ZoneService`, `EnemyService`.
     *   `AIService`: Handles AI decision-making logic (`updateEnemyAI` for enemies). Returns AI actions. Injects `ZoneService`.
+*   **`InventoryModule`:** Manages item instances (`InventoryItem` entity) and related logic (`InventoryService`). Exports service. **Injects `ItemModule`**. **Provides `inventorySlot` management.**
+*   **`ItemModule`:** Manages item templates (`ItemTemplate` entity). Exports service.
 *   `DebugModule`: Provides endpoints for inspecting runtime state (`/debug/zones`). Injects `ZoneService` (via `GameModule` import).
 
 **6. Frontend Structure Breakdown (Refined)**
@@ -166,8 +168,8 @@ graph TD
 *   **`EventBus.ts`:** Simple custom event emitter for intra-client communication.
 *   **Scenes:**
     *   `BootScene`, `PreloadScene`, `LoginScene`, `CharacterSelectScene`: Handle setup, asset loading (incl. enemy sprites), auth, party selection.
-    *   `GameScene`: Main gameplay area. Manages sprites for all entities (`playerCharacters`, `otherCharacters`, `enemySprites` Maps). Handles network events (`playerJoined`, `playerLeft`, `entityUpdate`, `chatMessage`, `combatAction`, `entityDied`, initial `enemyState` on `enterZone`) to manage sprites. Processes player input (movement, attack clicks). Manages camera. Launches `UIScene`.
-    *   `UIScene`: Handles overlay UI elements (Chatbox, potentially health bars if using DOM).
+    *   `GameScene`: Main gameplay area. Manages sprites for all entities (`playerCharacters`, `otherCharacters`, `enemySprites` Maps). Handles network events (`playerJoined`, `playerLeft`, `entityUpdate`, `chatMessage`, `combatAction`, `entityDied`, initial `enemyState` on `enterZone`, **`inventoryUpdate`, `equipmentUpdate`, `itemDropped`, `itemPickedUp`**) to manage sprites and UI updates. Processes player input (movement, attack clicks). Manages camera. Launches `UIScene`.
+    *   `UIScene`: Handles overlay UI elements (Chatbox, **Inventory Window**, **Equipment Window**, Tooltips). Manages DOM elements for UI interaction (drag/drop, right-click menus). Sends commands like `equipItemCommand`, `unequipItem`, `moveInventoryItem`, `dropInventoryItem`.
 *   **GameObjects:**
     *   `CharacterSprite.ts`: Represents player characters. Handles interpolation, name label, health bar, chat bubbles, **basic death visuals (alpha)**.
     *   `EnemySprite.ts`: Represents enemies. Handles interpolation, name label, health bar. Set interactive for clicks. **Destroyed on death.**
@@ -178,19 +180,87 @@ graph TD
 *   **Client -> Server:**
     *   `authenticate` (Implicit via `socket.handshake.auth.token`)
     *   `selectParty` { characterIds: string[] } -> Ack: `{ success: boolean, characters?: CharacterDataWithUsername[] }`
-    *   `enterZone` { zoneId: string } -> Ack: `{ success: boolean; zoneState?: ZoneCharacterState[]; enemyState?: EnemyInstance[]; message?: string }` **(Added enemyState)**
+    *   `enterZone` { zoneId: string } -> Ack: `{ success: boolean; zoneState?: ZoneCharacterState[]; enemyState?: EnemyInstance[]; inventory?: (InventoryItem | null)[]; equipment?: Record<string, Partial<Record<EquipmentSlot, InventoryItem>>>; message?: string }` **(Added inventory & equipment)**
     *   `moveCommand` { target: { x: number, y: number } }
     *   `sendMessage` { message: string }
-    *   `attackCommand` { targetId: string } **(NEW)**
-    *   `teleportPlayer` { x: number, y: number } **(NEW - Debug only)**
+    *   `attackCommand` { targetId: string }
+    *   `teleportPlayer` { x: number, y: number } (Debug only)
+    *   **`moveInventoryItem` { fromIndex: number, toIndex: number } -> Triggers `inventoryUpdate` (NEW)**
+    *   **`dropInventoryItem` { inventoryIndex: number } -> Triggers `inventoryUpdate`, maybe `itemDropped` (NEW - Drop logic TBD)**
+    *   **`pickupItemCommand` { droppedItemId: string } -> Triggers `inventoryUpdate`, `itemPickedUp` (NEW - Loot Phase)**
+    *   **`equipItemCommand` { inventoryItemId: string, characterId: string } -> Triggers `inventoryUpdate`, `equipmentUpdate` (NEW)**
+    *   **`unequipItem` { characterId: string, slot: EquipmentSlot } OR { inventoryItemId: string } -> Triggers `inventoryUpdate`, `equipmentUpdate` (NEW)**
+    *   **`requestEquipment` { characterId: string } -> Triggers `equipmentUpdate` (NEW)**
 *   **Server -> Client:**
     *   `connect_error` (Auth failed or other issue)
     *   `playerJoined` { characters: ZoneCharacterState[] }
     *   `playerLeft` { playerId: string }
-    *   `entityUpdate` { updates: Array<{ id: string, x?: number, y?: number, health?: number }> } **(Added health)**
+    *   `entityUpdate` { updates: Array<{ id: string, x?: number, y?: number, health?: number }> }
     *   `chatMessage` { senderName: string, senderCharacterId: string, message: string, timestamp: number }
-    *   `combatAction` { attackerId: string, targetId: string, damage: number, type: string } **(NEW)**
-    *   `entityDied` { entityId: string, type: 'character' | 'enemy' /* | other */ } **(NEW)**
+    *   `combatAction` { attackerId: string, targetId: string, damage: number, type: string }
+    *   `entityDied` { entityId: string, type: 'character' | 'enemy' /* | other */ }
+    *   **`inventoryUpdate` { inventory: (InventoryItem | null)[] } (NEW - Sparse array representing all potential slots)**
+    *   **`equipmentUpdate` { characterId: string, equipment: Partial<Record<EquipmentSlot, InventoryItem>> } (NEW)**
+    *   **`itemDropped` { itemId: string, templateId: string, x: number, y: number } (NEW - Loot Phase)**
+    *   **`itemPickedUp` { pickerCharacterId: string, itemId: string } (NEW - Loot Phase)**
+
+**7.5 Frontend/Backend Interaction Diagram (Inventory/Equipment)**
+
+```mermaid
+graph TD
+    subgraph Frontend (UIScene.ts)
+        UI_DragDrop[Drag & Drop Item] -->|Sends 'moveInventoryItem'| NetworkMgr;
+        UI_RightClickEquip[Right-Click Equippable Item] -->|Sends 'equipItemCommand'| NetworkMgr;
+        UI_RightClickEquipSlot[Right-Click Equipped Slot] -->|Sends 'unequipItem'| NetworkMgr;
+        UI_DragDropOutside[Drag Item Outside Window] -->|Sends 'dropInventoryItem'| NetworkMgr;
+        NetworkMgr -->|Receives 'inventoryUpdate'| UI_InvUpdate[Update Inventory Grid];
+        NetworkMgr -->|Receives 'equipmentUpdate'| UI_EquipUpdate[Update Equipment Slots];
+    end
+
+    subgraph Backend (NestJS)
+        NetworkMgr -- WSS --> GG[GameGateway];
+
+        GG -- moveInventoryItem --> IS[InventoryService];
+        IS -- moveInventoryItem --> DB_UpdateInvSlot[DB: Update Item.inventorySlot];
+        IS -- moveInventoryItem --> BS[BroadcastService];
+
+        GG -- equipItemCommand --> CS[CharacterService];
+        CS -- equipItem --> DB_UpdateEquip[DB: Set Item.equippedBy/Slot, Item.inventorySlot = NULL];
+        CS -- equipItem --> IS_Save[InventoryService: Save Item];
+        CS -- equipItem --> BS;
+
+        GG -- unequipItem --> CS;
+        CS -- unequipItem --> IS_FindEmpty[InventoryService: Find Empty Slot];
+        CS -- unequipItem --> DB_UpdateUnequip[DB: Clear Item.equippedBy/Slot, Item.inventorySlot = emptySlot];
+        CS -- unequipItem --> IS_Save;
+        CS -- unequipItem --> BS;
+
+        GG -- dropInventoryItem --> IS;
+        IS -- dropInventoryItem --> DB_UpdateInvSlotDrop[DB: Update Item state (e.g., remove inventorySlot)]; // Exact logic TBD
+        IS -- dropInventoryItem --> BS; // May trigger itemDropped event later
+
+        BS -- inventoryUpdate -->|Emits| NetworkMgr;
+        BS -- equipmentUpdate -->|Emits| NetworkMgr;
+
+        style IS fill:#aaffaa,stroke:#333,stroke-width:1px
+        style CS fill:#aaaaff,stroke:#333,stroke-width:1px
+        style GG fill:#ffaaaa,stroke:#333,stroke-width:1px
+        style BS fill:#fcc,stroke:#333,stroke-width:1px
+        style DB_UpdateInvSlot fill:#ddd,stroke:#333,stroke-width:1px
+        style DB_UpdateEquip fill:#ddd,stroke:#333,stroke-width:1px
+        style DB_UpdateUnequip fill:#ddd,stroke:#333,stroke-width:1px
+        style DB_UpdateInvSlotDrop fill:#ddd,stroke:#333,stroke-width:1px
+
+    end
+
+    subgraph Database (PostgreSQL - InventoryItem Table)
+        DB_UpdateInvSlot;
+        DB_UpdateEquip;
+        DB_UpdateUnequip;
+        DB_UpdateInvSlotDrop;
+    end
+```
+*(Note: Drop Item logic backend implementation details are still pending in Phase 6 TODOs)*
 
 **8. Database Schema (Updated)**
 
@@ -300,12 +370,43 @@ export interface RuntimeCharacterData extends Character {
     // --- Death State ---
     timeOfDeath: number | null; // Timestamp when health reached 0
 }
+
+// backend/src/inventory/inventory.entity.ts (Conceptual - Details added)
+@Entity()
+export class InventoryItem {
+  @PrimaryGeneratedColumn('uuid')
+  id: string;
+
+  @ManyToOne(() => ItemTemplate, { eager: true })
+  itemTemplate: ItemTemplate;
+  @Column()
+  itemTemplateId: string;
+
+  @Column()
+  userId: string; // Owner
+
+  @Column({ nullable: true })
+  equippedByCharacterId?: string | null; // Which character has it equipped
+
+  @Column({ type: 'enum', enum: EquipmentSlot, nullable: true })
+  equippedSlotId?: EquipmentSlot | null; // Which specific slot
+
+  @Column({ type: 'integer', default: 1 })
+  quantity: number; // For stackable items
+
+  // --- NEW Inventory Slot Tracking ---
+  @Column({ type: 'integer', nullable: true, comment: 'The numerical slot index in the player\'s main inventory grid. NULL if equipped or not in main inv.' })
+  inventorySlot: number | null;
+
+  @CreateDateColumn() createdAt: Date;
+  @UpdateDateColumn() updatedAt: Date;
+}
 ```
-*(User, ItemTemplate, InventoryItem, Pet schemas remain unchanged)*
+*(User, Character, Enemy, ItemTemplate schemas shown previously or implied)*
 
 **9. Key Concepts / Reusable Patterns (Updated)**
 
-*   **Entity Runtime State Management (`ZoneService`):** Core responsibility. Holds in-memory `Map`s for players and enemies within zones. State includes position, target, current health, **combat state (`state`, `attackTargetId`, `anchorX/Y`, `lastAttackTime`, `timeOfDeath`)**, AI state. Distinct from DB persistence.
+*   **Entity Runtime State Management (`ZoneService`):** Core responsibility. Holds in-memory `Map`s for players and enemies within zones. State includes position, target, current health, combat state (`state`, `attackTargetId`, `anchorX/Y`, `lastAttackTime`, `timeOfDeath`), AI state. **Inventory/Equipment state is primarily managed via DB persistence (`InventoryItem` entity with `inventorySlot`, `equippedByCharacterId`, `equippedSlotId`) and broadcast events (`inventoryUpdate`, `equipmentUpdate`), not directly tracked in `ZoneService`.**
 *   **Service-Based Logic:** Core game mechanics are encapsulated in highly granular services:
     *   `CharacterStateService`, `EnemyStateService`: Handle entity-specific state logic.
     *   `MovementService`: Handles position calculation.
@@ -314,6 +415,8 @@ export interface RuntimeCharacterData extends Character {
     *   `AIService`: Handles entity decision-making.
     *   `ZoneService`: Manages runtime state and zone transitions.
     *   `BroadcastService`: Handles WebSocket event emission.
+    *   **`InventoryService`:** Manages inventory item persistence and slot allocation.
+    *   **`CharacterService`:** Handles character logic, including equipping/unequipping items by coordinating with `InventoryService`.
 *   **Orchestration (`GameLoopService`):** The `GameLoopService` coordinates the game tick, calling the specialized services in sequence to simulate one frame of the game world.
 *   **Authoritative Server:** The backend dictates all game state (positions, health, AI state, combat state).
 *   **Client-Side Interpolation:** Sprites smoothly move towards `targetX`/`targetY`.
@@ -387,18 +490,18 @@ export interface RuntimeCharacterData extends Character {
 *   **Stat Configuration:** Implemented (Combat stats moved to `Character` entity).
 *   **Frontend Death Handling:** Implemented (Enemy sprite destruction, basic character visuals).
 
-**➡️ Phase 6: Inventory, Loot & Equipment (Was Phase 5)**
-1.  [ ] Backend: Define `ItemTemplate` and `InventoryItem` entities & migrations.
-2.  [ ] Backend: Implement `InventoryModule` and `InventoryService` (add/remove items).
-3.  [ ] Backend: Implement `LootService` and configure basic loot tables.
-4.  [ ] Backend: Trigger loot drops on enemy death (`LootService`). Add `DroppedItem` state to `ZoneService`. Broadcast `itemDropped`.
-5.  [ ] Backend: Implement `pickupItemCommand` handler (validate range, add to inventory via `InventoryService`, remove from zone). Broadcast `itemPickedUp` and `inventoryUpdate`.
-6.  [ ] Frontend: Display dropped item sprites based on `itemDropped`.
-7.  [ ] Frontend: Handle clicking items -> send `pickupItemCommand`. Remove sprite on `itemPickedUp`.
-8.  [ ] Frontend: Basic Inventory UI (in `UIScene`) to display items from `inventoryUpdate`.
-9.  [ ] Backend: Add `equippedWeapon`, `equippedArmor` to `Character` entity.
-10. [ ] Backend: Implement `equipItem` / `unequipItem` logic in `InventoryService`/`CharacterService`. Broadcast `equipmentUpdate`.
-11. [ ] Frontend: Basic Equipment UI (in `UIScene`). Allow equipping/unequipping via drag/drop or buttons. Send commands. Update UI on `equipmentUpdate`.
+**➡️ Phase 6: Inventory, Loot & Equipment (Partially Complete)**
+1.  [X] Backend: Define `ItemTemplate` and `InventoryItem` entities & migrations. (**Added `inventorySlot`**)
+2.  [X] Backend: Implement `InventoryModule` and `InventoryService` (add/remove items, **manage slots**).
+3.  [X] Backend: Implement `LootService` and configure basic loot tables. (**Basic implementation done**)
+4.  [X] Backend: Trigger loot drops on enemy death (`LootService`). Add `DroppedItem` state to `ZoneService`. Broadcast `itemDropped`. (**Basic implementation done**)
+5.  [X] Backend: Implement `pickupItemCommand` handler (validate range, add to inventory via `InventoryService`, remove from zone). Broadcast `itemPickedUp` and `inventoryUpdate`. (**Basic implementation done**)
+6.  [X] Frontend: Display dropped item sprites based on `itemDropped`. (**Basic implementation done**)
+7.  [X] Frontend: Handle clicking items -> send `pickupItemCommand`. Remove sprite on `itemPickedUp`. (**Basic implementation done**)
+8.  [X] Frontend: Basic Inventory UI (in `UIScene`) to display items from `inventoryUpdate` (**Grid, Slots, Drag/Drop Move**).
+9.  [X] Backend: Add `equippedSlotId` and `inventorySlot` to `InventoryItem` entity.
+10. [X] Backend: Implement `equipItem` / `unequipItem` logic in `InventoryService`/`CharacterService`. Broadcast `equipmentUpdate` & `inventoryUpdate`. (**Handles `inventorySlot` clearing/assignment**)
+11. [X] Frontend: Basic Equipment UI (in `UIScene`). Allow equipping/unequipping via **right-click**. Send commands. Update UI on `equipmentUpdate`.
 
 **Phase 7: Experience & Leveling (NEW)**
 1.  [ ] Backend: Add `xpReward` to `Enemy` entity (Already done!).
@@ -414,6 +517,7 @@ export interface RuntimeCharacterData extends Character {
 **Refinement / Future TODOs:**
 *   **NEW:** Add `baseSpeed` to `Character` entity and use it in `MovementService`.
 *   **NEW:** Ensure `EnemyInstance.baseSpeed` is correctly populated in `ZoneService` (check `addEnemy` if it exists, besides `addEnemyFromNest`).
+*   **NEW:** Loot System Enhancements (e.g., proper tables, rarity, dropped item persistence/visuals).
 *   Integrate real Character Stats (from DB/`CharacterService`) into `CombatService` (Partially done, base stats used). Define impact of other stats (Str, Agi etc.).
 *   Persist character position/zone periodically or on logout.
 *   Implement proper Tilemaps and Collision (Frontend & Backend).
@@ -428,7 +532,7 @@ export interface RuntimeCharacterData extends Character {
 
 **13. Continuing Development Guide (Updated)**
 
-*   **Focus:** Next major phase is likely Inventory/Loot or XP/Leveling.
+*   **Focus:** Next steps are Phase 7: Experience & Leveling.
 *   **Backend:** Run `npm run start:dev`. Implement features based on the chosen phase.
 *   **Frontend:** Run `npm run dev`. Implement corresponding UI and event handling.
 *   **Testing:** Manual testing is primary. Use `/debug/zones` and console logs.
@@ -444,3 +548,6 @@ export interface RuntimeCharacterData extends Character {
     *   `backend/src/game/ai.service.ts` (AI decisions)
     *   `backend/src/game/combat.service.ts` (Combat calculations)
     *   `backend/src/game/game.module.ts` (Service registration)
+    *   **`backend/src/inventory/inventory.service.ts` (Item management, slot finding)**
+    *   **`backend/src/character/character.service.ts` (Equip/Unequip coordination)**
+    *   **`frontend/src/scenes/UIScene.ts` (Inventory/Equipment UI, event handling)**
