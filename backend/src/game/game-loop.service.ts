@@ -150,8 +150,17 @@ export class GameLoopService implements OnApplicationShutdown {
                         if (tickResult.targetDied && character.attackTargetId === null /* Safety check */) {
                             const deadEnemyId = tickResult.enemyHealthUpdates.find(upd => upd.health <= 0)?.id;
                             if(deadEnemyId) {
+                                this.logger.log(`Target died event for enemy ID: ${deadEnemyId}`);
                                 const deadEnemyInstance = this.zoneService.getEnemyInstanceById(zoneId, deadEnemyId);
                                 
+                                // --- Log instance data before loot check ---
+                                if (deadEnemyInstance) {
+                                    this.logger.log(`Found dead enemy instance: ID=${deadEnemyInstance.id}, Name=${deadEnemyInstance.name}, LootTableID=${deadEnemyInstance.lootTableId}`);
+                                } else {
+                                    this.logger.warn(`Could not find instance for dead enemy ID: ${deadEnemyId} in zone ${zoneId}`);
+                                }
+                                // -----------------------------------------
+
                                 // --- Loot Drop Calculation ---
                                 if (deadEnemyInstance && deadEnemyInstance.lootTableId) {
                                     this.logger.log(`Enemy ${deadEnemyInstance.name} (${deadEnemyId}) died, checking loot table ${deadEnemyInstance.lootTableId}...`);
@@ -185,7 +194,9 @@ export class GameLoopService implements OnApplicationShutdown {
                                                     position: droppedItem.position,
                                                     quantity: droppedItem.quantity,
                                                 };
+                                                this.logger.verbose(`[GameLoop] PRE-QUEUE ItemDropped: ${itemPayload.id}`);
                                                 this.broadcastService.queueItemDropped(zoneId, itemPayload);
+                                                this.logger.verbose(`[GameLoop] POST-QUEUE ItemDropped: ${itemPayload.id}`);
                                             } else {
                                                  this.logger.error(`Failed to add dropped item ${droppedItem.itemName} (${droppedItem.id}) to zone ${zoneId}`);
                                             }

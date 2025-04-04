@@ -168,6 +168,7 @@ export class BroadcastService {
         }
 
         if (itemsDropped && itemsDropped.length > 0) {
+            this.logger.verbose(`[Broadcast] Emitting itemsDropped for zone ${zoneId} with ${itemsDropped.length} item(s). First item ID: ${itemsDropped[0].id}`);
             // Client expects { items: [...] }
             this.server.to(zoneId).emit('itemsDropped', { items: itemsDropped });
             this.itemDroppedQueue.delete(zoneId); // Clear queue

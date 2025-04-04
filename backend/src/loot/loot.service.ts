@@ -36,16 +36,19 @@ export class LootService {
    * @returns An array of DroppedItem objects representing the items dropped.
    */
   async calculateLootDrops(lootTableId: string): Promise<DroppedItem[]> {
+    this.logger.verbose(`Calculating loot for table ID: ${lootTableId}`);
     const lootTable = await this.getLootTableWithEntries(lootTableId);
     if (!lootTable || !lootTable.entries || lootTable.entries.length === 0) {
         this.logger.warn(`Loot table ${lootTableId} not found or has no entries.`);
         return []; // No loot table found or it's empty
     }
 
+    this.logger.verbose(`Processing ${lootTable.entries.length} entries for table ${lootTable.name} (${lootTableId})`);
     const droppedItems: DroppedItem[] = [];
-    const randomChance = Math.random() * 100; // Percentage roll (0.0 to 99.99...)
-
+    
     for (const entry of lootTable.entries) {
+        const randomChance = Math.random() * 100; // Roll per item
+        this.logger.verbose(` - Entry ${entry.id} (${entry.itemTemplate.name}): Roll ${randomChance.toFixed(2)} vs Chance ${entry.dropChance}`);
         if (randomChance <= entry.dropChance) {
             // Drop chance succeeded, calculate quantity
             const quantity = Math.floor(

@@ -45,17 +45,14 @@ export class AIService {
 
         // Check if current target is valid
         if (!targetCharacter || targetCharacter.currentHealth <= 0 || targetCharacter.state === 'dead') {
-             this.logger.verbose(`Enemy ${enemy.id} lost/invalid target ${enemy.currentTargetId}. Scanning for new target...`);
              // --- ADDED: Scan for new target immediately after a kill/invalid target --- 
              const closestPlayer = this.findClosestPlayer(enemy, zoneId);
              if (closestPlayer && this.calculateDistance(enemy.position, closestPlayer) <= this.ENEMY_AGGRO_RANGE) {
-                 this.logger.verbose(`Enemy ${enemy.id} found new target ${closestPlayer.id} after previous target loss. Transitioning to CHASING.`);
                  enemy.currentTargetId = closestPlayer.id;
                  this.setState(enemy, zoneId, 'CHASING', closestPlayer);
                  return { type: 'MOVE_TO', target: { x: closestPlayer.positionX!, y: closestPlayer.positionY! } };
              } else {
                  // --- No new target found, NOW become IDLE ---
-                 this.logger.verbose(`Enemy ${enemy.id} found no other targets. Becoming IDLE.`);
                  this.setState(enemy, zoneId, 'IDLE', null);
                  enemy.currentTargetId = null;
                  return { type: 'IDLE' };
@@ -75,7 +72,6 @@ export class AIService {
                 this.setState(enemy, zoneId, 'ATTACKING', null); // Ensure state is attacking, clear movement target
                 enemy.lastAttackTime = now; // Record attack time
                 this.zoneService.updateEnemyAttackTime(zoneId, enemy.id, now); // Persist attack time
-                this.logger.verbose(`Enemy ${enemy.id} attacking ${targetCharacter.id}`);
                 return {
                     type: 'ATTACK',
                     targetEntityId: targetCharacter.id,
@@ -84,13 +80,11 @@ export class AIService {
             } else {
                 // Still on Cooldown: Remain in ATTACKING state but do nothing this tick
                 this.setState(enemy, zoneId, 'ATTACKING', null); // Ensure state stays attacking, clear movement target
-                 this.logger.verbose(`Enemy ${enemy.id} on attack cooldown.`); // Changed from silly to verbose
                 return { type: 'IDLE' }; // No action while cooling down
             }
         } else {
             // --- Out of Range: CHASE --- 
             this.setState(enemy, zoneId, 'CHASING', targetCharacter);
-            this.logger.verbose(`Enemy ${enemy.id} chasing ${targetCharacter.id}`);
             return {
                type: 'MOVE_TO',
                target: { x: targetCharacter.positionX!, y: targetCharacter.positionY! },
@@ -107,7 +101,6 @@ export class AIService {
 
             if (distToAnchorSq > leashDistance * leashDistance) {
                 if (enemy.aiState !== 'LEASHED') {
-                    this.logger.verbose(`Enemy ${enemy.id} is leashing back to anchor.`);
                     this.setState(enemy, zoneId, 'LEASHED', { x: enemy.anchorX, y: enemy.anchorY });
                 }
                 return { type: 'MOVE_TO', target: { x: enemy.anchorX, y: enemy.anchorY } };
@@ -116,7 +109,6 @@ export class AIService {
 
         // If was leashed but now back in range
         if (enemy.aiState === 'LEASHED') {
-            this.logger.verbose(`Enemy ${enemy.id} finished leashing. Becoming IDLE.`);
             this.setState(enemy, zoneId, 'IDLE', null);
             return { type: 'IDLE' };
         }
@@ -126,7 +118,6 @@ export class AIService {
              // Aggro Scan first when IDLE
              const closestPlayer = this.findClosestPlayer(enemy, zoneId);
              if (closestPlayer && this.calculateDistance(enemy.position, closestPlayer) <= this.ENEMY_AGGRO_RANGE) {
-                 this.logger.verbose(`Enemy ${enemy.id} aggroed on ${closestPlayer.name}. Transitioning to CHASING.`);
                  enemy.currentTargetId = closestPlayer.id;
                  this.setState(enemy, zoneId, 'CHASING', closestPlayer);
                  return { type: 'MOVE_TO', target: { x: closestPlayer.positionX!, y: closestPlayer.positionY! } };

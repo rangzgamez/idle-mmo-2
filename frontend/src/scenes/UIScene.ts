@@ -112,4 +112,38 @@ export default class UIScene extends Phaser.Scene {
         EventBus.off('focus-chat-input', this.focusChatInput, this); // <-- Remove focus listener
         // DOM elements added via this.add.dom are usually cleaned up automatically by Phaser
     }
+
+    // --- Temporary Message Display ---
+    /**
+     * Displays a message temporarily on the screen.
+     * @param message The text message to display.
+     * @param duration How long to display the message in milliseconds (default 3000).
+     */
+    public showTemporaryMessage(message: string, duration: number = 3000) {
+        const x = Number(this.sys.game.config.width) / 2;
+        const y = 50; // Position near the top-center
+
+        const text = this.add.text(x, y, message, {
+            fontSize: '16px',
+            fontFamily: 'Arial, sans-serif',
+            color: '#ffdddd', // Light red/pinkish color for errors/warnings
+            backgroundColor: '#000000aa',
+            padding: { x: 10, y: 5 },
+            align: 'center'
+        });
+        text.setOrigin(0.5, 0.5);
+        text.setDepth(1000); // Ensure it's on top of other UI
+
+        // Fade out and destroy
+        this.tweens.add({
+            targets: text,
+            alpha: { from: 1, to: 0 },
+            delay: duration - 500, // Start fading 500ms before duration ends
+            duration: 500,
+            ease: 'Power1',
+            onComplete: () => {
+                text.destroy();
+            }
+        });
+    }
 }

@@ -254,13 +254,12 @@ export class ZoneService implements OnModuleInit {
           currentHealth: enemyTemplate.baseHealth,
           position,
           aiState: 'IDLE',
-          // Add base stats from template
           baseAttack: enemyTemplate.baseAttack,
           baseDefense: enemyTemplate.baseDefense,
           baseSpeed: enemyTemplate.baseSpeed,
           lootTableId: enemyTemplate.lootTableId,
         };
-    
+        this.logger.verbose(`Creating enemy instance ${id} from template ${templateId}. Name: ${newEnemy.name}, LootTableID: ${newEnemy.lootTableId}`);
         zone.enemies.set(id, newEnemy);
         console.log(`Added enemy ${enemyTemplate.name} at ${position.x}, ${position.y} (${id}) to zone ${zoneId}`);
         return newEnemy;
@@ -588,7 +587,7 @@ export class ZoneService implements OnModuleInit {
             anchorY: nest.center.y,
             wanderRadius: nest.radius,
         };
-
+        this.logger.verbose(`Spawning enemy instance ${id} from nest ${nest.id}. Name: ${newEnemy.name}, LootTableID: ${newEnemy.lootTableId}`);
         zone.enemies.set(id, newEnemy);
         nest.currentEnemyIds.add(id); // Track the enemy in its nest
         this.logger.log(`Spawned enemy ${template.name} (${id}) from nest ${nest.id} in zone ${nest.zoneId}`);

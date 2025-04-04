@@ -5,6 +5,7 @@ import { CharacterSprite } from '../gameobjects/CharacterSprite'; // Import the 
 import { EventBus } from '../EventBus';
 import UIScene from './UIScene';
 import { EnemySprite } from '../gameobjects/EnemySprite';
+import { DroppedItemSprite, DroppedItemData } from '../gameobjects/DroppedItemSprite'; // <-- Import DroppedItemSprite
 // Add the interface definitions if not shared
 interface ZoneCharacterState { id: string; ownerId: string; ownerName: string; name: string; level: number; x: number | null; y: number | null; currentHealth?: number; baseHealth?: number; }
 interface EntityUpdateData { id: string; x?: number | null; y?: number | null; health?: number | null; state?: string; }
@@ -24,6 +25,11 @@ interface CombatActionData {
     targetId: string;
     damage: number;
     type: string; // e.g., 'attack', 'heal' - currently only 'attack' expected
+}
+
+// Add interface for itemsDropped event payload
+interface ItemsDroppedPayload {
+    items: DroppedItemData[];
 }
 
 interface EnemySpawnData {
@@ -48,6 +54,7 @@ export default class GameScene extends Phaser.Scene {
     private uiSceneRef: UIScene | null = null;
     private currentPlayerUsername: string | null = null; // <-- Add property to store username
     private enemySprites: Map<string, EnemySprite> = new Map(); //NEW
+    private droppedItemSprites: Map<string, DroppedItemSprite> = new Map(); // <-- Add map for dropped items
     constructor() {
         super('GameScene');
     }
@@ -111,6 +118,8 @@ export default class GameScene extends Phaser.Scene {
         EventBus.on('entity-died', this.handleEntityDied, this); // <-- ADD LISTENER FOR DEATHS
         EventBus.on('enemy-spawned', this.handleEnemySpawned, this); // +++ ADD LISTENER +++
         EventBus.on('combat-action', this.handleCombatAction, this); // +++ ADD LISTENER for ATTACK VISUAL +++
+        EventBus.on('items-dropped', this.handleItemsDropped, this); // <-- ADD LISTENER for dropped items
+        EventBus.on('item-picked-up', this.handleItemPickedUp, this); // <-- ADD LISTENER for item pickup confirmation
         // --- Launch UI Scene ---
         // Use scene.launch to run it in parallel with this scene
         console.log('Launching UIScene...');
@@ -468,6 +477,8 @@ export default class GameScene extends Phaser.Scene {
         EventBus.off('entity-died', this.handleEntityDied, this); // <-- REMOVE LISTENER FOR DEATHS
         EventBus.off('enemy-spawned', this.handleEnemySpawned, this); // ++ REMOVE LISTENER ++
         EventBus.off('combat-action', this.handleCombatAction, this); // +++ REMOVE LISTENER +++
+        EventBus.off('items-dropped', this.handleItemsDropped, this); // <-- REMOVE LISTENER
+        EventBus.off('item-picked-up', this.handleItemPickedUp, this); // <-- REMOVE LISTENER
         // --- Clean up click marker ---
         if (this.markerFadeTween) {
             this.markerFadeTween.stop(); // Stop active tween on shutdown
@@ -482,6 +493,9 @@ export default class GameScene extends Phaser.Scene {
         this.otherCharacters.forEach(sprite => sprite.destroy());
         this.playerCharacters.clear();
         this.otherCharacters.clear();
+        // Destroy dropped item sprites
+        this.droppedItemSprites.forEach(sprite => sprite.destroy());
+        this.droppedItemSprites.clear();
         // --- Stop the UI Scene when GameScene stops ---
         console.log('Stopping UIScene...');
         this.input.keyboard?.off('keydown-ENTER'); // Clean up listener
@@ -609,6 +623,61 @@ export default class GameScene extends Phaser.Scene {
 
         } else {
             console.warn(`[GameScene] Combat action target sprite not found or already removed: ${data.targetId}`); // <-- ADD/MODIFY THIS LOG
+        }
+    }
+
+    // --- New Event Handlers for Items ---
+    private handleItemsDropped(data: ItemsDroppedPayload) {
+        console.log('[GameScene] handleItemsDropped triggered with data:', data); // <-- ADD LOG HERE
+        if (!data || !Array.isArray(data.items)) {
+            console.warn('Received invalid itemsDropped data:', data);
+            return;
+        }
+        console.log('Received items dropped:', data.items);
+
+        data.items.forEach(itemData => {
+            if (this.droppedItemSprites.has(itemData.id)) {
+                console.warn(`Item sprite ${itemData.id} already exists, skipping.`);
+                return;
+            }
+            try {
+                 // Add click listener when creating the sprite
+                 const itemSprite = new DroppedItemSprite(this, itemData);
+                 itemSprite.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+                     if (pointer.button === 0) { // Only react to left click
+                        console.log(`Attempting to pick up item: ${itemData.itemName} (${itemData.id})`);
+                        this.networkManager.sendMessage('pickupItemCommand', { itemId: itemData.id }, (response) => {
+                            if (response && response.success) {
+                                console.log(`Pickup successful for item ${itemData.id}`);
+                                // Sprite removal will be handled by 'itemPickedUp' event
+                            } else {
+                                console.warn(`Pickup failed for item ${itemData.id}:`, response?.message);
+                                // Optionally show feedback to the player in UIScene
+                                this.uiSceneRef?.showTemporaryMessage(`Cannot pick up: ${response?.message || 'Error'}`);
+                            }
+                        });
+                    }
+                 });
+                this.droppedItemSprites.set(itemData.id, itemSprite);
+                console.log(`Created sprite for dropped item: ${itemData.itemName} (${itemData.id})`);
+            } catch (error) {
+                console.error(`Failed to create sprite for item ${itemData.id} with key ${itemData.spriteKey}:`, error);
+            }
+        });
+    }
+
+    private handleItemPickedUp(data: { itemId: string }) {
+        if (!data || !data.itemId) {
+            console.warn('Received invalid itemPickedUp data:', data);
+            return;
+        }
+        console.log(`Item picked up (removing sprite): ${data.itemId}`);
+        const sprite = this.droppedItemSprites.get(data.itemId);
+        if (sprite) {
+            sprite.destroy();
+            this.droppedItemSprites.delete(data.itemId);
+        } else {
+            console.warn(`Could not find sprite to remove for picked up item ID: ${data.itemId}`);
         }
     }
 }

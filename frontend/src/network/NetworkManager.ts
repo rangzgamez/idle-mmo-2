@@ -145,6 +145,30 @@ export class NetworkManager {
         });
         // +++++++++++++++++++++++++++++++++++++++
 
+        // +++ ADDED: Listen for items dropped (Handles BATCHED items) +++
+        this.socket.on('itemsDropped', (data: { items: any[] }) => { // Assuming payload is { items: [...] }
+            console.log('[NetworkManager] Received "itemsDropped" event:', data); // <-- Log reception
+            if (data && data.items && Array.isArray(data.items)) {
+                EventBus.emit('items-dropped', data); // <-- Emit to local EventBus (using kebab-case convention)
+                console.log('[NetworkManager] Emitted "items-dropped" to EventBus.'); // <-- Log emission
+            } else {
+                console.warn('[NetworkManager] Received invalid "itemsDropped" data format:', data);
+            }
+        });
+        // ++++++++++++++++++++++++++++++++++++++++
+
+        // +++ ADDED: Listen for single item pickup confirmation +++
+        this.socket.on('itemPickedUp', (data: { itemId: string }) => {
+            console.log('[NetworkManager] Received "itemPickedUp" event:', data);
+            if (data && data.itemId) {
+                EventBus.emit('item-picked-up', data);
+                console.log('[NetworkManager] Emitted "item-picked-up" to EventBus.');
+            } else {
+                console.warn('[NetworkManager] Received invalid "itemPickedUp" data format:', data);
+            }
+        });
+        // ++++++++++++++++++++++++++++++++++++++++
+
         // Existing listeners (keep if needed)
         // this.socket.on('chatMessage', (data) => { /* ... */ });
     }
