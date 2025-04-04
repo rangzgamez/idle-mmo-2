@@ -40,9 +40,11 @@ export default class UIScene extends Phaser.Scene {
     private currentParty: any[] = []; // Store the selected party info
     private currentEquipCharacterIndex: number = 0;
     private allCharacterEquipment: Map<string, Partial<Record<EquipmentSlot, InventoryItem>>> = new Map();
-    private equipPrevButton: HTMLButtonElement | null = null;
-    private equipNextButton: HTMLButtonElement | null = null;
-    private equipCharInfo: HTMLSpanElement | null = null;
+    // Remove pagination button refs, add tab container ref
+    // private equipPrevButton: HTMLButtonElement | null = null;
+    // private equipNextButton: HTMLButtonElement | null = null;
+    // private equipCharInfo: HTMLSpanElement | null = null;
+    private equipmentTabsContainer: HTMLElement | null = null; 
     private receivedPartyData: any[] = []; // Store data received on init
 
     constructor() {
@@ -144,17 +146,15 @@ export default class UIScene extends Phaser.Scene {
         ).join('');
 
         const equipWindowHtml = `
-            <div id="equipment-window" style="width: 220px; /* Slightly wider for pagination */ flex-direction: column; background-color: rgba(40, 40, 40, 0.9); border: 2px solid #888; border-radius: 5px; font-family: sans-serif; z-index: 99;">
+            <div id="equipment-window" style="width: 220px; /* Slightly wider */ flex-direction: column; background-color: rgba(40, 40, 40, 0.9); border: 2px solid #888; border-radius: 5px; font-family: sans-serif; z-index: 99;">
                 <div id="equipment-title-bar" style="background-color: #333; color: white; padding: 5px; font-size: 14px; font-weight: bold; cursor: grab; display: flex; justify-content: space-between; align-items: center;">
                     <span>Equipment</span>
                     <button id="equipment-close-button" style="background: none; border: none; color: white; font-size: 16px; cursor: pointer; line-height: 1;">&times;</button>
                 </div>
-                <!-- Character Info and Pagination -->
-                 <div id="equipment-pagination" style="display: flex; justify-content: space-between; align-items: center; padding: 5px 10px; border-bottom: 1px solid #555; background-color: rgba(0,0,0,0.2);">
-                    <button id="equip-prev-button" style="padding: 2px 5px; font-size: 12px;">&lt;</button>
-                    <span id="equip-char-info" style="color: white; font-size: 12px; text-align: center; flex-grow: 1;">Character (1/1)</span>
-                    <button id="equip-next-button" style="padding: 2px 5px; font-size: 12px;">&gt;</button>
-                </div>
+                <!-- Equipment Character Tabs -->
+                 <div id="equipment-tabs" style="display: flex; border-bottom: 1px solid #555; background-color: rgba(0,0,0,0.1);">
+                    <!-- Tabs will be generated here -->
+                 </div>
                 <!-- Equipment Slot Grid (Updated Layout) -->
                 <div style="padding: 10px; display: grid; grid-template-areas: 
                     '. helm necklace' 
@@ -176,10 +176,9 @@ export default class UIScene extends Phaser.Scene {
 
         const equipmentCloseButton = this.equipWindowGameObject.getChildByID('equipment-close-button') as HTMLElement;
         const equipmentTitleBar = this.equipWindowGameObject.getChildByID('equipment-title-bar') as HTMLElement;
-         // Get references to pagination controls
-        this.equipPrevButton = this.equipWindowGameObject.getChildByID('equip-prev-button') as HTMLButtonElement;
-        this.equipNextButton = this.equipWindowGameObject.getChildByID('equip-next-button') as HTMLButtonElement;
-        this.equipCharInfo = this.equipWindowGameObject.getChildByID('equip-char-info') as HTMLSpanElement;
+         // Get references to tab container
+        // Removed pagination refs
+        this.equipmentTabsContainer = this.equipWindowGameObject.getChildByID('equipment-tabs') as HTMLElement;
 
         // Store references to slot divs in the map
         Object.values(EquipmentSlot).forEach(slot => {
@@ -191,10 +190,14 @@ export default class UIScene extends Phaser.Scene {
             }
         });
 
-        if (!equipmentButton || !equipmentCloseButton || !equipmentTitleBar || !this.equipPrevButton || !this.equipNextButton || !this.equipCharInfo || this.equipmentSlots.size !== Object.keys(EquipmentSlot).length) {
-            console.error("Failed to get all equipment UI elements (including pagination)!");
+        // Updated check for elements
+        if (!equipmentButton || !equipmentCloseButton || !equipmentTitleBar || !this.equipmentTabsContainer || this.equipmentSlots.size !== Object.keys(EquipmentSlot).length) {
+            console.error("Failed to get all equipment UI elements (including tabs container)!");
             if (!equipmentButton) {
                 console.error("UIScene: Specifically, #equipment-button was NOT found via getChildByID!");
+            }
+             if (!this.equipmentTabsContainer) {
+                console.error("UIScene: Specifically, #equipment-tabs container was NOT found!");
             }
             // Don't return here, other UI might still work
         }
@@ -248,16 +251,9 @@ export default class UIScene extends Phaser.Scene {
         }
 
         // --- Equipment Pagination Button Listeners ---
-        if (this.equipPrevButton) {
-            this.equipPrevButton.addEventListener('click', () => {
-                this.changeEquipmentCharacter(-1);
-            });
-        }
-        if (this.equipNextButton) {
-            this.equipNextButton.addEventListener('click', () => {
-                this.changeEquipmentCharacter(1);
-            });
-        }
+        // REMOVED
+        // if (this.equipPrevButton) { ... }
+        // if (this.equipNextButton) { ... }
 
         // --- Equipment Drag Logic ---
         if (this.equipWindowGameObject && equipmentTitleBar) {
@@ -673,26 +669,92 @@ export default class UIScene extends Phaser.Scene {
 
     // --- Render Equipment for Current Character --- 
     private renderCurrentCharacterEquipment() {
-        if (!this.equipWindowGameObject || !this.equipCharInfo || !this.equipPrevButton || !this.equipNextButton) {
-            console.error("Equipment window elements not ready for rendering.");
+        // Check for tab container instead of pagination buttons
+        if (!this.equipWindowGameObject || !this.equipmentTabsContainer) {
+            console.error("Equipment window elements not ready for rendering (missing tabs container?).");
             return;
         }
 
         const partySize = this.currentParty.length;
+        
+        // --- Generate Tabs --- 
+        this.equipmentTabsContainer.innerHTML = ''; // Clear existing tabs
         if (partySize === 0) {
-            this.equipCharInfo.textContent = 'No Party Selected';
+            this.equipmentTabsContainer.textContent = 'No Party Selected'; // Display message in tab area
+            this.equipmentTabsContainer.style.padding = '5px';
+            this.equipmentTabsContainer.style.color = '#888';
+            this.equipmentTabsContainer.style.textAlign = 'center';
+        } else {
+            this.equipmentTabsContainer.style.padding = '0'; // Reset padding
+            this.currentParty.forEach((character, index) => {
+                // *** Add null check for safety although covered by function entry check ***
+                if (!this.equipmentTabsContainer) return; 
+
+                const tabButton = document.createElement('button');
+                tabButton.textContent = character.name.substring(0, 8) + (character.name.length > 8 ? '...': ''); // Shorten name
+                tabButton.dataset.index = String(index); // Store index on the button
+                tabButton.title = character.name; // Full name on hover
+
+                // Basic tab styling (adjust as needed)
+                tabButton.style.flexGrow = '1';
+                tabButton.style.padding = '6px 4px';
+                tabButton.style.border = 'none';
+                tabButton.style.borderRight = '1px solid #555';
+                tabButton.style.fontSize = '11px';
+                tabButton.style.textAlign = 'center';
+                tabButton.style.cursor = 'pointer';
+                tabButton.style.whiteSpace = 'nowrap';
+                tabButton.style.overflow = 'hidden';
+                tabButton.style.textOverflow = 'ellipsis';
+
+                if (index === this.currentEquipCharacterIndex) {
+                    // Active tab style
+                    tabButton.style.backgroundColor = 'rgba(80, 80, 80, 0.7)';
+                    tabButton.style.color = 'white';
+                    tabButton.style.fontWeight = 'bold';
+                } else {
+                    // Inactive tab style
+                    tabButton.style.backgroundColor = 'rgba(40, 40, 40, 0.5)';
+                    tabButton.style.color = '#bbb';
+                }
+
+                // Add click listener for tab switching
+                tabButton.addEventListener('click', () => {
+                    const clickedIndex = parseInt(tabButton.dataset.index || '0', 10);
+                    if (clickedIndex !== this.currentEquipCharacterIndex) {
+                        this.currentEquipCharacterIndex = clickedIndex;
+                        console.log(`[UIScene] Switched equipment tab to index: ${this.currentEquipCharacterIndex}`);
+                        this.renderCurrentCharacterEquipment(); // Re-render to update slots and highlight
+
+                        // Optional: Request equipment if not loaded
+                        const charId = this.currentParty[this.currentEquipCharacterIndex]?.id;
+                        if (charId && !this.allCharacterEquipment.has(charId)) {
+                            console.log(`[UIScene] Requesting equipment for newly viewed character via tab: ${charId}`);
+                            this.networkManager.sendMessage('requestEquipment', { characterId: charId });
+                        }
+                    }
+                });
+
+                this.equipmentTabsContainer.appendChild(tabButton);
+            });
+             // Remove border from last tab
+            const lastTab = this.equipmentTabsContainer.lastChild as HTMLElement;
+            if (lastTab) lastTab.style.borderRight = 'none';
+        }
+        // --- End Tab Generation ---
+
+        // If no party, clear slots and exit
+        if (partySize === 0) {
             this.equipmentSlots.forEach((slotElement, slot) => {
                 slotElement.innerHTML = '';
                 slotElement.textContent = slot.substring(0, 3);
                 slotElement.style.borderColor = '#888';
                 slotElement.title = slot;
             });
-            this.equipPrevButton.disabled = true;
-            this.equipNextButton.disabled = true;
             return;
         }
 
-        // Ensure index is valid
+        // Ensure index is valid (still useful)
         this.currentEquipCharacterIndex = Math.max(0, Math.min(this.currentEquipCharacterIndex, partySize - 1));
 
         const character = this.currentParty[this.currentEquipCharacterIndex];
@@ -700,12 +762,12 @@ export default class UIScene extends Phaser.Scene {
         const characterName = character?.name ?? 'Unknown';
         const equipmentData = this.allCharacterEquipment.get(characterId) || {};
 
-        // Update character info display
-        this.equipCharInfo.textContent = `${characterName} (${this.currentEquipCharacterIndex + 1}/${partySize})`;
+        // Update character info display (REMOVED - now handled by active tab highlight)
+        // this.equipCharInfo.textContent = `${characterName} (${this.currentEquipCharacterIndex + 1}/${partySize})`;
 
         console.log(`[UIScene] Rendering equipment for ${characterName} (Index: ${this.currentEquipCharacterIndex})`, equipmentData);
 
-        // Update slots
+        // Update slots (NO CHANGES NEEDED HERE)
         this.equipmentSlots.forEach((slotElement, slot) => {
             const item = equipmentData[slot]; // Get item for this slot, if any
             slotElement.innerHTML = ''; // Clear previous content
@@ -724,31 +786,13 @@ export default class UIScene extends Phaser.Scene {
             }
         });
 
-        // Update pagination button states
-        this.equipPrevButton.disabled = this.currentEquipCharacterIndex <= 0;
-        this.equipNextButton.disabled = this.currentEquipCharacterIndex >= partySize - 1;
-        this.equipPrevButton.style.cursor = this.equipPrevButton.disabled ? 'not-allowed' : 'pointer';
-        this.equipNextButton.style.cursor = this.equipNextButton.disabled ? 'not-allowed' : 'pointer';
+        // Update pagination button states (REMOVED)
+        // this.equipPrevButton.disabled = ...
+        // this.equipNextButton.disabled = ...
     }
 
     // --- Change Character View --- 
-    private changeEquipmentCharacter(delta: number) {
-        if (!this.currentParty || this.currentParty.length <= 1) return; // No change if no party or only 1 char
+    // REMOVED - No longer needed
+    // private changeEquipmentCharacter(delta: number) { ... }
 
-        const newIndex = this.currentEquipCharacterIndex + delta;
-        const partySize = this.currentParty.length;
-
-        // Clamp the index
-        this.currentEquipCharacterIndex = Math.max(0, Math.min(newIndex, partySize - 1));
-
-        console.log(`[UIScene] Changing equipment view to index: ${this.currentEquipCharacterIndex}`);
-        this.renderCurrentCharacterEquipment();
-
-        // Optional: Request equipment for the newly viewed character if we don't have it yet
-        const characterId = this.currentParty[this.currentEquipCharacterIndex]?.id;
-        if (characterId && !this.allCharacterEquipment.has(characterId)) {
-            console.log(`[UIScene] Requesting equipment for newly viewed character: ${characterId}`);
-            this.networkManager.sendMessage('requestEquipment', { characterId: characterId });
-        }
-    }
 }
