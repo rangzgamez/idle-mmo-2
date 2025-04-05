@@ -1,5 +1,5 @@
 // backend/src/game/zone.service.ts
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit, Inject, forwardRef } from '@nestjs/common';
 import { Socket } from 'socket.io';
 import { Character } from '../character/character.entity';
 import { User } from '../user/user.entity';
@@ -9,6 +9,7 @@ import { EnemyService } from '../enemy/enemy.service'; // Import EnemyService
 import { SpawnNest } from './interfaces/spawn-nest.interface'; // Import SpawnNest
 import { Enemy } from 'src/enemy/enemy.entity'; // Import Enemy entity
 import { DroppedItem } from './interfaces/dropped-item.interface'; // Import DroppedItem
+import { CharacterService } from '../character/character.service'; // <-- Import CharacterService
 
 // Interface for player data within a zone
 interface PlayerInZone {
@@ -44,8 +45,11 @@ export interface RuntimeCharacterData extends Character {
     targetY: number | null;
     currentHealth: number;
     ownerId: string; // Should always be present after addPlayerToZone
-    baseAttack: number;
-    baseDefense: number;
+    baseAttack: number; // Base stat from Character entity
+    baseDefense: number; // Base stat from Character entity
+    // --- NEW: Effective Stats (including equipment) ---
+    effectiveAttack: number;
+    effectiveDefense: number;
     // --- RTS Combat State ---
     state: 'idle' | 'moving' | 'attacking' | 'dead';
     attackTargetId: string | null;
@@ -74,7 +78,12 @@ export class ZoneService implements OnModuleInit {
     private readonly NESTS_PER_TEMPLATE = 3; // Was 6
     // -------------------------
 
-    constructor(private readonly enemyService: EnemyService) {
+    constructor(
+        private readonly enemyService: EnemyService,
+        // --- NEW: Inject CharacterService using forwardRef ---
+        @Inject(forwardRef(() => CharacterService))
+        private readonly characterService: CharacterService,
+    ) {
         // Initialize default zone(s) structure first
         this.zones.set('startZone', {
             players: new Map(),
@@ -148,7 +157,8 @@ export class ZoneService implements OnModuleInit {
 
     // --- Player Management ---
 
-    addPlayerToZone(zoneId: string, playerSocket: Socket, user: User, characters: Character[]): void {
+    // Modify addPlayerToZone to calculate initial effective stats
+    async addPlayerToZone(zoneId: string, playerSocket: Socket, user: User, characters: Character[]): Promise<void> { // <-- Make async
         if (!this.zones.has(zoneId)) {
             this.logger.log(`Creating new zone: ${zoneId}`);
             // If creating a new zone, decide how/if to initialize nests
@@ -161,38 +171,55 @@ export class ZoneService implements OnModuleInit {
                  droppedItems: new Map() // <-- Initialize dropped items for new zone
             });
         }
-        const zone = this.zones.get(zoneId)!; // Zone is guaranteed to exist now
+        const zone = this.zones.get(zoneId)!;
 
-        const runtimeCharacters: RuntimeCharacterData[] = characters.map(char => ({
-            ...char,
-            positionX: char.positionX ?? (100 + Math.random() * 50), // Existing spawn logic
-            positionY: char.positionY ?? (100 + Math.random() * 50),
-            targetX: char.positionX ?? (100 + Math.random() * 50), // Initial target is current position
-            targetY: char.positionY ?? (100 + Math.random() * 50),
-            currentZoneId: zoneId,
-            ownerId: user.id, // <-- ADD OWNER ID
-            currentHealth: char.baseHealth, // <-- INITIALIZE HEALTH
-            baseAttack: char.baseAttack, // <-- ADD BASE STATS
-            baseDefense: char.baseDefense, // <-- ADD BASE STATS
-            // --- Initialize RTS Combat State ---
-            state: 'idle',
-            attackTargetId: null,
-            anchorX: char.positionX ?? (100 + Math.random() * 50), // Initial anchor is spawn point
-            anchorY: char.positionY ?? (100 + Math.random() * 50),
-            attackRange: char.attackRange, // Use value from entity
-            aggroRange: char.aggroRange,   // Use value from entity
-            leashDistance: char.leashDistance, // Use value from entity
-            // --- Initialize Attack Timing ---
-            attackSpeed: char.attackSpeed, // Use value from entity
-            lastAttackTime: 0, // Initialize to 0, meaning they can attack immediately
-            // --- Initialize Death State ---
-            timeOfDeath: null, // Initialize as not dead
-        }));
+        const runtimeCharacters: RuntimeCharacterData[] = []; // Start with empty array
+
+        // Process characters one by one to calculate stats
+        for (const char of characters) {
+            let effectiveStats = { effectiveAttack: char.baseAttack ?? 0, effectiveDefense: char.baseDefense ?? 0 };
+            try {
+                // Calculate stats including equipment for the initial add
+                effectiveStats = await this.characterService.calculateEffectiveStats(char.id);
+                this.logger.verbose(`Initial effective stats for ${char.id}: Attack=${effectiveStats.effectiveAttack}, Defense=${effectiveStats.effectiveDefense}`);
+            } catch (error) {
+                this.logger.error(`Failed to calculate initial effective stats for character ${char.id}: ${error.message}`, error.stack);
+                // Use base stats as fallback if calculation fails
+            }
+
+            const runtimeChar: RuntimeCharacterData = {
+                ...char,
+                positionX: char.positionX ?? (100 + Math.random() * 50),
+                positionY: char.positionY ?? (100 + Math.random() * 50),
+                targetX: char.positionX ?? (100 + Math.random() * 50),
+                targetY: char.positionY ?? (100 + Math.random() * 50),
+                currentZoneId: zoneId,
+                ownerId: user.id,
+                currentHealth: char.baseHealth,
+                baseAttack: char.baseAttack, // Keep base stats
+                baseDefense: char.baseDefense,
+                // --- Use calculated effective stats ---
+                effectiveAttack: effectiveStats.effectiveAttack,
+                effectiveDefense: effectiveStats.effectiveDefense,
+                // --- Initialize RTS Combat State ---
+                state: 'idle',
+                attackTargetId: null,
+                anchorX: char.positionX ?? (100 + Math.random() * 50),
+                anchorY: char.positionY ?? (100 + Math.random() * 50),
+                attackRange: char.attackRange,
+                aggroRange: char.aggroRange,
+                leashDistance: char.leashDistance,
+                // --- Initialize Attack Timing ---
+                attackSpeed: char.attackSpeed,
+                lastAttackTime: 0,
+                // --- Initialize Death State ---
+                timeOfDeath: null,
+            };
+            runtimeCharacters.push(runtimeChar);
+        } // End for loop
 
         zone.players.set(user.id, { socket: playerSocket, user, characters: runtimeCharacters });
-        // console.log(zone);
-        // console.log(this.zones);
-        this.logger.log(`User ${user.username} (${user.id}) added to zone ${zoneId}`);
+        this.logger.log(`User ${user.username} (${user.id}) added to zone ${zoneId} with ${runtimeCharacters.length} characters.`);
 
         // Add socket to the Socket.IO room for this zone
         playerSocket.join(zoneId);
@@ -655,4 +682,32 @@ export class ZoneService implements OnModuleInit {
         const zone = this.zones.get(zoneId);
         return zone ? Array.from(zone.droppedItems.values()) : [];
     }
+
+    // --- NEW: Method to update effective stats for a character already in a zone ---
+    async updateCharacterEffectiveStats(
+        characterId: string,
+        stats: { effectiveAttack: number; effectiveDefense: number }
+    ): Promise<boolean> {
+        let found = false;
+        for (const [zoneId, zone] of this.zones.entries()) {
+            for (const player of zone.players.values()) {
+                const characterIndex = player.characters.findIndex(c => c.id === characterId);
+                if (characterIndex !== -1) {
+                    player.characters[characterIndex].effectiveAttack = stats.effectiveAttack;
+                    player.characters[characterIndex].effectiveDefense = stats.effectiveDefense;
+                    this.logger.log(`Updated effective stats for character ${characterId} in zone ${zoneId}: Attack=${stats.effectiveAttack}, Defense=${stats.effectiveDefense}`);
+                    found = true;
+                    // Potentially emit an update event here if the client needs to know about stat changes?
+                    // this.broadcastService.queueEntityUpdate(...)
+                    break; // Character found and updated in this zone
+                }
+            }
+            if (found) break; // Stop searching zones if found
+        }
+        if (!found) {
+            this.logger.warn(`Attempted to update effective stats for character ${characterId}, but they were not found in any active zone.`);
+        }
+        return found;
+    }
+    // --- End NEW Method ---
 }

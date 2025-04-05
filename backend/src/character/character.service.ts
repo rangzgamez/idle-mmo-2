@@ -9,6 +9,7 @@ import { InventoryService } from '../inventory/inventory.service'; // Import Inv
 import { InventoryItem } from '../inventory/inventory.entity'; // Import InventoryItem
 import { ItemTemplate } from '../item/item.entity'; // Import ItemTemplate
 import { EquipmentSlot, ItemType } from '../item/item.types'; // Import Enums
+import { ZoneService } from '../game/zone.service'; // <-- Import ZoneService
 
 @Injectable()
 export class CharacterService {
@@ -21,6 +22,9 @@ export class CharacterService {
     // Use forwardRef to handle circular dependency (CharacterService <-> InventoryService)
     @Inject(forwardRef(() => InventoryService))
     private inventoryService: InventoryService,
+    // --- NEW: Inject ZoneService using forwardRef for circular dependency ---
+    @Inject(forwardRef(() => ZoneService))
+    private zoneService: ZoneService,
   ) {}
 
   async createCharacter(
@@ -65,6 +69,38 @@ export class CharacterService {
   async findCharacterByIdAndUserId(id: string, userId: string): Promise<Character | null> {
       return this.characterRepository.findOneBy({ id, userId });
   }
+
+  // --- NEW: Method to calculate effective stats ---
+  /**
+   * Calculates the effective attack and defense for a character, including equipment bonuses.
+   * @param characterId The ID of the character.
+   * @returns An object containing effectiveAttack and effectiveDefense.
+   * @throws NotFoundException if the character is not found.
+   */
+  async calculateEffectiveStats(characterId: string): Promise<{ effectiveAttack: number, effectiveDefense: number }> {
+    const character = await this.characterRepository.findOneBy({ id: characterId });
+    if (!character) {
+      this.logger.error(`Character ${characterId} not found during effective stat calculation.`);
+      throw new NotFoundException(`Character with ID ${characterId} not found.`);
+    }
+
+    // Default to base stats
+    let effectiveAttack = character.baseAttack ?? 0;
+    let effectiveDefense = character.baseDefense ?? 0;
+
+    try {
+      const bonuses = await this.inventoryService.getCharacterEquipmentBonuses(characterId);
+      effectiveAttack += bonuses.totalAttackBonus;
+      effectiveDefense += bonuses.totalDefenseBonus;
+      this.logger.verbose(`Calculated effective stats for ${characterId}: Attack=${effectiveAttack} (Base:${character.baseAttack}+${bonuses.totalAttackBonus}), Defense=${effectiveDefense} (Base:${character.baseDefense}+${bonuses.totalDefenseBonus})`);
+    } catch (error) {
+      this.logger.error(`Failed to get equipment bonuses for character ${characterId} during stat calculation: ${error.message}`, error.stack);
+      // Proceed with base stats if bonus calculation fails
+    }
+
+    return { effectiveAttack, effectiveDefense };
+  }
+  // --- End NEW Method ---
 
   // --- Equipment Logic ---
 
@@ -115,6 +151,17 @@ export class CharacterService {
     await this.inventoryService.saveInventoryItem(itemToEquip); 
     this.logger.log(`Item ${itemToEquip.id} (from inv slot ${originalInventorySlot}) equipped by Character ${characterId} in Slot ${targetSpecificSlot}.`);
 
+    // --- NEW: Recalculate stats and update ZoneService ---
+    try {
+        const newStats = await this.calculateEffectiveStats(characterId);
+        await this.zoneService.updateCharacterEffectiveStats(characterId, newStats);
+        this.logger.log(`Updated effective stats in ZoneService for character ${characterId} after equip.`);
+    } catch (error) {
+        this.logger.error(`Failed to update effective stats in ZoneService for ${characterId} after equip: ${error.message}`, error.stack);
+        // Decide how critical this is. Should the equip fail? For now, just log.
+    }
+    // --- End NEW ---
+
     return { success: true };
   }
 
@@ -145,6 +192,17 @@ export class CharacterService {
       await this.inventoryService.saveInventoryItem(itemToUnequip); 
       this.logger.log(`Marked InventoryItem ${itemToUnequip.id} (from slot ${originalSlotId}) as unequipped and moved to inventory slot ${emptySlot}.`);
   
+      // --- NEW: Recalculate stats and update ZoneService ---
+      try {
+          const newStats = await this.calculateEffectiveStats(characterId); // Use the stored characterId
+          await this.zoneService.updateCharacterEffectiveStats(characterId, newStats);
+          this.logger.log(`Updated effective stats in ZoneService for character ${characterId} after unequip.`);
+      } catch (error) {
+          this.logger.error(`Failed to update effective stats in ZoneService for ${characterId} after unequip: ${error.message}`, error.stack);
+          // Decide how critical this is. For now, just log.
+      }
+      // --- End NEW ---
+
       return { success: true, unequippedItemId: inventoryItemId };
   }
   

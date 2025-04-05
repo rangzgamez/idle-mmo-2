@@ -312,4 +312,30 @@ export class InventoryService {
         return false; // Indicate failure on transaction error
     });
   }
+
+  /**
+   * Calculates the total attack and defense bonuses from all items equipped by a character.
+   * @param characterId The ID of the character.
+   * @returns An object containing the total attack and defense bonuses.
+   */
+  async getCharacterEquipmentBonuses(characterId: string): Promise<{ totalAttackBonus: number, totalDefenseBonus: number }> {
+    this.logger.verbose(`Calculating equipment bonuses for character ${characterId}`);
+    const equippedItems = await this.findEquippedItemsByCharacterId(characterId);
+
+    let totalAttackBonus = 0;
+    let totalDefenseBonus = 0;
+
+    for (const item of equippedItems) {
+      // Ensure itemTemplate is loaded (relations: ['itemTemplate'] in findEquippedItemsByCharacterId should handle this)
+      if (item.itemTemplate) {
+        totalAttackBonus += item.itemTemplate.attackBonus || 0; // Add bonus, default to 0 if undefined/null
+        totalDefenseBonus += item.itemTemplate.defenseBonus || 0; // Add bonus, default to 0 if undefined/null
+      } else {
+          this.logger.warn(`Equipped item ${item.id} for character ${characterId} is missing its itemTemplate relation.`);
+      }
+    }
+
+    this.logger.verbose(`Character ${characterId} bonuses - Attack: ${totalAttackBonus}, Defense: ${totalDefenseBonus}`);
+    return { totalAttackBonus, totalDefenseBonus };
+  }
 } 
