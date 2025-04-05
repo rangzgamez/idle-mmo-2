@@ -22,7 +22,7 @@ This document outlines the architecture, database schema, and development plan f
 *   **Click Marker:** Visual indicator for movement clicks.
 *   **Server-Side Simulation (`GameGateway` loop):**
     *   Simulates character and enemy movement.
-    *   **Character State Machine:** Handles `idle`, `moving`, `attacking`, `dead` states.
+    *   **Character State Machine:** Handles `idle`, `moving`, `attacking`, `dead`, **`moving_to_loot`**, **`looting_area`** states. Uses **`commandState`** to manage multi-step commands like Loot All.
     *   **Leashing:** Characters return to anchor if they move too far (`leashDistance`).
     *   **Auto-Aggro:** Idle characters scan for enemies within `aggroRange` and automatically engage.
     *   **Return to Anchor:** Idle characters with no targets return to their anchor point.
@@ -31,7 +31,7 @@ This document outlines the architecture, database schema, and development plan f
     *   Broadcasts updates (`entityUpdate`).
 *   **Client-Side Interpolation:** Frontend smoothly interpolates sprites (`CharacterSprite`, `EnemySprite`).
 *   **Multiplayer Zones:** Multiple players and enemies inhabit shared zones (`ZoneService`).
-    *   **Runtime State:** `ZoneService` tracks character state (including combat state like `state`, `attackTargetId`, `anchorX/Y`, `lastAttackTime`, `timeOfDeath`) and enemy state.
+    *   **Runtime State:** `ZoneService` tracks character state (including combat state like `state`, **`commandState`**, `attackTargetId`, `targetItemId`, `anchorX/Y`, `lastAttackTime`, `timeOfDeath`) and enemy state.
 *   **Real-time Sync:** Players see others join (`playerJoined`), leave (`playerLeft`), move/update (`entityUpdate`), and die (`entityDied`). New players receive existing enemy state on join.
 *   **Chat:** Zone-scoped real-time text chat with chat bubbles.
 *   **Enemy Templates:** Defined in database (`Enemy` entity, `EnemyModule`, `EnemyService`).
@@ -149,7 +149,7 @@ graph TD
 *   `GameModule`: Core real-time logic.
     *   `GameGateway`: **Reduced Role.** Handles WebSocket connections, auth middleware, routing client commands (`enterZone`, `selectParty`, `moveCommand`, `sendMessage`, `attackCommand`, **`moveInventoryItem`, `dropInventoryItem`, `pickupItemCommand`, `equipItemCommand`, `unequipItem`, `requestEquipment`**) to update `ZoneService` / `CharacterService` / `InventoryService` state. Initializes the `GameLoopService`. Injects `ZoneService`, `GameLoopService`, `BroadcastService`, `CharacterService` (for party validation), `UserService`, `JwtService`, **`InventoryService`**.
     *   `GameLoopService`: **Orchestrator.** Runs the main game tick loop (`tickGameLoop`). Iterates through zones, players, enemies. Calls specialized services for character state, enemy state, movement, and spawning. Calls `BroadcastService` to flush events at the end of each zone tick. Injects `ZoneService`, `CharacterStateService`, `EnemyStateService`, `MovementService`, `SpawningService`, `BroadcastService`.
-    *   `CharacterStateService`: **NEW.** Handles processing a single character's state per tick (death, respawn, regen, leashing, state machine logic, aggro, initiating attacks). Injects `ZoneService`, `CombatService`.
+    *   `CharacterStateService`: **NEW.** Handles processing a single character's state per tick (death, respawn, regen, leashing, state machine logic, aggro, initiating attacks, **item looting logic**). Injects `ZoneService`, `CombatService`, **`InventoryService`, `BroadcastService`**.
     *   `EnemyStateService`: **NEW.** Handles processing a single enemy's state per tick (getting AI action, executing attacks). Injects `ZoneService`, `CombatService`, `AIService`.
     *   `MovementService`: **NEW.** Calculates new entity positions based on current position, target, speed, and delta time. Used by `GameLoopService` for both characters and enemies.
     *   `SpawningService`: **NEW.** Handles logic for checking spawn nest timers and triggering new enemy spawns via `ZoneService`. Injects `ZoneService`.
@@ -191,18 +191,21 @@ graph TD
     *   **`equipItemCommand` { inventoryItemId: string, characterId: string } -> Triggers `inventoryUpdate`, `equipmentUpdate` (NEW)**
     *   **`unequipItem` { characterId: string, slot: EquipmentSlot } OR { inventoryItemId: string } -> Triggers `inventoryUpdate`, `equipmentUpdate` (NEW)**
     *   **`requestEquipment` { characterId: string } -> Triggers `equipmentUpdate` (NEW)**
+    *   **`pickup_item` { itemId: string } (NEW - Click-to-Loot)**
+    *   **`loot_all_command` {} (NEW - Loot All)**
 *   **Server -> Client:**
     *   `connect_error` (Auth failed or other issue)
     *   `playerJoined` { characters: ZoneCharacterState[] }
     *   `playerLeft` { playerId: string }
-    *   `entityUpdate` { updates: Array<{ id: string, x?: number, y?: number, health?: number }> }
+    *   `entityUpdate` { updates: Array<{ id: string, x?: number, y?: number, health?: number, state?: string }> }
     *   `chatMessage` { senderName: string, senderCharacterId: string, message: string, timestamp: number }
     *   `combatAction` { attackerId: string, targetId: string, damage: number, type: string }
-    *   `entityDied` { entityId: string, type: 'character' | 'enemy' /* | other */ }
+    *   `entityDied` { entityId: string, type: 'character' | 'enemy' }
     *   **`inventoryUpdate` { inventory: (InventoryItem | null)[] } (NEW - Sparse array representing all potential slots)**
     *   **`equipmentUpdate` { characterId: string, equipment: Partial<Record<EquipmentSlot, InventoryItem>> } (NEW)**
     *   **`itemDropped` { itemId: string, templateId: string, x: number, y: number } (NEW - Loot Phase)**
     *   **`itemPickedUp` { pickerCharacterId: string, itemId: string } (NEW - Loot Phase)**
+    *   **`itemsDropped` { items: DroppedItemData[] } (NEW - Loot Phase: Provides full item data for rendering)**
 
 **7.5 Frontend/Backend Interaction Diagram (Inventory/Equipment)**
 
@@ -357,9 +360,11 @@ export interface RuntimeCharacterData extends Character {
     // Inherited base stats like baseHealth, baseAttack, baseDefense are used
     // Inherited combat stats like attackSpeed, attackRange, aggroRange, leashDistance are used
     // --- RTS Combat State ---
-    state: 'idle' | 'moving' | 'attacking' | 'dead'; // Added 'dead' state
+    state: 'idle' | 'moving' | 'attacking' | 'dead' | 'moving_to_loot' | 'looting_area'; // Added loot states
     attackTargetId: string | null;
-    anchorX: number | null; // Last commanded position or spawn point
+    targetItemId: string | null; // For moving_to_loot state
+    commandState: 'loot_area' | null; // For multi-step commands like loot all
+    anchorX: number | null;
     anchorY: number | null;
     // attackRange: number; // Inherited from Character
     // aggroRange: number; // Inherited from Character
@@ -422,7 +427,7 @@ export class InventoryItem {
 *   **Client-Side Interpolation:** Sprites smoothly move towards `targetX`/`targetY`.
 *   **Event-Driven Updates:** Frontend reacts to specific server events (`entityUpdate`, `combatAction`, `entityDied`, etc.) emitted by the `BroadcastService`.
 *   **Component-Based Sprites:** Sprites manage their own visual components (labels, health bars, chat bubbles, death visuals).
-*   **State Machine (Server):** `CharacterStateService` uses a state machine (`idle`, `moving`, `attacking`, `dead`) for characters to manage behavior (movement, combat, leashing, respawn).
+*   **State Machine (Server):** `CharacterStateService` uses a state machine (`idle`, `moving`, `attacking`, `dead`, **`moving_to_loot`, `looting_area`**) for characters to manage behavior (movement, combat, leashing, respawn, **looting**).
 
 **10. Testing Strategy (Updated)**
 
@@ -490,64 +495,24 @@ export class InventoryItem {
 *   **Stat Configuration:** Implemented (Combat stats moved to `Character` entity).
 *   **Frontend Death Handling:** Implemented (Enemy sprite destruction, basic character visuals).
 
-**➡️ Phase 6: Inventory, Loot & Equipment (Partially Complete)**
-1.  [X] Backend: Define `ItemTemplate` and `InventoryItem` entities & migrations. (**Added `inventorySlot`**)
-2.  [X] Backend: Implement `InventoryModule` and `InventoryService` (add/remove items, **manage slots**).
-3.  [X] Backend: Implement `LootService` and configure basic loot tables. (**Basic implementation done**)
-4.  [X] Backend: Trigger loot drops on enemy death (`LootService`). Add `DroppedItem` state to `ZoneService`. Broadcast `itemDropped`. (**Basic implementation done**)
-5.  [X] Backend: Implement `pickupItemCommand` handler (validate range, add to inventory via `InventoryService`, remove from zone). Broadcast `itemPickedUp` and `inventoryUpdate`. (**Basic implementation done**)
-6.  [X] Frontend: Display dropped item sprites based on `itemDropped`. (**Basic implementation done**)
-7.  [X] Frontend: Handle clicking items -> send `pickupItemCommand`. Remove sprite on `itemPickedUp`. (**Basic implementation done**)
-8.  [X] Frontend: Basic Inventory UI (in `UIScene`) to display items from `inventoryUpdate` (**Grid, Slots, Drag/Drop Move**).
-9.  [X] Backend: Add `equippedSlotId` and `inventorySlot` to `InventoryItem` entity.
-10. [X] Backend: Implement `equipItem` / `unequipItem` logic in `InventoryService`/`CharacterService`. Broadcast `equipmentUpdate` & `inventoryUpdate`. (**Handles `inventorySlot` clearing/assignment**)
-11. [X] Frontend: Basic Equipment UI (in `UIScene`). Allow equipping/unequipping via **right-click**. Send commands. Update UI on `equipmentUpdate`.
+**➡️ Phase 6: Inventory, Loot & Equipment (**Complete**)**
+1.  [X] Backend: Define `ItemTemplate` and `InventoryItem` entities & migrations.
+2.  [X] Backend: Implement `InventoryModule` and `InventoryService`.
+3.  [X] Backend: Implement `LootService` and configure basic loot tables.
+4.  [X] Backend: Trigger loot drops on enemy death (`LootService`). Add `DroppedItem` state to `ZoneService`. Broadcast `itemDropped`.
+5.  [X] Backend: Implement `pickup_item` handler (Click-to-Loot: nearest char moves to item).
+6.  [X] Backend: Implement `loot_all_command` handler (Starts `looting_area` state).
+7.  [X] Backend: Implement `moving_to_loot` and `looting_area` states in `CharacterStateService` (incl. target deconfliction, continuous looting via `commandState`).
+8.  [X] Backend: Broadcast `itemPickedUp` and `inventoryUpdate` correctly.
+9.  [X] Frontend: Display dropped item sprites based on `itemsDropped`.
+10. [X] Frontend: Handle clicking items -> send `pickup_item`.
+11. [X] Frontend: Add "Loot All" button -> send `loot_all_command`.
+12. [X] Frontend: Remove item sprite on `itemPickedUp`.
+13. [X] Frontend: Basic Inventory UI (Grid, Slots, Drag/Drop Move).
+14. [X] Backend: Add `equippedSlotId` and `inventorySlot` to `InventoryItem` entity.
+15. [X] Backend: Implement `equipItem` / `unequipItem` logic.
+16. [X] Frontend: Basic Equipment UI. Allow equipping/unequipping via right-click.
 
 **Phase 7: Experience & Leveling (NEW)**
 1.  [ ] Backend: Add `xpReward` to `Enemy` entity (Already done!).
-2.  [ ] Backend: Grant XP to player characters involved in killing an enemy (`CombatService` or `GameGateway`).
-3.  [ ] Backend: Implement leveling logic (check XP thresholds, increase level, maybe stats?) in `CharacterService` or `GameGateway`.
-4.  [ ] Backend: Broadcast level up event (`characterLevelUp`?) and update `entityUpdate` with new level/stats.
-5.  [ ] Frontend: Display level changes visually (e.g., on character sprite label, UI).
-6.  [ ] Frontend: Show level up visual effect.
-
-**Phase 8: Pets (Was Phase 6)**
-*   [...] Define Pet entity, AI Service logic, feeding command.
-
-**Refinement / Future TODOs:**
-*   **NEW:** Add `baseSpeed` to `Character` entity and use it in `MovementService`.
-*   **NEW:** Ensure `EnemyInstance.baseSpeed` is correctly populated in `ZoneService` (check `addEnemy` if it exists, besides `addEnemyFromNest`).
-*   **NEW:** Loot System Enhancements (e.g., proper tables, rarity, dropped item persistence/visuals).
-*   Integrate real Character Stats (from DB/`CharacterService`) into `CombatService` (Partially done, base stats used). Define impact of other stats (Str, Agi etc.).
-*   Persist character position/zone periodically or on logout.
-*   Implement proper Tilemaps and Collision (Frontend & Backend).
-*   More sophisticated movement (Pathfinding).
-*   Different character types/classes (Melee, Ranged, Healer AI).
-*   Proper character/enemy sprites and animations.
-*   Server-side validation (movement, actions).
-*   More robust character death handling (prevent interaction fully, different visuals, maybe resurrection item/skill).
-*   Enemy respawning logic (currently just despawn on death).
-*   Scalability considerations (Redis, multiple instances).
-*   Comprehensive Unit and E2E Testing.
-
-**13. Continuing Development Guide (Updated)**
-
-*   **Focus:** Next steps are Phase 7: Experience & Leveling.
-*   **Backend:** Run `npm run start:dev`. Implement features based on the chosen phase.
-*   **Frontend:** Run `npm run dev`. Implement corresponding UI and event handling.
-*   **Testing:** Manual testing is primary. Use `/debug/zones` and console logs.
-*   **Key Files for Recent Refactoring (Game Loop):**
-    *   `backend/src/game/game.gateway.ts` (Handles connections, commands)
-    *   `backend/src/game/game-loop.service.ts` (Orchestrates the tick)
-    *   `backend/src/game/character-state.service.ts` (Character logic)
-    *   `backend/src/game/enemy-state.service.ts` (Enemy logic)
-    *   `backend/src/game/movement.service.ts` (Movement calculation)
-    *   `backend/src/game/spawning.service.ts` (Nest spawning logic)
-    *   `backend/src/game/broadcast.service.ts` (WebSocket event emission)
-    *   `backend/src/game/zone.service.ts` (Runtime state management)
-    *   `backend/src/game/ai.service.ts` (AI decisions)
-    *   `backend/src/game/combat.service.ts` (Combat calculations)
-    *   `backend/src/game/game.module.ts` (Service registration)
-    *   **`backend/src/inventory/inventory.service.ts` (Item management, slot finding)**
-    *   **`backend/src/character/character.service.ts` (Equip/Unequip coordination)**
-    *   **`frontend/src/scenes/UIScene.ts` (Inventory/Equipment UI, event handling)**
+2.  [ ] Backend: Grant XP to player characters involved in killing an enemy (`

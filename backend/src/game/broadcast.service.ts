@@ -200,4 +200,43 @@ export class BroadcastService {
         }
         // -------------------------------------
     }
+
+    // --- NEW: Method to send an event directly to a specific user ---
+    /**
+     * Sends a specific event directly to a user's socket.
+     * Bypasses the zone-based queues, useful for user-specific notifications.
+     * @param userId The ID of the target user.
+     * @param eventName The name of the event to emit.
+     * @param payload The data payload for the event.
+     */
+    sendEventToUser(userId: string, eventName: string, payload: any): void {
+        if (!this.server) {
+            this.logger.error(`Cannot send event '${eventName}' to user ${userId}: Server instance not set.`);
+            return;
+        }
+
+        // Find the socket associated with the user ID
+        // This assumes the userId is stored in socket.data.user.id during authentication
+        const sockets = this.server.sockets.sockets; // Get the map of all connected sockets
+        let foundSocket = false;
+
+        for (const [, socket] of sockets) {
+            // Access custom data attached during authentication
+            const socketUserId = socket.data.user?.id;
+            if (socketUserId === userId) {
+                socket.emit(eventName, payload);
+                this.logger.verbose(`Sent event '${eventName}' directly to user ${userId} (Socket ID: ${socket.id})`);
+                foundSocket = true;
+                // If a user can have multiple connections/sockets, don't break here.
+                // If only one connection per user is expected, we could break.
+                // Let's assume multiple might be possible (e.g., multiple tabs) and send to all.
+                // break;
+            }
+        }
+
+        if (!foundSocket) {
+            this.logger.warn(`Attempted to send event '${eventName}' to user ${userId}, but no active socket found for that user.`);
+        }
+    }
+    // --- End NEW Method ---
 }

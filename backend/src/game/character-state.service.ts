@@ -6,6 +6,8 @@ import { InventoryService } from '../inventory/inventory.service';
 import { BroadcastService } from './broadcast.service';
 import { DroppedItem } from './interfaces/dropped-item.interface';
 import { CombatResult } from './interfaces/combat.interface';
+import { EnemyService } from '../enemy/enemy.service';
+import { CharacterService } from '../character/character.service';
 
 // Define the structure for the results returned by processing a character tick
 export interface CharacterTickResult {
@@ -32,6 +34,8 @@ export class CharacterStateService {
         private combatService: CombatService,
         private inventoryService: InventoryService,
         private broadcastService: BroadcastService,
+        private enemyService: EnemyService,
+        private characterService: CharacterService,
     ) {}
 
     /**
@@ -189,8 +193,26 @@ export class CharacterStateService {
                                 results.enemyHealthUpdates.push({ id: targetEnemy.id, health: combatResult.targetCurrentHealth });
 
                                 if (combatResult.targetDied) {
-                                    this.logger.log(`Enemy ${targetEnemy.id} died from attack by Character ${character.id}`);
+                                    this.logger.log(`Enemy ${targetEnemy.id} (Template: ${targetEnemy.templateId}) died from attack by Character ${character.id} (${character.name})`);
                                     results.targetDied = true;
+
+                                    // --- Grant XP ---
+                                    try {
+                                        const enemyTemplate = await this.enemyService.findOne(targetEnemy.templateId);
+                                        if (enemyTemplate && enemyTemplate.xpReward > 0) {
+                                            this.logger.log(`Granting ${enemyTemplate.xpReward} XP to Character ${character.id} for killing Enemy ${targetEnemy.id}`);
+                                            await this.characterService.addXp(character.id, enemyTemplate.xpReward);
+                                            // TODO: Consider broadcasting XP gain event? Or handling level up notification if XP gain causes level up.
+                                        } else if (enemyTemplate) {
+                                            this.logger.debug(`Enemy template ${targetEnemy.templateId} has no XP reward.`);
+                                        } else {
+                                            this.logger.warn(`Could not find enemy template ${targetEnemy.templateId} to grant XP.`);
+                                        }
+                                    } catch (error) {
+                                        this.logger.error(`Failed to grant XP to character ${character.id} after killing enemy ${targetEnemy.id}: ${error.message}`, error.stack);
+                                    }
+                                    // --- End Grant XP ---
+
                                     character.attackTargetId = null;
                                     character.state = 'idle';
                                 }

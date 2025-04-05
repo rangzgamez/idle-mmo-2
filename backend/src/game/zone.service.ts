@@ -575,6 +575,56 @@ export class ZoneService implements OnModuleInit {
         return foundCharacter.currentHealth; // Return the new health value
     }
 
+    // --- NEW: Method to set character health to a specific value ---
+    /**
+     * Sets a character's current health to a specific value, clamping between 0 and baseHealth.
+     * Useful for full heals on level up or specific events.
+     * @param characterId The ID of the character.
+     * @param newHealthValue The desired health value.
+     * @returns True if the health was set, false if the character was not found.
+     */
+    setCharacterHealth(characterId: string, newHealthValue: number): boolean {
+        let foundCharacter: RuntimeCharacterData | null = null;
+        let foundZoneId: string | null = null;
+
+        // Find the character across all zones
+        for (const [zoneId, zone] of this.zones.entries()) {
+            for (const player of zone.players.values()) {
+                const character = player.characters.find(c => c.id === characterId);
+                if (character) {
+                    foundCharacter = character;
+                    foundZoneId = zoneId;
+                    break;
+                }
+            }
+            if (foundCharacter) break;
+        }
+
+        if (!foundCharacter || !foundZoneId) {
+            this.logger.warn(`Attempted to set health for non-existent character ${characterId}`);
+            return false; // Character not found
+        }
+
+        // Clamp health between 0 and the character's current baseHealth
+        const clampedHealth = Math.max(0, Math.min(foundCharacter.baseHealth, newHealthValue));
+
+        if (clampedHealth !== foundCharacter.currentHealth) {
+             foundCharacter.currentHealth = clampedHealth;
+            // Reset death state if health is now positive (might happen if set during respawn window?)
+            if (foundCharacter.currentHealth > 0 && foundCharacter.state === 'dead') {
+                this.logger.log(`Character ${characterId} health set above 0 while dead. Resetting state requires separate logic (respawn).`);
+                // We probably don't want to change the 'dead' state here directly,
+                // just update the health value. Respawn logic handles state changes.
+            }
+             this.logger.verbose(`Set health for character ${characterId} in zone ${foundZoneId}. New health: ${foundCharacter.currentHealth}/${foundCharacter.baseHealth}`);
+        } else {
+            this.logger.verbose(`Set health for character ${characterId}: Health already at target value (${clampedHealth}).`);
+        }
+
+        return true; // Health was set (or was already at the target value)
+    }
+    // --- End NEW Method ---
+
     // --- Nest-Based Spawning Logic ---
 
     // Modified addEnemy to optionally link to a nest
