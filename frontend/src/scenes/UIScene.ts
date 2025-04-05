@@ -289,22 +289,54 @@ export default class UIScene extends Phaser.Scene {
              console.error("[UIScene] Failed to attach drag handler to Equipment: Missing elements.");
         }
 
-        // --- Create Chat DOM Elements ---
-        // Use Phaser's DOM Element feature. Position it at the bottom-left corner.
-        const chatContainer = this.add.dom(10, Number(this.sys.game.config.height) - 10).createFromHTML(`
-            <div id="chat-container" style="width: 350px; height: 200px; background-color: rgba(0, 0, 0, 0.5); display: flex; flex-direction: column; font-family: sans-serif;">
-                <div id="chat-log" style="flex-grow: 1; overflow-y: auto; padding: 5px; color: white; font-size: 12px; margin-bottom: 5px;">
-                    <!-- Messages will appear here -->
-                </div>
-                <input type="text" id="chat-input" placeholder="Type message and press Enter..." style="border: 1px solid #555; background-color: #333; color: white; padding: 5px; font-size: 12px;">
-            </div>
-        `).setOrigin(0, 1); // Origin bottom-left
+        // --- Create Loot All Button (Above Chat) ---
+        const lootAllButtonHtml = `<button id="loot-all-button" title="Loot All Items" style="padding: 5px 8px; font-size: 12px; background-color: #4a4; color: white; border: 1px solid #6c6; cursor: pointer; width: 60px;">Loot All</button>`;
+        const lootAllButtonContainer = this.add.dom(0, 0).createFromHTML(lootAllButtonHtml).setOrigin(0, 0);
+        const lootAllButtonElement = lootAllButtonContainer.getChildByID('loot-all-button') as HTMLButtonElement;
 
-        // Get references to the specific HTML elements for easier access
+        // --- Create Chat DOM Elements ---
+        const chatContainerHtml = `
+            <div id="chat-container" 
+                 style="/*position: absolute; bottom: 10px; left: 10px;*/ width: 450px; height: 160px; 
+                        display: flex; flex-direction: column; background-color: rgba(0, 0, 0, 0.5); 
+                        border: 1px solid #555; border-radius: 3px; font-family: sans-serif;">
+                <div id="chat-log" 
+                     style="flex-grow: 1; padding: 5px; overflow-y: auto; margin-bottom: 5px; font-size: 12px; color: white;">
+                    Welcome to the game!
+                </div>
+                <div style="display: flex; padding: 0 5px 5px 5px;">
+                    <input type="text" id="chat-input" placeholder="Type message..." 
+                           style="flex-grow: 1; padding: 5px; border: 1px solid #777; background-color: #333; color: white; font-size: 12px;">
+                    <!-- Loot button removed from here -->
+                 </div>
+            </div>
+        `;
+        const chatContainer = this.add.dom(0, 0).createFromHTML(chatContainerHtml).setOrigin(0, 0);
+
+        // --- Positioning --- 
+        const gameHeight = Number(this.sys.game.config.height);
+        const chatHeight = 160; // The height defined in the style
+        const bottomMargin = 10;
+        const chatY = gameHeight - chatHeight - bottomMargin;
+        chatContainer.setPosition(10, chatY); // Position chat near bottom-left
+        
+        // Position Loot All button above chat
+        const buttonHeight = 30; // Approximate height of button with padding/border
+        const buttonMargin = 5;
+        lootAllButtonContainer.setPosition(10, chatY - buttonHeight - buttonMargin);
+
+        // Get references to elements inside the chat container
         this.chatLogElement = chatContainer.getChildByID('chat-log') as HTMLElement;
         this.chatInputElement = chatContainer.getChildByID('chat-input') as HTMLInputElement;
+        // const lootAllButton = chatContainer.getChildByID('loot-all-button') as HTMLButtonElement; // No longer in chat container
 
-        // --- Input Handling ---
+        // Check if elements exist
+        if (!this.chatLogElement || !this.chatInputElement || !lootAllButtonElement) { // Check new button element
+            console.error("Failed to get chat UI or Loot All button elements!");
+            return; // Exit early if elements aren't found
+        }
+
+        // --- Chat Input Listener (using keydown for Enter) ---
         chatContainer.addListener('click'); // Dummy listener to allow focus
         this.input.keyboard?.on('keydown', (event: KeyboardEvent) => {
             // Update focus check for nested elements
@@ -319,6 +351,13 @@ export default class UIScene extends Phaser.Scene {
                 }
             }
         });
+
+        // --- Loot All Button Listener (using the separate element) ---
+        lootAllButtonElement.addEventListener('click', () => {
+            console.log('[UIScene] Loot All button clicked. Sending command...');
+            this.networkManager.sendMessage('loot_all_command', {}); // Send empty payload for now
+        });
+        // -----------------------------------
 
         // --- EventBus Listeners ---
         EventBus.on('chat-message-received', this.handleChatMessage, this);

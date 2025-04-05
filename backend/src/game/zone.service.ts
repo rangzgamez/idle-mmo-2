@@ -51,8 +51,10 @@ export interface RuntimeCharacterData extends Character {
     effectiveAttack: number;
     effectiveDefense: number;
     // --- RTS Combat State ---
-    state: 'idle' | 'moving' | 'attacking' | 'dead';
+    state: 'idle' | 'moving' | 'attacking' | 'dead' | 'moving_to_loot' | 'looting_area';
     attackTargetId: string | null;
+    targetItemId: string | null;
+    commandState: 'loot_area' | null;
     anchorX: number | null; // Last commanded position or spawn point
     anchorY: number | null;
     attackRange: number; // How close to attack
@@ -204,6 +206,8 @@ export class ZoneService implements OnModuleInit {
                 // --- Initialize RTS Combat State ---
                 state: 'idle',
                 attackTargetId: null,
+                targetItemId: null,
+                commandState: null,
                 anchorX: char.positionX ?? (100 + Math.random() * 50),
                 anchorY: char.positionY ?? (100 + Math.random() * 50),
                 attackRange: char.attackRange,
@@ -708,6 +712,78 @@ export class ZoneService implements OnModuleInit {
             this.logger.warn(`Attempted to update effective stats for character ${characterId}, but they were not found in any active zone.`);
         }
         return found;
+    }
+    // --- End NEW Method ---
+
+    // --- NEW: Method to get a specific dropped item by ID ---
+    getDroppedItemById(zoneId: string, itemId: string): DroppedItem | undefined {
+        const zone = this.zones.get(zoneId);
+        return zone?.droppedItems.get(itemId);
+    }
+    // --- End NEW Method ---
+
+    // --- NEW: Method to set a character's target to a dropped item ---
+    setCharacterLootTarget(
+        userId: string,
+        characterId: string,
+        itemId: string,
+        itemX: number,
+        itemY: number
+    ): boolean {
+        // Find the zone the player/character is in
+        for (const [zoneId, zone] of this.zones.entries()) {
+            const player = zone.players.get(userId);
+            if (player) {
+                const character = player.characters.find(c => c.id === characterId);
+                if (character && character.state !== 'dead') {
+                    // Interrupt any current action (attacking, other move)
+                    character.state = 'moving_to_loot';
+                    character.targetItemId = itemId;
+                    character.targetX = itemX;
+                    character.targetY = itemY;
+                    character.attackTargetId = null; // Clear attack target
+                    this.logger.verbose(`[ZoneService] Set character ${characterId} state to moving_to_loot, target item ${itemId}`);
+                    return true;
+                }
+            }
+        }
+        this.logger.warn(`[ZoneService] Failed to set loot target for character ${characterId} (User: ${userId}). Not found or dead.`);
+        return false;
+    }
+    // --- End NEW Method ---
+
+    // --- NEW: Method to set a character's state to loot nearby items ---
+    setCharacterLootArea(userId: string, characterId: string): boolean {
+        // Find the zone the player/character is in
+        for (const [zoneId, zone] of this.zones.entries()) {
+            const player = zone.players.get(userId);
+            if (player) {
+                const character = player.characters.find(c => c.id === characterId);
+                if (character && character.state !== 'dead') {
+                    // Only switch to looting_area if not already doing so or moving to loot
+                    if (character.state !== 'looting_area' && character.state !== 'moving_to_loot') {
+                        character.state = 'looting_area';
+                        character.commandState = 'loot_area'; // <-- Set command state
+                        character.targetItemId = null; // Clear specific item target
+                        character.targetX = null;      // Clear movement target
+                        character.targetY = null;
+                        character.attackTargetId = null; // Clear attack target
+                        this.logger.verbose(`[ZoneService] Set character ${characterId} state to looting_area and commandState to loot_area`);
+                        return true;
+                    } else if (character.state === 'moving_to_loot') {
+                        // If already moving to loot, ensure the command state is set
+                        // This handles the case where a click-to-loot interrupted a loot-all
+                        character.commandState = 'loot_area';
+                        this.logger.verbose(`[ZoneService] Character ${characterId} was moving_to_loot, set commandState to loot_area`);
+                        return true;
+                    }
+                     // Already looting_area, no state change needed, commandState should already be set
+                     return true; 
+                }
+            }
+        }
+        this.logger.warn(`[ZoneService] Failed to set loot area state for character ${characterId} (User: ${userId}). Not found or dead.`);
+        return false;
     }
     // --- End NEW Method ---
 }

@@ -12,6 +12,7 @@ import { BroadcastService } from './broadcast.service';
 import { LootService } from '../loot/loot.service';
 import { v4 as uuidv4 } from 'uuid';
 import { DroppedItem } from './interfaces/dropped-item.interface';
+import { InventoryService } from '../inventory/inventory.service';
 
 @Injectable()
 export class GameLoopService implements OnApplicationShutdown {
@@ -36,6 +37,7 @@ export class GameLoopService implements OnApplicationShutdown {
         private spawningService: SpawningService,
         private broadcastService: BroadcastService,
         private lootService: LootService,
+        private inventoryService: InventoryService,
     ) {}
 
     // Method to start the loop, called by GameGateway
@@ -102,6 +104,7 @@ export class GameLoopService implements OnApplicationShutdown {
                             player.user.id,
                             zoneId,
                             currentEnemiesInZone,
+                            player.characters.filter(c => c.id !== character.id), // Pass siblings
                             now,
                             deltaTime
                         );
@@ -146,8 +149,31 @@ export class GameLoopService implements OnApplicationShutdown {
                               continue; // Skip movement/further updates if respawned
                          }
 
+                        // --- ADD: Handle item pickup this tick ---
+                        if (tickResult.pickedUpItemId) {
+                            this.logger.debug(`Handling pickup for item ${tickResult.pickedUpItemId} by character ${character.id}`);
+                            // 1. Queue broadcast for others to remove sprite
+                            this.broadcastService.queueItemPickedUp(zoneId, tickResult.pickedUpItemId);
+
+                            // 2. Send inventory update to the specific player
+                            const playerSocket = zone.players.get(player.user.id)?.socket;
+                            if (playerSocket) {
+                                try {
+                                    // Fetch the latest full inventory
+                                    const updatedInventory = await this.inventoryService.getUserInventory(player.user.id);
+                                    playerSocket.emit('inventoryUpdate', { inventory: updatedInventory });
+                                    this.logger.verbose(`Sent inventoryUpdate to ${player.user.username} (${playerSocket.id}) after pickup.`);
+                                } catch (error) {
+                                    this.logger.error(`Failed to send inventoryUpdate to ${player.user.username} after pickup: ${error.message}`, error.stack);
+                                }
+                            } else {
+                                this.logger.warn(`Could not find socket for user ${player.user.id} to send inventory update after pickup.`);
+                            }
+                        }
+                        // --------------------------------------
+
                         // Handle target death (enemy removal)
-                        if (tickResult.targetDied && character.attackTargetId === null /* Safety check */) {
+                        if (tickResult.targetDied) {
                             const deadEnemyId = tickResult.enemyHealthUpdates.find(upd => upd.health <= 0)?.id;
                             if(deadEnemyId) {
                                 this.logger.log(`Target died event for enemy ID: ${deadEnemyId}`);
@@ -237,22 +263,14 @@ export class GameLoopService implements OnApplicationShutdown {
                                  deltaTime
                              );
 
-                             // Check if position actually changed
                              if (moveResult.newPosition.x !== character.positionX || moveResult.newPosition.y !== character.positionY) {
                                 needsPositionUpdate = true;
                                 character.positionX = moveResult.newPosition.x;
                                 character.positionY = moveResult.newPosition.y;
-                            // Persist the updated position in ZoneService's runtime data
-                            this.zoneService.updateCharacterCurrentPosition(player.user.id, character.id, character.positionX, character.positionY);
-                        }
-
-                             // If target was reached, clear the target fields in the character data
-                             if (moveResult.reachedTarget) {
-                                 character.targetX = null;
-                                 character.targetY = null;
-                                 // State transition (e.g., moving -> idle) should be handled by CharacterStateService based on reaching the target
+                                this.zoneService.updateCharacterCurrentPosition(player.user.id, character.id, character.positionX, character.positionY);
                              }
-                         }
+
+                         } // End if(targetPosition)
 
                         // --- Batch Update Preparation (Simplified) ---
                          // Check if health, state, or position changed compared to start of tick OR if explicit flags were set

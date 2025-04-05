@@ -120,6 +120,7 @@ export default class GameScene extends Phaser.Scene {
         EventBus.on('combat-action', this.handleCombatAction, this); // +++ ADD LISTENER for ATTACK VISUAL +++
         EventBus.on('items-dropped', this.handleItemsDropped, this); // <-- ADD LISTENER for dropped items
         EventBus.on('item-picked-up', this.handleItemPickedUp, this); // <-- ADD LISTENER for item pickup confirmation
+        this.events.on('droppedItemClicked', this.handleDroppedItemClicked, this); // <-- CORRECTED: Use this.events
         // --- Launch UI Scene ---
         // Use scene.launch to run it in parallel with this scene
         console.log('Launching UIScene...');
@@ -685,4 +686,15 @@ export default class GameScene extends Phaser.Scene {
             console.warn(`Could not find sprite to remove for picked up item ID: ${data.itemId}`);
         }
     }
+
+    // --- ADD Handler for clicking dropped items ---
+    private handleDroppedItemClicked(itemId: string) {
+        if (!itemId) {
+            console.warn('Dropped item clicked event received invalid item ID.');
+            return;
+        }
+        console.log(`[GameScene] Detected click on dropped item: ${itemId}. Sending pickup command...`);
+        this.networkManager.sendMessage('pickup_item', { itemId });
+    }
+    // -------------------------------------------
 }

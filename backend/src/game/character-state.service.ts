@@ -2,6 +2,10 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ZoneService, RuntimeCharacterData } from './zone.service';
 import { CombatService } from './combat.service';
 import { EnemyInstance } from './interfaces/enemy-instance.interface';
+import { InventoryService } from '../inventory/inventory.service';
+import { BroadcastService } from './broadcast.service';
+import { DroppedItem } from './interfaces/dropped-item.interface';
+import { CombatResult } from './interfaces/combat.interface';
 
 // Define the structure for the results returned by processing a character tick
 export interface CharacterTickResult {
@@ -11,6 +15,7 @@ export interface CharacterTickResult {
     diedThisTick: boolean; // Did the character die this tick?
     respawnedThisTick: boolean; // Did the character respawn this tick?
     targetDied: boolean; // Did the character's target die this tick?
+    pickedUpItemId: string | null; // ID of item picked up this tick
 }
 
 
@@ -20,10 +25,13 @@ export class CharacterStateService {
      // Constants potentially needed (could be moved to a config service later)
      private readonly RESPAWN_TIME_MS = 5000;
      private readonly CHARACTER_HEALTH_REGEN_PERCENT_PER_SEC = 1.0;
+     private readonly ITEM_PICKUP_RANGE_SQ = 5*5; // Squared distance threshold for picking up items (e.g., 5 pixels)
 
     constructor(
         private zoneService: ZoneService,
         private combatService: CombatService,
+        private inventoryService: InventoryService,
+        private broadcastService: BroadcastService,
     ) {}
 
     /**
@@ -35,6 +43,7 @@ export class CharacterStateService {
      * @param playerId The ID of the player owning the character.
      * @param zoneId The ID of the zone the character is in.
      * @param enemiesInZone Array of all enemy instances currently in the zone.
+     * @param siblingCharacters Array of other characters owned by the same player in the zone.
      * @param now Current timestamp (Date.now()).
      * @param deltaTime Time elapsed since the last tick in seconds.
      * @returns CharacterTickResult containing updates and events from this tick.
@@ -44,6 +53,7 @@ export class CharacterStateService {
         playerId: string,
         zoneId: string,
         enemiesInZone: EnemyInstance[],
+        siblingCharacters: RuntimeCharacterData[],
         now: number,
         deltaTime: number,
     ): Promise<CharacterTickResult> {
@@ -61,6 +71,7 @@ export class CharacterStateService {
              diedThisTick: false,
              respawnedThisTick: false,
              targetDied: false,
+             pickedUpItemId: null,
         };
 
         // --- -1. Respawn Check ---
@@ -80,8 +91,8 @@ export class CharacterStateService {
                 character.attackTargetId = null;
                 character.targetX = null;
                 character.targetY = null;
+                character.commandState = null; // Clear command state on respawn
                 results.respawnedThisTick = true;
-                // No further processing this tick after respawning
                  return results;
             }
             // Still dead, waiting for respawn timer
@@ -96,8 +107,8 @@ export class CharacterStateService {
             character.attackTargetId = null;
             character.targetX = null;
             character.targetY = null;
+            character.commandState = null; // Clear command state on death
             results.diedThisTick = true;
-            // No further processing this tick after dying
              return results;
         }
 
@@ -145,133 +156,233 @@ export class CharacterStateService {
             }
         }
 
+        if (isLeashing) {
+             character.commandState = null; // Leashing cancels loot command
+        }
+
         // --- 2. State Logic (Only if NOT leashing) ---
         if (!isLeashing) {
             switch (character.state) {
                 case 'attacking':
                     const targetEnemy = character.attackTargetId ? this.zoneService.getEnemyInstanceById(zoneId, character.attackTargetId) : undefined;
+                    let combatResult: CombatResult | null = null;
 
                     if (!targetEnemy || targetEnemy.currentHealth <= 0) {
-                        // Target is invalid or dead, switch back to idle
-                        // this.logger.debug(`Character ${character.id} target ${character.attackTargetId} invalid/dead. Switching to idle.`);
                         character.attackTargetId = null;
                         character.state = 'idle';
-                        character.targetX = null; // Stop moving
+                        character.targetX = null;
                         character.targetY = null;
                     } else {
-                        // Valid target exists, check range
                         const distToTargetSq = (character.positionX - targetEnemy.position.x)**2 + (character.positionY - targetEnemy.position.y)**2;
                         const attackRangeSq = character.attackRange * character.attackRange;
 
                         if (distToTargetSq <= attackRangeSq) {
-                            // In Range: Stop moving if approaching
                             if (character.targetX !== null || character.targetY !== null) {
                                 character.targetX = null;
                                 character.targetY = null;
                             }
-                            // Check attack cooldown
                             if (now >= character.lastAttackTime + character.attackSpeed) {
-                                // Attack!
-                                // this.logger.debug(`Character ${character.id} attacking ${targetEnemy.id}`);
-                                const combatResult = await this.combatService.handleAttack(character, targetEnemy, zoneId);
-                                character.lastAttackTime = now; // Update last attack time
+                                combatResult = await this.combatService.handleAttack(character, targetEnemy, zoneId);
+                                character.lastAttackTime = now;
 
-                                // Add combat action for visual feedback
                                 results.combatActions.push({ attackerId: character.id, targetId: targetEnemy.id, damage: combatResult.damageDealt, type: 'attack' });
-
-                                // Record enemy health update
                                 results.enemyHealthUpdates.push({ id: targetEnemy.id, health: combatResult.targetCurrentHealth });
 
                                 if (combatResult.targetDied) {
                                     this.logger.log(`Enemy ${targetEnemy.id} died from attack by Character ${character.id}`);
-                                    results.targetDied = true; // Signal target death
-                                    character.attackTargetId = null; // Stop targeting dead enemy
-                                    character.state = 'idle'; // Go idle after kill
-
-                                    // Enemy removal from ZoneService will be handled by the main loop based on targetDied flag
+                                    results.targetDied = true;
+                                    character.attackTargetId = null;
+                                    character.state = 'idle';
                                 }
                             }
                         } else {
-                            // Out of Range: Move Towards Target
                             if (character.targetX !== targetEnemy.position.x || character.targetY !== targetEnemy.position.y) {
-                                // this.logger.debug(`Character ${character.id} moving towards ${targetEnemy.id} to attack.`);
                                 character.targetX = targetEnemy.position.x;
                                 character.targetY = targetEnemy.position.y;
-                                // State remains 'attacking', movement simulation will handle moving
                             }
                         }
                     }
                     break;
 
                 case 'moving':
-                    // Movement simulation handles the actual position change.
-                    // Here, we just check if the destination is reached to transition back to idle.
-                     if (character.targetX !== null && character.targetY !== null) {
-                         const dx = character.targetX - character.positionX;
-                         const dy = character.targetY - character.positionY;
-                         const distSq = dx*dx + dy*dy;
-                         const closeEnoughThresholdSq = 1; // Use squared threshold
-                         if (distSq <= closeEnoughThresholdSq) {
-                             // this.logger.debug(`Character ${character.id} reached move destination.`);
-                             character.state = 'idle';
-                             character.positionX = character.targetX; // Snap to target
-                             character.positionY = character.targetY;
-                             character.targetX = null;
-                             character.targetY = null;
-                         }
-                     } else {
-                          // In moving state but no target? Should not happen if state transitions are correct.
-                          this.logger.warn(`Character ${character.id} in 'moving' state but has no target. Setting idle.`);
-                          character.state = 'idle';
-                     }
+                    if (character.targetX !== null && character.targetY !== null) {
+                        const dx = character.targetX - character.positionX;
+                        const dy = character.targetY - character.positionY;
+                        const distSq = dx*dx + dy*dy;
+                        const closeEnoughThresholdSq = 1;
+                        if (distSq <= closeEnoughThresholdSq) {
+                            character.state = 'idle';
+                            character.positionX = character.targetX; 
+                            character.positionY = character.targetY;
+                            character.targetX = null; 
+                            character.targetY = null;
+                        } // Else: still moving, commandState persists if set
+                    } else {
+                         this.logger.warn(`Character ${character.id} in 'moving' state but has no target. Setting idle.`);
+                         character.state = 'idle';
+                         character.targetX = null;
+                         character.targetY = null;
+                         character.commandState = null; // OK to clear if move was invalid/aborted
+                    }
                     break;
 
                 case 'idle':
-                    // Auto-Aggro Scan
+                    let closestEnemy: EnemyInstance | null = null; 
+                    
+                    // --- Auto-Aggro Scan --- 
                     if (character.aggroRange > 0) {
-                        let closestEnemy: EnemyInstance | null = null;
-                        let minDistSq = character.aggroRange * character.aggroRange; // Use squared range
-
+                        let minDistSq = character.aggroRange * character.aggroRange;
                         for (const enemy of enemiesInZone) {
-                             if (enemy.currentHealth <= 0) continue; // Skip dead enemies
-
-                             // Basic position validation before distance check
+                             if (enemy.currentHealth <= 0) continue;
                              if (character.positionX === null || character.positionY === null || typeof enemy.position.x !== 'number' || typeof enemy.position.y !== 'number') {
-                                 this.logger.warn(`Skipping aggro check due to invalid position: Char(${character.positionX}, ${character.positionY}), Enemy(${enemy.position.x}, ${enemy.position.y})`);
+                                 this.logger.warn(`Skipping aggro check due to invalid position...`);
                                  continue;
                              }
-
                              const distSq = (character.positionX - enemy.position.x)**2 + (character.positionY - enemy.position.y)**2;
-                             if (distSq <= minDistSq) { // Check against squared range and find closest
+                             if (distSq <= minDistSq) { 
                                  minDistSq = distSq;
                                  closestEnemy = enemy;
                              }
                         }
+                    } // --- End Aggro Scan ---
 
-                        if (closestEnemy) {
-                            this.logger.debug(`Character ${character.id} [${character.name}] auto-aggroed onto Enemy ${closestEnemy.id} (Dist: ${Math.sqrt(minDistSq).toFixed(1)}). Switching to attacking state.`);
-                            character.state = 'attacking';
-                            character.attackTargetId = closestEnemy.id;
-                            // Don't set targetX/Y yet, let the 'attacking' state handle moving if needed next tick
-                        }
-                    } // End Aggro Scan
-
-                    // Return to Anchor Check (only if still idle after aggro scan)
-                    if (character.state === 'idle' && character.anchorX !== null && character.anchorY !== null) {
-                         const distToAnchorSq = (character.positionX - character.anchorX)**2 + (character.positionY - character.anchorY)**2;
-                         if (distToAnchorSq > 1) { // Use a small threshold
-                            // this.logger.debug(`Character ${character.id} returning to anchor.`);
-                             character.state = 'moving';
-                             character.targetX = character.anchorX;
-                             character.targetY = character.anchorY;
+                    // --- Action based on aggro/anchor --- 
+                    if (closestEnemy) {
+                       // Found enemy via aggro
+                       this.logger.debug(`Character ${character.id} [${character.name}] auto-aggroed...`);
+                       character.state = 'attacking';
+                       character.attackTargetId = closestEnemy.id;
+                       // commandState is NOT cleared by auto-aggro
+                    } else {
+                        // No enemy aggroed, check return to anchor
+                        if (character.anchorX !== null && character.anchorY !== null) {
+                             const distToAnchorSq = (character.positionX - character.anchorX)**2 + (character.positionY - character.anchorY)**2;
+                             if (distToAnchorSq > 1) {
+                                 // Need to return to anchor
+                                 character.state = 'moving';
+                                 character.targetX = character.anchorX;
+                                 character.targetY = character.anchorY;
+                                 // commandState persists if set, will clear when anchor reached or manually cleared
+                             } else {
+                                 // Idle AT anchor
+                                 character.commandState = null; // Clear command state
+                             }
+                         } else {
+                             // Truly idle, no anchor set
+                             character.commandState = null; // Clear command state
                          }
-                     }
+                    }
                     break;
-            } // End switch(character.state)
-        } // End if(!isLeashing)
 
+                case 'moving_to_loot':
+                    if (character.targetItemId === null || character.targetX === null || character.targetY === null) {
+                        this.logger.warn(`Character ${character.id} in moving_to_loot state but missing target info. Setting idle.`);
+                        character.state = 'idle';
+                        character.targetItemId = null;
+                        character.targetX = null;
+                        character.targetY = null;
+                        character.commandState = null;
+                        break;
+                    }
 
-        // Return the modified character data and any generated events/updates
+                    const dxLoot = character.targetX - character.positionX;
+                    const dyLoot = character.targetY - character.positionY;
+                    const distToLootSq = dxLoot*dxLoot + dyLoot*dyLoot;
+
+                    if (distToLootSq <= this.ITEM_PICKUP_RANGE_SQ) {
+                        this.logger.debug(`Character ${character.id} reached location for item ${character.targetItemId}. Attempting pickup.`);
+                        const targetItemId = character.targetItemId;
+                        const wasLootAreaCommand = character.commandState === 'loot_area';
+
+                        character.state = wasLootAreaCommand ? 'looting_area' : 'idle';
+                        character.targetItemId = null;
+                        character.targetX = null;
+                        character.targetY = null;
+                        if (!wasLootAreaCommand) {
+                            character.commandState = null;
+                        }
+
+                        const itemToPickup = this.zoneService.getDroppedItemById(zoneId, targetItemId);
+                        if (!itemToPickup) {
+                            this.logger.log(`Item ${targetItemId} no longer exists (picked up by other?). Char ${character.id} goes ${character.state}.`);
+                            if (character.state === 'looting_area') {
+                            } else {
+                                character.commandState = null;
+                            }
+                            break; 
+                        }
+
+                        try {
+                            const addedInventoryItem = await this.inventoryService.addItemToUser(
+                                character.ownerId,
+                                itemToPickup.itemTemplateId,
+                                itemToPickup.quantity
+                            );
+                            if (!addedInventoryItem) {
+                                throw new Error('InventoryService returned null/undefined.');
+                            }
+
+                            const removed = this.zoneService.removeDroppedItem(zoneId, targetItemId);
+                            if (removed) {
+                                this.logger.log(`Character ${character.id} picked up item ${itemToPickup.itemName} (${targetItemId})`);
+                                results.pickedUpItemId = targetItemId;
+                            } else {
+                                this.logger.error(`CRITICAL: ...`);
+                            }
+
+                        } catch (error) {
+                            this.logger.error(`Failed to add item ...`, error.stack);
+                            if (!wasLootAreaCommand) character.commandState = null;
+                        }
+
+                    } else {
+                    }
+                    break;
+
+                case 'looting_area':
+                    let closestAvailableItem: DroppedItem | null = null;
+                    let minItemDistSq = character.aggroRange * character.aggroRange;
+                    const targetedItemIds = new Set<string>();
+                    for (const sibling of siblingCharacters) {
+                        if ((sibling.state === 'moving_to_loot' || sibling.state === 'looting_area') && sibling.targetItemId) {
+                            targetedItemIds.add(sibling.targetItemId);
+                        }
+                    }
+
+                    for (const item of this.zoneService.getDroppedItems(zoneId)) {
+                        if (targetedItemIds.has(item.id)) {
+                            continue;
+                        }
+
+                        const itemDistSq = (character.positionX - item.position.x)**2 + (character.positionY - item.position.y)**2;
+                        if (itemDistSq <= minItemDistSq) {
+                            minItemDistSq = itemDistSq;
+                            closestAvailableItem = item;
+                        }
+                    }
+
+                    if (closestAvailableItem) {
+                        this.logger.debug(`Character ${character.id} [${character.name}] found nearby available item ${closestAvailableItem.itemName} (${closestAvailableItem.id}) to loot. Switching to moving_to_loot.`);
+                        character.state = 'moving_to_loot';
+                        character.targetItemId = closestAvailableItem.id;
+                        character.targetX = closestAvailableItem.position.x;
+                        character.targetY = closestAvailableItem.position.y;
+                        targetedItemIds.add(closestAvailableItem.id);
+                        character.commandState = 'loot_area';
+                    } else {
+                        this.logger.debug(`Character ${character.id} [${character.name}] found no nearby available items to loot. Returning to anchor.`);
+                        character.state = 'moving';
+                        character.targetX = character.anchorX;
+                        character.targetY = character.anchorY;
+                        character.targetItemId = null;
+                        character.commandState = null;
+                    }
+                    break;
+            }
+        } else {
+             character.commandState = null;
+        }
+
         results.characterData = character;
         return results;
     }

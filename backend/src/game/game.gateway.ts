@@ -27,13 +27,19 @@ import { calculateDistance } from './utils/geometry.utils'; // Import distance u
 import { EquipmentSlot } from '../item/item.types'; // <-- Import EquipmentSlot
 
 // Add pickup range constant
-const ITEM_PICKUP_RANGE = 50; // pixels
+// const ITEM_PICKUP_RANGE = 50; // pixels // No longer used for initial command
 
 // Type for moveInventoryItem message body
 interface MoveInventoryItemPayload {
   fromIndex: number;
   toIndex: number;
 }
+
+// --- ADD Type for pickup_item message body ---
+interface PickupItemPayload {
+    itemId: string;
+}
+// -----------------------------------------
 
 @WebSocketGateway({
   cors: { /* ... */ },
@@ -125,9 +131,91 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     // Proceed with game logic like adding to a lobby or requesting zone entry
   }
 
-  // --- Pickup Item Handler ---
-  @SubscribeMessage('pickupItemCommand')
-  async handlePickupItem(
+  // --- ADD PICKUP ITEM COMMAND HANDLER ---
+  @SubscribeMessage('pickup_item')
+  handlePickupItemCommand(
+    @MessageBody() data: PickupItemPayload,
+    @ConnectedSocket() client: Socket,
+  ): { success: boolean; message?: string } {
+    const user = client.data.user as User;
+    const party = client.data.selectedCharacters as RuntimeCharacterData[];
+    const zoneId = client.data.currentZoneId as string;
+    const itemIdToPickup = data?.itemId;
+
+    if (!user || !party || party.length === 0 || !zoneId) {
+      this.logger.warn(`[Pickup Command] Invalid state for user ${user?.id}`);
+      return { success: false, message: 'Invalid state.' };
+    }
+    if (!itemIdToPickup) {
+      this.logger.warn(`[Pickup Command] Missing item ID from user ${user.id}`);
+      return { success: false, message: 'Missing item ID.' };
+    }
+
+    // 1. Find the dropped item in the current zone
+    const droppedItem = this.zoneService.getDroppedItemById(zoneId, itemIdToPickup); // Assuming getDroppedItemById exists
+    if (!droppedItem) {
+      this.logger.verbose(`[Pickup Command] Dropped item ${itemIdToPickup} not found in zone ${zoneId} for user ${user.id}.`);
+      return { success: false, message: 'Item not found or already picked up.' };
+    }
+
+    // 2. Find all player characters currently in the zone state (not just from client.data)
+    const playerCharactersInZone = this.zoneService.getPlayerCharacters(user.id, zoneId);
+    if (!playerCharactersInZone || playerCharactersInZone.length === 0) {
+        this.logger.error(`[Pickup Command] User ${user.id} has no characters in zone ${zoneId} state.`);
+        return { success: false, message: 'Characters not found in zone.' };
+    }
+
+    // 3. Find the closest *alive* character to the item
+    let closestChar: RuntimeCharacterData | null = null;
+    let minDistance = Infinity;
+
+    for (const char of playerCharactersInZone) {
+      if (char.state === 'dead' || char.positionX === null || char.positionY === null) continue; // Skip dead or positionless chars
+
+      const distance = calculateDistance(
+        { x: char.positionX, y: char.positionY },
+        droppedItem.position
+      );
+
+      if (distance < minDistance) {
+        minDistance = distance;
+        closestChar = char;
+      }
+    }
+
+    if (!closestChar) {
+      this.logger.log(`[Pickup Command] No alive characters found for user ${user.id} to pick up item ${itemIdToPickup}.`);
+      return { success: false, message: 'No available characters to pick up the item.' };
+    }
+
+    // 4. Set the closest character's state to move towards the item
+    this.logger.log(`[Pickup Command] Character ${closestChar.id} [${closestChar.name}] assigned to pick up item ${droppedItem.itemName} (${itemIdToPickup})`);
+
+    // Clear any potential loot_area command state when issuing a specific pickup
+    closestChar.commandState = null; 
+
+    const success = this.zoneService.setCharacterLootTarget(
+        user.id,
+        closestChar.id,
+        itemIdToPickup,
+        droppedItem.position.x,
+        droppedItem.position.y
+    );
+
+    if (!success) {
+        this.logger.error(`[Pickup Command] Failed to set loot target for character ${closestChar.id} in ZoneService.`);
+        return { success: false, message: 'Failed to assign character to item.' };
+    }
+
+    // Acknowledge the command was received and processed
+    // The actual pickup happens in the game loop
+    return { success: true };
+  }
+  // -------------------------------------
+
+  // --- Pickup Item Handler --- // Renamed old handler
+  @SubscribeMessage('OLD_pickupItemCommand') // Rename to avoid conflict
+  async handleDirectPickupItem(
       @MessageBody() data: { itemId: string },
       @ConnectedSocket() client: Socket,
   ): Promise<{ success: boolean; message?: string }> { // Ack structure
@@ -145,7 +233,10 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     }
 
     const character = this.zoneService.getCharacterStateById(zoneId, party[0].id);
-    const droppedItem = this.zoneService.getDroppedItems(zoneId).find(item => item.id === itemIdToPickup);
+    // Need a way to get a specific dropped item by ID from ZoneService
+    // For now, assume a method like getDroppedItemById exists or filter the array
+    const droppedItem = this.zoneService.getDroppedItemById(zoneId, itemIdToPickup);
+    // const droppedItem = this.zoneService.getDroppedItems(zoneId).find(item => item.id === itemIdToPickup);
 
     if (!character) {
         return { success: false, message: 'Character not found in zone state.' };
@@ -156,6 +247,7 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     }
 
     // --- Range Check ---
+    const ITEM_PICKUP_RANGE = 50; // Re-define locally if needed
     const distance = calculateDistance(
         { x: character.positionX!, y: character.positionY! },
         droppedItem.position
@@ -193,21 +285,16 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
         }
 
         // 3. Broadcast itemPickedUp to ZONE (for others to remove visual)
-        // Use broadcast service queuing for zone events
-        // We don't have a queueItemPickedUp yet, need to add it or reuse?
-        // Let's make a simple broadcast for now, queueing later if needed.
-        this.server.to(zoneId).emit('itemPickedUp', { itemId: itemIdToPickup });
+        this.broadcastService.queueItemPickedUp(zoneId, itemIdToPickup);
 
-        // 4. Broadcast inventoryUpdate to the specific CLIENT
-        // --- Use new slots method ---
-        const latestInventorySlots = await this.inventoryService.getUserInventorySlots(user.id);
-        client.emit('inventoryUpdate', { inventory: latestInventorySlots });
-        // -------------------------
+        // 4. Send inventory update to the specific player
+        const updatedInventory = await this.inventoryService.getUserInventory(user.id);
+        client.emit('inventoryUpdate', { inventory: updatedInventory });
 
-        return { success: true };
+        return { success: true }; // Acknowledge successful pickup
 
     } catch (error) {
-        this.logger.error(`Error picking up item ${itemIdToPickup} for user ${user.username}: ${error.message}`, error.stack);
+        this.logger.error(`Error during pickup for item ${itemIdToPickup} by user ${user.username}: ${error.message}`, error.stack);
         return { success: false, message: 'An error occurred while picking up the item.' };
     }
   }
@@ -563,7 +650,6 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
 
     // --- Update target positions AND anchor points in ZoneService ---
     for (const target of targets) {
-        // Find the full character data in memory to update it
         const character = partyCharacters.find(c => c.id === target.charId);
         if (character) {
             // Set the movement target
@@ -574,7 +660,7 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
             character.anchorY = target.targetY;
             // Clear any attack target, movement command overrides attacking
             character.attackTargetId = null;
-            // Set state to moving
+            character.commandState = null; // <-- Clear command state on move
             character.state = 'moving';
 
             // Optional: Log the calculated target
@@ -616,8 +702,8 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
         // Set the target and state for ALL characters in the party
         for (const character of partyCharacters) {
             character.attackTargetId = data.targetId;
+            character.commandState = null; // <-- Clear command state on attack
             character.state = 'attacking';
-            // Clear any existing movement target, attacking takes priority
             character.targetX = null;
             character.targetY = null;
             this.logger.debug(`AttackCmd: Set state=attacking, target=${data.targetId} for char ${character.id}`);
@@ -701,4 +787,48 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
         client.emit('operation_error', { message: 'Server error while moving item.' }); 
     }
   }
+
+  // --- ADD LOOT ALL COMMAND HANDLER ---
+  @SubscribeMessage('loot_all_command')
+  handleLootAllCommand(
+    @ConnectedSocket() client: Socket,
+  ): { success: boolean; message?: string } { // Acknowledge receipt
+    const user = client.data.user as User;
+    const zoneId = client.data.currentZoneId as string;
+
+    if (!user || !zoneId) {
+      this.logger.warn(`[Loot All] Invalid state for user ${user?.id}.`);
+      return { success: false, message: 'Invalid state.' };
+    }
+
+    const playerCharactersInZone = this.zoneService.getPlayerCharacters(user.id, zoneId);
+    if (!playerCharactersInZone || playerCharactersInZone.length === 0) {
+        this.logger.error(`[Loot All] User ${user.id} has no characters in zone ${zoneId} state.`);
+        return { success: false, message: 'Characters not found in zone.' };
+    }
+
+    this.logger.log(`[Loot All] Received command from user ${user.id}. Processing ${playerCharactersInZone.length} characters.`);
+    let charactersSetToLoot = 0;
+
+    // Iterate through each character and attempt to set their state to looting_area
+    for (const char of playerCharactersInZone) {
+        if (char.state !== 'dead') {
+            const success = this.zoneService.setCharacterLootArea(user.id, char.id);
+            if (success) {
+                charactersSetToLoot++;
+            } else {
+                this.logger.warn(`[Loot All] Failed to set looting state for character ${char.id}.`);
+            }
+        }
+    }
+
+    if (charactersSetToLoot > 0) {
+        this.logger.log(`[Loot All] ${charactersSetToLoot} character(s) set to looting state for user ${user.id}.`);
+        return { success: true };
+    } else {
+        this.logger.log(`[Loot All] No alive characters could be set to looting state for user ${user.id}.`);
+        return { success: false, message: 'No characters available to loot.' };
+    }
+  }
+  // --- END LOOT ALL COMMAND HANDLER ---
 }

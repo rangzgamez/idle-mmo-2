@@ -38,11 +38,11 @@ export class DroppedItemSprite extends Phaser.GameObjects.Sprite {
         });
 
          // --- Click Handler (will be handled in GameScene) ---
-        // this.on('pointerdown', () => {
-        //     // Scene needs to handle sending the pickup command
-        //     console.log(`Clicked item: ${this.itemData.itemName} (${this.instanceId})`);
-        //     this.scene.events.emit('droppedItemClicked', this.instanceId);
-        // });
+        this.on('pointerdown', () => {
+            // Scene needs to handle sending the pickup command
+            console.log(`Clicked item: ${this.itemData.itemName} (${this.instanceId})`);
+            this.scene.events.emit('droppedItemClicked', this.instanceId);
+        });
 
     }
 

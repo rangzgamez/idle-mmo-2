@@ -47,6 +47,7 @@ export class BroadcastService {
     private deathQueue: Map<string, DeathData[]> = new Map();
     private spawnQueue: Map<string, SpawnData[]> = new Map();
     private itemDroppedQueue: Map<string, DroppedItemPayload[]> = new Map(); // Add queue
+    private itemPickedUpQueue: Map<string, { itemId: string }[]> = new Map(); // Add queue for item pickup
 
     // Inject Logger through the constructor
     constructor(private readonly logger: Logger) {
@@ -118,6 +119,19 @@ export class BroadcastService {
         this.itemDroppedQueue.get(zoneId)?.push(itemPayload);
     }
 
+    // --- NEW: Method to queue item pickup events ---
+    queueItemPickedUp(zoneId: string, itemId: string): void {
+        if (!this.itemPickedUpQueue.has(zoneId)) {
+            this.itemPickedUpQueue.set(zoneId, []);
+        }
+        // Avoid queueing duplicates in the same tick
+        const queue = this.itemPickedUpQueue.get(zoneId);
+        if (queue && !queue.some(p => p.itemId === itemId)) {
+            queue.push({ itemId });
+        }
+    }
+    // ---------------------------------------------
+
     // --- Broadcasting Method ---
 
     /**
@@ -136,6 +150,7 @@ export class BroadcastService {
         const deaths = this.deathQueue.get(zoneId);
         const spawns = this.spawnQueue.get(zoneId);
         const itemsDropped = this.itemDroppedQueue.get(zoneId); // Get dropped items
+        const itemsPickedUp = this.itemPickedUpQueue.get(zoneId); // Get picked up items
 
         // Emit events only if there's data for them
         if (updates && updates.length > 0) {
@@ -173,5 +188,16 @@ export class BroadcastService {
             this.server.to(zoneId).emit('itemsDropped', { items: itemsDropped });
             this.itemDroppedQueue.delete(zoneId); // Clear queue
         }
+
+        // --- NEW: Emit itemPickedUp events ---
+        if (itemsPickedUp && itemsPickedUp.length > 0) {
+            this.logger.verbose(`[Broadcast] Emitting itemPickedUp for zone ${zoneId} with ${itemsPickedUp.length} item(s).`);
+            // Client expects individual 'itemPickedUp' events { itemId: string }
+            itemsPickedUp.forEach(pickup => {
+                this.server?.to(zoneId).emit('itemPickedUp', pickup);
+            });
+            this.itemPickedUpQueue.delete(zoneId); // Clear queue
+        }
+        // -------------------------------------
     }
 }
