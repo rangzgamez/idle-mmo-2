@@ -625,6 +625,29 @@ export class ZoneService implements OnModuleInit {
     }
     // --- End NEW Method ---
 
+    // --- NEW: Method to get all characters for a specific player in a zone ---
+    /**
+     * Retrieves all runtime character data for a specific player within a given zone.
+     * @param zoneId The ID of the zone.
+     * @param playerId The ID of the player (owner).
+     * @returns An array of RuntimeCharacterData objects, or an empty array if the player is not found.
+     */
+    getPlayerCharactersInZone(zoneId: string, playerId: string): RuntimeCharacterData[] {
+        const zone = this.zones.get(zoneId);
+        if (!zone) {
+            this.logger.warn(`Cannot get player characters: Zone ${zoneId} not found.`);
+            return [];
+        }
+        const player = zone.players.get(playerId);
+        if (!player) {
+            // This might be normal if the player left the zone
+            // this.logger.warn(`Cannot get player characters: Player ${playerId} not found in zone ${zoneId}.`);
+            return [];
+        }
+        return player.characters; // Return the array of character data
+    }
+    // --- End NEW Method ---
+
     // --- Nest-Based Spawning Logic ---
 
     // Modified addEnemy to optionally link to a nest

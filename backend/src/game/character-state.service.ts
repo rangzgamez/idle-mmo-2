@@ -196,13 +196,27 @@ export class CharacterStateService {
                                     this.logger.log(`Enemy ${targetEnemy.id} (Template: ${targetEnemy.templateId}) died from attack by Character ${character.id} (${character.name})`);
                                     results.targetDied = true;
 
-                                    // --- Grant XP ---
+                                    // --- Grant XP to Party ---
                                     try {
                                         const enemyTemplate = await this.enemyService.findOne(targetEnemy.templateId);
                                         if (enemyTemplate && enemyTemplate.xpReward > 0) {
-                                            this.logger.log(`Granting ${enemyTemplate.xpReward} XP to Character ${character.id} for killing Enemy ${targetEnemy.id}`);
-                                            await this.characterService.addXp(character.id, enemyTemplate.xpReward);
-                                            // TODO: Consider broadcasting XP gain event? Or handling level up notification if XP gain causes level up.
+                                            // Get all characters for the player who owns the attacking character
+                                            const partyMembers = this.zoneService.getPlayerCharactersInZone(zoneId, character.ownerId);
+                                            if (partyMembers.length > 0) {
+                                                this.logger.log(`Granting ${enemyTemplate.xpReward} XP to ${partyMembers.length} party member(s) (Owner: ${character.ownerId}) for killing Enemy ${targetEnemy.id}`);
+                                                // Loop through party members and grant XP individually
+                                                for (const member of partyMembers) {
+                                                    // Maybe add check: ensure member is alive?
+                                                    if (member.state !== 'dead') {
+                                                        await this.characterService.addXp(member.id, enemyTemplate.xpReward);
+                                                    } else {
+                                                         this.logger.debug(`Skipping XP grant for dead party member ${member.id}`);
+                                                    }
+                                                }
+                                                // TODO: Consider dividing XP instead? For now, each gets full XP.
+                                            } else {
+                                                this.logger.warn(`Could not find party members for player ${character.ownerId} in zone ${zoneId} to grant XP.`);
+                                            }
                                         } else if (enemyTemplate) {
                                             this.logger.debug(`Enemy template ${targetEnemy.templateId} has no XP reward.`);
                                         } else {

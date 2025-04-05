@@ -31,6 +31,6 @@ import { LootModule } from 'src/loot/loot.module';
     BroadcastService,
     Logger,
   ],
-  exports: [ZoneService, AIService]
+  exports: [ZoneService, AIService, BroadcastService]
 })
 export class GameModule {}
