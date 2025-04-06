@@ -343,8 +343,9 @@ export class CharacterService {
     
     // Assign the result back. TypeORM should handle converting number back to bigint string on save.
     character.xp = currentXpNumber; 
-
-    this.logger.log(`Added ${xpToAdd} XP to character ${characterId}. New Total XP: ${character.xp}`);
+    
+    // Note: Do not log or broadcast simple XP add yet, wait until after level checks & save
+    // this.logger.log(`Added ${xpToAdd} XP to character ${characterId}. New Total XP: ${character.xp}`);
 
     // --- Level Up Check (Reinstated While Loop) ---
     let leveledUp = false;
@@ -370,56 +371,72 @@ export class CharacterService {
     }
     // --- End Level Up Check ---
 
+    let savedCharacter: Character; // Declare variable to hold saved character
+
     if (leveledUp) {
         this.logger.log(`*** CHARACTER ${character.id} [${character.name}] LEVELED UP FROM ${initialLevelBeforeCheck} TO ${character.level}! *** Final Stats: HP=${character.baseHealth}, ATK=${character.baseAttack}, DEF=${character.baseDefense}. Total XP: ${character.xp}`);
-        // (Rest of the post-level-up logic: save, update runtime, broadcast)
         // Save the character FIRST to persist new base stats and level
-        const savedCharacter = await this.characterRepository.save(character);
+        savedCharacter = await this.characterRepository.save(character);
         this.logger.log(`Saved character ${characterId} after level up(s).`);
 
         // Now update the runtime state (stats and health)
         try {
-          // Recalculate effective stats based on new base stats
-          const newStats = await this.calculateEffectiveStats(characterId);
-          // Update the effective stats in the ZoneService
-          await this.zoneService.updateCharacterEffectiveStats(characterId, newStats);
-          // Fully heal the character in the ZoneService runtime state
-          this.zoneService.setCharacterHealth(characterId, savedCharacter.baseHealth);
-          
-          this.logger.log(`Updated runtime stats and health for character ${characterId} in ZoneService after level up.`);
+            const newStats = await this.calculateEffectiveStats(characterId);
+            await this.zoneService.updateCharacterEffectiveStats(characterId, newStats);
+            this.zoneService.setCharacterHealth(characterId, savedCharacter.baseHealth); // Full heal on level up
+            this.logger.log(`Updated runtime stats and health for character ${characterId} in ZoneService after level up.`);
         } catch (error) {
-          this.logger.error(`Failed to update runtime stats/health in ZoneService for ${characterId} after level up: ${error.message}`, error.stack);
-          // Consider the implications if this fails - runtime state might be inconsistent
+            this.logger.error(`Failed to update runtime stats/health in ZoneService for ${characterId} after level up: ${error.message}`, error.stack);
         }
 
-        // --- Broadcast Level Up Notification ---
+        // --- Broadcast Level Up Notification --- 
         try {
-          const xpToNextLevel = this.calculateXpForLevel(savedCharacter.level + 1);
-          const levelUpPayload = {
-              characterId: savedCharacter.id,
-              newLevel: savedCharacter.level,
-              newBaseStats: {
-                  health: savedCharacter.baseHealth,
-                  attack: savedCharacter.baseAttack,
-                  defense: savedCharacter.baseDefense,
-              },
-              xp: savedCharacter.xp,
-              xpToNextLevel: xpToNextLevel,
-          };
-          // TODO: Ensure BroadcastService has a method like `sendEventToUser`
-          this.broadcastService.sendEventToUser(savedCharacter.userId, 'levelUpNotification', levelUpPayload);
-          this.logger.log(`Sent levelUpNotification to user ${savedCharacter.userId} for character ${characterId}.`);
+             // Calculate XP needed for the level AFTER the loop finished
+            const finalXpNeeded = this.calculateXpForLevel(savedCharacter.level + 1);
+            const levelUpPayload = {
+                characterId: savedCharacter.id,
+                newLevel: savedCharacter.level,
+                newBaseStats: {
+                    health: savedCharacter.baseHealth,
+                    attack: savedCharacter.baseAttack,
+                    defense: savedCharacter.baseDefense,
+                },
+                xp: savedCharacter.xp, // Current total XP
+                xpToNextLevel: finalXpNeeded, // Total XP needed for the next level
+            };
+            this.broadcastService.sendEventToUser(savedCharacter.userId, 'levelUpNotification', levelUpPayload);
+            this.logger.log(`Sent levelUpNotification to user ${savedCharacter.userId} for character ${characterId}.`);
         } catch (error) {
-          this.logger.error(`Failed to send levelUpNotification for character ${characterId}: ${error.message}`, error.stack);
+            this.logger.error(`Failed to send levelUpNotification for character ${characterId}: ${error.message}`, error.stack);
         }
-        // --- End Broadcast ---
-        
-        return savedCharacter; // Return the saved character with updated level/stats
+
     } else {
-        this.logger.log(`Character ${characterId} gained ${xpToAdd} XP but did not level up. Current Lvl: ${character.level}, Total XP: ${character.xp}, XP Needed for Lvl ${character.level + 1}: ${xpNeededForNextLevel}`);
         // If no level up, just save the XP update
-        return this.characterRepository.save(character);
+        savedCharacter = await this.characterRepository.save(character);
+        // Log non-level-up XP gain here
+        const xpNeededLog = this.calculateXpForLevel(savedCharacter.level + 1);
+        this.logger.log(`Character ${characterId} gained ${xpToAdd} XP but did not level up. Current Lvl: ${savedCharacter.level}, Total XP: ${savedCharacter.xp}, XP Needed for Lvl ${savedCharacter.level + 1}: ${xpNeededLog}`);
     }
+
+    // --- ALWAYS Broadcast XP Update (AFTER saving) --- 
+    // Send this regardless of level up, using the final saved state
+    try {
+        const finalXpNeededForNextLevel = this.calculateXpForLevel(savedCharacter.level + 1);
+        const xpUpdatePayload = {
+            characterId: savedCharacter.id,
+            level: savedCharacter.level,
+            xp: savedCharacter.xp, // Use final saved XP
+            xpToNextLevel: finalXpNeededForNextLevel,
+        };
+        this.logger.log(`[CharacterService] Attempting to broadcast xpUpdate for user ${savedCharacter.userId}, char ${savedCharacter.id}. Payload:`, xpUpdatePayload);
+        this.broadcastService.sendEventToUser(savedCharacter.userId, 'xpUpdate', xpUpdatePayload);
+        this.logger.verbose(`Sent xpUpdate to user ${savedCharacter.userId} for character ${characterId}.`);
+    } catch (error) {
+        this.logger.error(`Failed to send xpUpdate for character ${characterId}: ${error.message}`, error.stack);
+    }
+    // -------------------------------------------------
+
+    return savedCharacter; // Return the final saved character state
   }
   // --- End NEW Method ---
 

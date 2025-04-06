@@ -16,6 +16,44 @@ interface EquipmentUpdatePayload {
     equipment: Partial<Record<EquipmentSlot, InventoryItem>>; // Map from slot to item
 }
 
+// Define Level Up Notification Payload
+interface LevelUpPayload {
+    characterId: string;
+    newLevel: number;
+    newBaseStats: { health: number; attack: number; defense: number };
+    xp: number;
+    xpToNextLevel: number;
+}
+
+// Define XP Update Payload
+interface XpUpdatePayload {
+    characterId: string;
+    level: number;
+    xp: number;
+    xpToNextLevel: number;
+}
+
+// Payload Interfaces for UI Update Events from GameScene
+interface UpdatePartyHpPayload {
+    characterId: string;
+    currentHp: number;
+    maxHp: number;
+}
+interface UpdatePartyXpPayload {
+    characterId: string;
+    level: number;
+    currentXp: number;      // Relative XP within level
+    xpToNextLevel: number; // Span/Needed for this level
+}
+interface PartyMemberLevelUpPayload {
+    characterId: string;
+    newLevel: number;
+    currentHp: number;      // Full HP
+    maxHp: number;
+    currentXp: number;      // Relative XP within new level
+    xpToNextLevel: number; // Span/Needed for new level
+}
+
 export default class UIScene extends Phaser.Scene {
     networkManager!: NetworkManager;
     chatLogElement!: HTMLElement | null; // The div where messages appear
@@ -47,11 +85,25 @@ export default class UIScene extends Phaser.Scene {
     private equipmentTabsContainer: HTMLElement | null = null; 
     private receivedPartyData: any[] = []; // Store data received on init
     // --- Drag state ---
-    private draggedItemData: { item: InventoryItem, originalSlot: number } | null = null; // Store original slot index
+    private draggedItemData: { item: InventoryItem, originalSlot: number } | null = null; // Store original slot
     private draggedElementGhost: HTMLElement | null = null; // Visual ghost element
     // --- Inventory Data ---
     private inventorySlotsData: (InventoryItem | null)[] = []; // Store sparse array from backend
-    // ----------------
+    // --- Party UI --- 
+    private partyUiGameObject: Phaser.GameObjects.DOMElement | null = null;
+    // Modify map structure to store bar fill elements and values
+    private partyMemberPanels: Map<string, { 
+        nameElement: HTMLElement | null, 
+        hpFillElement: HTMLElement | null, // Reference to HP bar fill
+        xpFillElement: HTMLElement | null, // Reference to XP bar fill
+        hpTextElement: HTMLElement | null, // Reference to text overlay for HP
+        xpTextElement: HTMLElement | null, // Reference to text overlay for XP
+        currentHp: number, 
+        maxHp: number, 
+        currentXp: number, // Store current XP (relative to level start)
+        xpToNextLevel: number // Store XP needed for next level (relative to level start)
+    }> = new Map();
+    // ---------------
 
     constructor() {
         // Make sure the scene key is unique and matches the one in main.ts config
@@ -363,7 +415,11 @@ export default class UIScene extends Phaser.Scene {
         EventBus.on('chat-message-received', this.handleChatMessage, this);
         EventBus.on('focus-chat-input', this.focusChatInput, this);
         EventBus.on('inventory-update', this.handleInventoryUpdate, this); 
-        EventBus.on('equipment-update', this.handleEquipmentUpdate, this); // <-- Add equipment listener
+        EventBus.on('equipment-update', this.handleEquipmentUpdate, this);
+        // --- ADD listeners for events from GameScene ---
+        EventBus.on('update-party-hp', this.handleUpdatePartyHp, this);
+        EventBus.on('update-party-xp', this.handleUpdatePartyXp, this);
+        EventBus.on('party-member-level-up', this.handlePartyMemberLevelUp, this);
 
         console.log('UI Elements Created (Chat, Menu, Inventory Window).');
         if (!this.chatLogElement || !this.chatInputElement) {
@@ -384,6 +440,62 @@ export default class UIScene extends Phaser.Scene {
                 this.renderCurrentInventoryPage(); // Re-render grid
             }
         });
+
+        // --- Create Party UI Container (Bottom Right -> Bottom Left, Horizontal) ---
+        const partyUiHtml = `
+            <div id="party-ui" style="/* REMOVED: position related styles */ display: flex; flex-direction: row; /* <-- CHANGED */ gap: 10px; /* Added more gap */ width: auto; /* Allow dynamic width */">
+                <!-- Party member panels will be added here -->
+            </div>
+        `;
+        this.partyUiGameObject = this.add.dom(0, 0).createFromHTML(partyUiHtml)
+            // Set Origin to Top-Left of the DOM element wrapper
+            .setOrigin(0, 0) // <-- CHANGED
+            // Position the Top-Left corner relative to the canvas size
+            .setPosition(470, this.scale.height - 60); // <-- CHANGED Y position (Estimate panel height)
+        
+        const partyUiContainer = this.partyUiGameObject.getChildByID('party-ui') as HTMLElement;
+        if (!partyUiContainer) {
+            console.error("Failed to create Party UI container!");
+        } else {
+            // --- Populate Initial Party Panels ---
+            this.receivedPartyData.forEach(charData => {
+                if (!charData || !charData.id) {
+                    console.warn("Skipping party panel creation for invalid charData:", charData);
+                    return;
+                }
+                const panelHtml = this._createPartyMemberPanelHTML(charData);
+                partyUiContainer.insertAdjacentHTML('beforeend', panelHtml);
+
+                // Store references to the dynamic elements and initial max HP
+                const panelElement = partyUiContainer.querySelector(`#party-panel-${charData.id}`);
+                if (panelElement) {
+                    const totalXp = charData.xp || 0;
+                    const initialLevel = charData.level || 1;
+                    const xpInCurrentLevel = this._getXpForCurrentLevel(totalXp, initialLevel);
+                    const xpNeededBetweenLevels = this._getXpNeededForLevelSpan(initialLevel);
+                    const initialMaxHp = charData.baseHealth || 0;
+                    const initialHp = initialMaxHp; // Assume full health initially
+
+                    this.partyMemberPanels.set(charData.id, {
+                        nameElement: panelElement.querySelector('.party-char-name') as HTMLElement | null,
+                        hpFillElement: panelElement.querySelector('.hp-bar-fill') as HTMLElement | null,
+                        xpFillElement: panelElement.querySelector('.xp-bar-fill') as HTMLElement | null,
+                        hpTextElement: panelElement.querySelector('.hp-bar-text') as HTMLElement | null,
+                        xpTextElement: panelElement.querySelector('.xp-bar-text') as HTMLElement | null,
+                        currentHp: initialHp,
+                        maxHp: initialMaxHp,
+                        currentXp: xpInCurrentLevel,
+                        xpToNextLevel: xpNeededBetweenLevels
+                    });
+                } else {
+                    console.error(`Failed to find panel element #party-panel-${charData.id} after adding it.`);
+                }
+            });
+            console.log("Populated initial party panels. Panel references:", this.partyMemberPanels);
+        }
+        // -----------------------------------------
+
+        this.hideItemTooltip();
     }
     /**
      * Public getter to allow other scenes (like GameScene)
@@ -443,7 +555,11 @@ export default class UIScene extends Phaser.Scene {
         EventBus.off('chat-message-received', this.handleChatMessage, this);
         EventBus.off('focus-chat-input', this.focusChatInput, this);
         EventBus.off('inventory-update', this.handleInventoryUpdate, this); 
-        EventBus.off('equipment-update', this.handleEquipmentUpdate, this); // <-- Remove equipment listener
+        EventBus.off('equipment-update', this.handleEquipmentUpdate, this);
+        // --- ADD removal for new listeners ---
+        EventBus.off('update-party-hp', this.handleUpdatePartyHp, this);
+        EventBus.off('update-party-xp', this.handleUpdatePartyXp, this);
+        EventBus.off('party-member-level-up', this.handlePartyMemberLevelUp, this);
         // DOM elements added via this.add.dom are usually cleaned up automatically by Phaser
     }
 
@@ -1087,4 +1203,146 @@ export default class UIScene extends Phaser.Scene {
         }
         this.draggedItemData = null;
     }
+
+    // --- NEW: Frontend XP Calculation Helper ---
+    private _frontendCalculateXpForLevel(level: number): number {
+        const baseXP = 100;
+        const exponent = 1.5;
+        if (level <= 1) return 0;
+        return Math.floor(baseXP * Math.pow(level - 1, exponent));
+    }
+    // --- END NEW ---
+
+    // --- Helper to calculate XP relative to the start of the current level ---
+    private _getXpForCurrentLevel(totalXp: number, level: number): number {
+        if (level <= 1) {
+            return totalXp; // For level 1, total XP is the XP in the level
+        }
+        const xpNeededForCurrentLevelStart = this._frontendCalculateXpForLevel(level);
+        return totalXp - xpNeededForCurrentLevelStart;
+    }
+
+    // --- Helper to calculate the XP needed *between* current and next level ---
+    private _getXpNeededForLevelSpan(level: number): number {
+        if (level < 1) return 0;
+        const xpForNext = this._frontendCalculateXpForLevel(level + 1);
+        const xpForCurrent = this._frontendCalculateXpForLevel(level);
+        return xpForNext - xpForCurrent;
+    }
+    // --- END HELPERS ---
+
+    // --- Helper to create party member panel HTML (Updated for Bars) ---
+    private _createPartyMemberPanelHTML(characterData: any): string {
+        const charId = characterData.id || 'unknown';
+        const charName = characterData.name || 'Unknown';
+        const initialLevel = characterData.level || 1;
+        const initialHp = characterData.baseHealth || 100;
+        const initialMaxHp = characterData.baseHealth || 100;
+        const totalXp = characterData.xp || 0;
+
+        // Calculate XP relative to the current level for display
+        const xpInCurrentLevel = this._getXpForCurrentLevel(totalXp, initialLevel);
+        const xpNeededBetweenLevels = this._getXpNeededForLevelSpan(initialLevel);
+
+        const hpPercent = initialMaxHp > 0 ? (initialHp / initialMaxHp) * 100 : 0;
+        const xpPercent = xpNeededBetweenLevels > 0 ? (xpInCurrentLevel / xpNeededBetweenLevels) * 100 : 0;
+
+        const hpText = `${initialHp} / ${initialMaxHp}`;
+        const xpText = `Lvl ${initialLevel} (${xpInCurrentLevel} / ${xpNeededBetweenLevels})`;
+
+        return `
+            <div id="party-panel-${charId}" class="party-panel" style="background-color: rgba(0, 0, 0, 0.7); border: 1px solid #555; border-radius: 3px; padding: 5px; font-size: 11px; color: white; font-family: sans-serif; width: 160px;">
+                <div class="party-char-name" style="font-weight: bold; margin-bottom: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${charName}</div>
+                <!-- HP Bar -->
+                <div class="hp-bar-container" style="height: 14px; background-color: #500; border: 1px solid #833; border-radius: 2px; margin-bottom: 3px; position: relative;">
+                    <div class="hp-bar-fill" style="width: ${hpPercent}%; height: 100%; background-color: #e00; transition: width 0.2s ease-out;"></div>
+                    <div class="hp-bar-text" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; text-align: center; line-height: 14px; font-size: 10px; color: white; text-shadow: 1px 1px 1px black;">${hpText}</div>
+                </div>
+                <!-- XP Bar -->
+                <div class="xp-bar-container" style="height: 10px; background-color: #550; border: 1px solid #883; border-radius: 2px; position: relative;">
+                    <div class="xp-bar-fill" style="width: ${xpPercent}%; height: 100%; background-color: #ee0; transition: width 0.2s ease-out;"></div>
+                    <div class="xp-bar-text" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; text-align: center; line-height: 10px; font-size: 9px; color: white; text-shadow: 1px 1px 1px black;">${xpText}</div>
+                </div>
+            </div>
+        `;
+    }
+    // --- END NEW ---
+
+    // --- Handle Level Up Notification (Renamed and Updated for Bars) ---
+    private handlePartyMemberLevelUp(payload: PartyMemberLevelUpPayload) {
+        console.log("Received party member level up event:", payload);
+        const panelRefs = this.partyMemberPanels.get(payload.characterId);
+        if (panelRefs) { 
+            // Update stored values
+            panelRefs.maxHp = payload.maxHp;
+            panelRefs.currentHp = payload.currentHp; // Already full HP from payload
+            panelRefs.currentXp = payload.currentXp;
+            panelRefs.xpToNextLevel = payload.xpToNextLevel;
+
+            // Update HP Bar/Text
+            if (panelRefs.hpFillElement) {
+                panelRefs.hpFillElement.style.width = `100%`;
+            }
+            if (panelRefs.hpTextElement) {
+                panelRefs.hpTextElement.textContent = `${panelRefs.currentHp} / ${panelRefs.maxHp}`;
+            }
+            // Update XP Bar/Text
+            if (panelRefs.xpFillElement) {
+                 const xpPercent = panelRefs.xpToNextLevel > 0 ? (panelRefs.currentXp / panelRefs.xpToNextLevel) * 100 : 0;
+                 panelRefs.xpFillElement.style.width = `${Math.min(100, xpPercent)}%`;
+            }
+             if (panelRefs.xpTextElement) {
+                 panelRefs.xpTextElement.textContent = `Lvl ${payload.newLevel} (${panelRefs.currentXp} / ${panelRefs.xpToNextLevel})`;
+             }
+
+            // Visual Flash
+            const panelElement = this.partyUiGameObject?.getChildByID(`party-panel-${payload.characterId}`) as HTMLElement | null;
+            if (panelElement) {
+                panelElement.classList.add('level-up-flash');
+                setTimeout(() => { panelElement.classList.remove('level-up-flash'); }, 500);
+            }
+        }
+    }
+    // --- END NEW ---
+
+    // --- Handle Entity Update (Renamed for HP) ---
+    private handleUpdatePartyHp(payload: UpdatePartyHpPayload) {
+        const panelRefs = this.partyMemberPanels.get(payload.characterId);
+        if (panelRefs) {
+            panelRefs.currentHp = Math.round(payload.currentHp);
+            panelRefs.maxHp = payload.maxHp; // Ensure maxHP is updated if it changed elsewhere
+            // Update HP Bar
+            if (panelRefs.hpFillElement && panelRefs.maxHp > 0) {
+                 const hpPercent = (panelRefs.currentHp / panelRefs.maxHp) * 100;
+                 panelRefs.hpFillElement.style.width = `${Math.min(100, Math.max(0, hpPercent))}%`;
+            }
+            // Update HP Text
+            if (panelRefs.hpTextElement) {
+                panelRefs.hpTextElement.textContent = `${panelRefs.currentHp} / ${panelRefs.maxHp}`;
+            }
+        }
+    }
+     // --- END NEW ---
+
+     // --- Handle XP Update (Renamed for XP Bar) ---
+     private handleUpdatePartyXp(payload: UpdatePartyXpPayload) {
+         console.log("Received party xp update:", payload);
+         const panelRefs = this.partyMemberPanels.get(payload.characterId);
+         if (panelRefs) {
+            // Update stored values
+            panelRefs.currentXp = payload.currentXp;
+            panelRefs.xpToNextLevel = payload.xpToNextLevel;
+            
+            // Update XP Bar
+            if (panelRefs.xpFillElement) {
+                const xpPercent = panelRefs.xpToNextLevel > 0 ? (panelRefs.currentXp / panelRefs.xpToNextLevel) * 100 : 0;
+                panelRefs.xpFillElement.style.width = `${Math.min(100, xpPercent)}%`;
+            }
+            // Update XP Text
+            if (panelRefs.xpTextElement) {
+                panelRefs.xpTextElement.textContent = `Lvl ${payload.level} (${panelRefs.currentXp} / ${panelRefs.xpToNextLevel})`;
+            }
+         }
+     }
+     // --- END NEW ---
 }

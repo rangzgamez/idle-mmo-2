@@ -153,6 +153,13 @@ export class CharacterSprite extends Phaser.GameObjects.Sprite {
     setHealth(currentHealth: number, maxHealth?: number): void {
         this.healthBar.setHealth(currentHealth, maxHealth);
     }
+
+    // --- NEW: Getter for max health ---
+    getMaxHealth(): number {
+        return this.healthBar.getMaxHealth();
+    }
+    // ---------------------------------
+
     private updateHealthBarPosition(): void {
         this.healthBar.setPosition(this.x, this.y - 25); // Position below name label
     }
@@ -163,6 +170,16 @@ export class CharacterSprite extends Phaser.GameObjects.Sprite {
         // Optional: Recalculate position if origin/size changes significantly
         this.nameLabel.y = this.y - this.height / 2 - 15;
     }
+
+    // --- NEW: Method to set level (updates label) ---
+    setLevel(level: number) {
+        // Assuming the name doesn't change, just update the level part
+        const currentText = this.nameLabel.text;
+        const nameMatch = currentText.match(/^(.*?)\s+\(Lvl \d+\)$/); // Extract name part
+        const name = nameMatch ? nameMatch[1] : currentText; // Fallback to full text if regex fails
+        this.updateNameLabel(name, level);
+    }
+    // -----------------------------------------------
 
     // Override destroy to clean up label too
     destroy(fromScene?: boolean) {

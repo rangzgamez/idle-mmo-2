@@ -43,6 +43,23 @@ interface EnemySpawnData {
     // other optional fields like aiState, nestId etc.
 }
 
+// --- Payload Interfaces (Copied/Shared from UIScene or common types file) ---
+interface LevelUpPayload {
+    characterId: string;
+    newLevel: number;
+    newBaseStats: { health: number; attack: number; defense: number };
+    xp: number; // Total XP
+    xpToNextLevel: number; // Total XP needed for next level
+}
+
+interface XpUpdatePayload {
+    characterId: string;
+    level: number;
+    xp: number; // Total XP
+    xpToNextLevel: number; // Total XP needed for next level
+}
+// ---
+
 export default class GameScene extends Phaser.Scene {
     networkManager!: NetworkManager;
     playerCharacters: Map<string, CharacterSprite> = new Map(); // Key: characterId
@@ -121,6 +138,11 @@ export default class GameScene extends Phaser.Scene {
         EventBus.on('items-dropped', this.handleItemsDropped, this); // <-- ADD LISTENER for dropped items
         EventBus.on('item-picked-up', this.handleItemPickedUp, this); // <-- ADD LISTENER for item pickup confirmation
         this.events.on('droppedItemClicked', this.handleDroppedItemClicked, this); // <-- CORRECTED: Use this.events
+        // --- ADD Listeners for XP/Level Events ---
+        EventBus.on('levelUpNotification', this.handleLevelUpNotification, this);
+        EventBus.on('xpUpdate', this.handleXpUpdate, this);
+        // -----------------------------------------
+
         // --- Launch UI Scene ---
         // Use scene.launch to run it in parallel with this scene
         console.log('Launching UIScene...');
@@ -354,35 +376,49 @@ export default class GameScene extends Phaser.Scene {
     }
 
     handleEntityUpdate(data: { updates: EntityUpdateData[] }) {
+        // console.log('[GameScene] Received entity updates:', data.updates); // Can be very noisy
+        if (!this) return; // Scene might be shutting down
+
         data.updates.forEach(update => {
-            const { id, x, y, health, state } = update;
-
-            // Check Characters (Player + Others)
-            let charSprite = this.playerCharacters.get(id) || this.otherCharacters.get(id);
-            if (charSprite) {
-                if (x !== undefined && y !== undefined && x !== null && y !== null) {
-                    charSprite.updateTargetPosition(x, y); // Use correct method
+            const sprite = this.playerCharacters.get(update.id) || this.otherCharacters.get(update.id) || this.enemySprites.get(update.id);
+            if (sprite) {
+                // Update sprite target position for interpolation
+                if (update.x !== undefined && update.y !== undefined && update.x !== null && update.y !== null) {
+                    // Use the correct method name from CharacterSprite/EnemySprite
+                    if ('updateTargetPosition' in sprite) {
+                         sprite.updateTargetPosition(update.x, update.y);
+                    } else {
+                        console.warn(`Sprite ${update.id} missing updateTargetPosition method?`);
+                    }
                 }
-                if (health !== undefined && health !== null) {
-                    charSprite.setHealth(health); // Use correct method
+                // Update sprite health bar
+                if (update.health !== undefined && update.health !== null) {
+                    sprite.setHealth(update.health); // Let sprite handle its maxHP logic
+                    
+                    // --- Emit Party HP Update ---
+                    if (this.playerCharacters.has(update.id)) {
+                        const charSprite = sprite as CharacterSprite; // Cast needed to access maxHp
+                        let maxHp = 100; // Default fallback
+                        // Check if getMaxHealth method exists before calling
+                        if (typeof charSprite.getMaxHealth === 'function') {
+                             maxHp = charSprite.getMaxHealth(); 
+                        } else {
+                             console.warn(`CharacterSprite ${update.id} missing getMaxHealth method?`);
+                        }
+                        EventBus.emit('update-party-hp', { 
+                            characterId: update.id, 
+                            currentHp: update.health,
+                            maxHp: maxHp
+                        });
+                    }
+                    // ---------------------------
                 }
-                // TODO: Handle character state visual changes (e.g., idle/moving/attacking/dead animations)
-                // if (state) { charSprite.setStateVisual(state); }
-                return; // Found and updated
-            }
-
-            // Check Enemies
-            const enemySprite = this.enemySprites.get(id);
-            if (enemySprite) {
-                if (x !== undefined && y !== undefined && x !== null && y !== null) {
-                    enemySprite.updateTargetPosition(x, y); // Use correct method
+                // Update sprite state (for animations etc.)
+                if (update.state) {
+                    // TODO: Add state handling to sprites if needed (e.g., sprite.setState(update.state))
                 }
-                if (health !== undefined && health !== null) {
-                    enemySprite.setHealth(health); // Use correct method
-                }
-                // TODO: Handle enemy state visual changes (e.g., idle/chasing/attacking/wandering)
-                // if (state) { enemySprite.setStateVisual(state); }
-                return; // Found and updated
+            } else {
+                // console.warn(`[GameScene] Received update for unknown entity ID: ${update.id}`);
             }
         });
     }
@@ -473,28 +509,24 @@ export default class GameScene extends Phaser.Scene {
     }
 
     shutdownScene() {
-        console.log('GameScene shutting down, removing listeners.');
-        // Remove listeners to prevent memory leaks or errors on scene restart
+        console.log('GameScene shutting down, removing listeners and clearing data.');
+        // Remove EventBus listeners
         EventBus.off('network-disconnect', this.handleDisconnectError, this);
         EventBus.off('player-joined', this.handlePlayerJoined, this);
         EventBus.off('player-left', this.handlePlayerLeft, this);
         EventBus.off('entity-update', this.handleEntityUpdate, this);
-        EventBus.off('chat-message-received', this.handleChatMessageForBubble, this); // Remove bubble listener
-        EventBus.off('entity-died', this.handleEntityDied, this); // <-- REMOVE LISTENER FOR DEATHS
-        EventBus.off('enemy-spawned', this.handleEnemySpawned, this); // ++ REMOVE LISTENER ++
-        EventBus.off('combat-action', this.handleCombatAction, this); // +++ REMOVE LISTENER +++
-        EventBus.off('items-dropped', this.handleItemsDropped, this); // <-- REMOVE LISTENER
-        EventBus.off('item-picked-up', this.handleItemPickedUp, this); // <-- REMOVE LISTENER
-        // --- Clean up click marker ---
-        if (this.markerFadeTween) {
-            this.markerFadeTween.stop(); // Stop active tween on shutdown
-       }
-       this.clickMarker?.destroy();
-       this.clickMarker = null;
-       this.markerFadeTween = null;
-       this.lastMarkerTarget = null;
-       this.currentPlayerUsername = null; // Clear username on shutdown
-        // Destroy all character sprites
+        EventBus.off('chat-message-received', this.handleChatMessageForBubble, this);
+        EventBus.off('entity-died', this.handleEntityDied, this);
+        EventBus.off('enemy-spawned', this.handleEnemySpawned, this);
+        EventBus.off('combat-action', this.handleCombatAction, this);
+        EventBus.off('items-dropped', this.handleItemsDropped, this);
+        EventBus.off('item-picked-up', this.handleItemPickedUp, this);
+        this.events.off('droppedItemClicked', this.handleDroppedItemClicked, this);
+        // --- Remove XP/Level Listeners ---
+        EventBus.off('levelUpNotification', this.handleLevelUpNotification, this);
+        EventBus.off('xpUpdate', this.handleXpUpdate, this);
+        // -------------------------------
+        // Clear character maps
         this.playerCharacters.forEach(sprite => sprite.destroy());
         this.otherCharacters.forEach(sprite => sprite.destroy());
         this.playerCharacters.clear();
@@ -511,8 +543,36 @@ export default class GameScene extends Phaser.Scene {
 
     // Called automatically when the scene is shut down
     shutdown() {
-        console.log("GameScene shutdown called");
-        this.shutdownScene(); // Ensure cleanup runs even on scene.stop()
+        console.log('GameScene shutting down, removing listeners and clearing data.');
+        // Remove EventBus listeners
+        EventBus.off('network-disconnect', this.handleDisconnectError, this);
+        EventBus.off('player-joined', this.handlePlayerJoined, this);
+        EventBus.off('player-left', this.handlePlayerLeft, this);
+        EventBus.off('entity-update', this.handleEntityUpdate, this);
+        EventBus.off('chat-message-received', this.handleChatMessageForBubble, this);
+        EventBus.off('entity-died', this.handleEntityDied, this);
+        EventBus.off('enemy-spawned', this.handleEnemySpawned, this);
+        EventBus.off('combat-action', this.handleCombatAction, this);
+        EventBus.off('items-dropped', this.handleItemsDropped, this);
+        EventBus.off('item-picked-up', this.handleItemPickedUp, this);
+        this.events.off('droppedItemClicked', this.handleDroppedItemClicked, this);
+        // --- Remove XP/Level Listeners ---
+        EventBus.off('levelUpNotification', this.handleLevelUpNotification, this);
+        EventBus.off('xpUpdate', this.handleXpUpdate, this);
+        // -------------------------------
+        // Clear character maps
+        this.playerCharacters.forEach(sprite => sprite.destroy());
+        this.otherCharacters.forEach(sprite => sprite.destroy());
+        this.playerCharacters.clear();
+        this.otherCharacters.clear();
+        // Destroy dropped item sprites
+        this.droppedItemSprites.forEach(sprite => sprite.destroy());
+        this.droppedItemSprites.clear();
+        // --- Stop the UI Scene when GameScene stops ---
+        console.log('Stopping UIScene...');
+        this.input.keyboard?.off('keydown-ENTER'); // Clean up listener
+        this.uiSceneRef = null; // Clear reference
+        this.scene.stop('UIScene');
     }
 
     // +++ ADDED: Reusable enemy sprite creation logic +++
@@ -697,4 +757,84 @@ export default class GameScene extends Phaser.Scene {
         this.networkManager.sendMessage('pickup_item', { itemId });
     }
     // -------------------------------------------
+
+    // --- NEW: Frontend XP Calculation Helpers (Copied from UIScene) ---
+    private _frontendCalculateXpForLevel(level: number): number {
+        const baseXP = 100;
+        const exponent = 1.5;
+        if (level <= 1) return 0;
+        return Math.floor(baseXP * Math.pow(level - 1, exponent));
+    }
+    private _getXpForCurrentLevel(totalXp: number, level: number): number {
+        if (level <= 1) return totalXp;
+        const xpNeededForCurrentLevelStart = this._frontendCalculateXpForLevel(level);
+        return totalXp - xpNeededForCurrentLevelStart;
+    }
+    private _getXpNeededForLevelSpan(level: number): number {
+        if (level < 1) return 0;
+        const xpForNext = this._frontendCalculateXpForLevel(level + 1);
+        const xpForCurrent = this._frontendCalculateXpForLevel(level);
+        return xpForNext - xpForCurrent;
+    }
+    // --- END NEW HELPERS ---
+
+    // --- NEW: Handle Level Up Notification ---
+    private handleLevelUpNotification(payload: LevelUpPayload) {
+        console.log('[GameScene] Received level up notification:', payload);
+        const charSprite = this.playerCharacters.get(payload.characterId);
+        if (charSprite) {
+            // Update Sprite (Check if methods exist)
+            if (typeof charSprite.setLevel === 'function') {
+                charSprite.setLevel(payload.newLevel);
+            } else {
+                console.warn(`CharacterSprite ${payload.characterId} missing setLevel method?`);
+            }
+            charSprite.setHealth(payload.newBaseStats.health, payload.newBaseStats.health); // Update max and current HP
+            
+            // Calculate relative XP values for UI
+            const xpInCurrentLevel = this._getXpForCurrentLevel(payload.xp, payload.newLevel);
+            const xpNeededBetweenLevels = this._getXpNeededForLevelSpan(payload.newLevel);
+
+            // Emit event for UIScene
+            EventBus.emit('party-member-level-up', { 
+                characterId: payload.characterId,
+                newLevel: payload.newLevel,
+                currentHp: payload.newBaseStats.health, // Full HP
+                maxHp: payload.newBaseStats.health,
+                currentXp: xpInCurrentLevel,
+                xpToNextLevel: xpNeededBetweenLevels
+            });
+        }
+    }
+    // --- END NEW ---
+
+    // --- NEW: Handle XP Update ---
+    private handleXpUpdate(payload: XpUpdatePayload) {
+        // 1. Check if this log appears
+        console.log('[GameScene] Received XP update:', payload); 
+
+        // We only need to forward this to the UI if it's for one of our characters
+        if (this.playerCharacters.has(payload.characterId)) {
+             // 2. Check if this log appears
+             console.log(`[GameScene] Character ${payload.characterId} is a party member. Preparing UI update.`); 
+
+             // Calculate relative XP values for UI
+            const xpInCurrentLevel = this._getXpForCurrentLevel(payload.xp, payload.level);
+            const xpNeededBetweenLevels = this._getXpNeededForLevelSpan(payload.level);
+
+            // 3. Check if this log appears
+            console.log(`[GameScene] Emitting update-party-xp for ${payload.characterId}`); 
+
+            EventBus.emit('update-party-xp', {
+                characterId: payload.characterId,
+                level: payload.level,
+                currentXp: xpInCurrentLevel,
+                xpToNextLevel: xpNeededBetweenLevels
+            });
+        } else {
+             // 4. OR Check if this log appears
+             console.log(`[GameScene] XP update for ${payload.characterId} is NOT a party member, skipping UI event.`); 
+        }
+    }
+     // --- END NEW ---
 }

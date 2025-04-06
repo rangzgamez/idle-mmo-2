@@ -193,6 +193,18 @@ export class NetworkManager {
         });
         // +++++++++++++++++++++++++++++++++++++++
 
+        // +++ ADDED: Listen for XP updates (Direct to Player) +++
+        this.socket.on('xpUpdate', (data: { characterId: string, level: number, xp: number, xpToNextLevel: number }) => {
+            console.log('[NetworkManager] Received "xpUpdate" event:', data);
+            if (data && data.characterId) { // Basic validation
+                EventBus.emit('xpUpdate', data);
+                console.log('[NetworkManager] Emitted "xpUpdate" to EventBus.');
+            } else {
+                console.warn('[NetworkManager] Received invalid "xpUpdate" data format:', data);
+            }
+        });
+        // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
         // Existing listeners (keep if needed)
         // this.socket.on('chatMessage', (data) => { /* ... */ });
     }

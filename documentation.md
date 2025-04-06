@@ -1,17 +1,17 @@
 ## **Idle Browser MMO - Project Documentation**
 
-**Version:** 0.7 (Game Loop Refactoring)
-**Date:** 2025-04-03 (Adjust date as needed)
+**Version:** 0.8 (XP and Leveling)
+**Date:** 2025-04-04 (Adjust date as needed)
 
 **1. Overview**
 
-This document outlines the architecture, database schema, and development plan for an Idle Browser MMO game. The game features real-time multiplayer interaction in a top-down view, RTS-style character control with formation movement, **player and enemy combat with auto-attack**, basic death/respawn mechanics, and social features like zone-based chat with bubbles.
+This document outlines the architecture, database schema, and development plan for an Idle Browser MMO game. The game features real-time multiplayer interaction in a top-down view, RTS-style character control with formation movement, **player and enemy combat with auto-attack**, basic death/respawn mechanics, and social features like zone-based chat with bubbles, **and experience/leveling systems.**
 
-**2. Core Features (Implemented - v0.7)**
+**2. Core Features (Implemented - v0.8)**
 
 *   **Authentication:** User registration and login (REST API with JWT).
 *   **WebSocket Auth:** Secure WebSocket connections using JWT.
-*   **Character Management:** Create multiple characters per account (API). Define base stats (`baseHealth`, `baseAttack`, `baseDefense`) and **combat stats (`attackSpeed`, `attackRange`, `aggroRange`, `leashDistance`)** in DB.
+*   **Character Management:** Create multiple characters per account (API). Define base stats (`baseHealth`, `baseAttack`, `baseDefense`) and **combat stats (`attackSpeed`, `attackRange`, `aggroRange`, `leashDistance`)** in DB. **Includes `level` and `xp` (bigint).**
 *   **Party Selection:** Select up to 3 active characters per session (Client UI + Server Validation).
 *   **Top-Down World:** Players navigate a 2D world. Camera follows the player's party leader. Basic enemy sprites loaded.
 *   **RTS-Style Control:**
@@ -32,7 +32,7 @@ This document outlines the architecture, database schema, and development plan f
 *   **Client-Side Interpolation:** Frontend smoothly interpolates sprites (`CharacterSprite`, `EnemySprite`).
 *   **Multiplayer Zones:** Multiple players and enemies inhabit shared zones (`ZoneService`).
     *   **Runtime State:** `ZoneService` tracks character state (including combat state like `state`, **`commandState`**, `attackTargetId`, `targetItemId`, `anchorX/Y`, `lastAttackTime`, `timeOfDeath`) and enemy state.
-*   **Real-time Sync:** Players see others join (`playerJoined`), leave (`playerLeft`), move/update (`entityUpdate`), and die (`entityDied`). New players receive existing enemy state on join.
+*   **Real-time Sync:** Players see others join (`playerJoined`), leave (`playerLeft`), move/update (`entityUpdate`), and die (`entityDied`). New players receive existing enemy state on join. **Includes XP and Level updates.**
 *   **Chat:** Zone-scoped real-time text chat with chat bubbles.
 *   **Enemy Templates:** Defined in database (`Enemy` entity, `EnemyModule`, `EnemyService`).
 *   **Enemy Spawning:** Basic timed spawning within zones (`ZoneService`).
@@ -144,7 +144,7 @@ graph TD
 *   `AppModule`: Root module, imports all other modules.
 *   `AuthModule`: Handles user registration, login, JWT (global).
 *   `UserModule`: Manages user entity (`UserService`). Exports service.
-*   `CharacterModule`: Manages character entity (`CharacterService`, `CharacterController`). Exports service. **Injects `InventoryService`.**
+*   `CharacterModule`: Manages character entity (`CharacterService`, `CharacterController`). Exports service. Injects `InventoryService`, **`ZoneService`, `BroadcastService`**. `CharacterService` now handles **XP addition, level-up calculations, stat gains, and broadcasting XP/level events.**
 *   `EnemyModule`: Manages enemy template entity (`EnemyService`, `EnemyController` (optional), `Enemy` entity). Exports service.
 *   `GameModule`: Core real-time logic.
     *   `GameGateway`: **Reduced Role.** Handles WebSocket connections, auth middleware, routing client commands (`enterZone`, `selectParty`, `moveCommand`, `sendMessage`, `attackCommand`, **`moveInventoryItem`, `dropInventoryItem`, `pickupItemCommand`, `equipItemCommand`, `unequipItem`, `requestEquipment`**) to update `ZoneService` / `CharacterService` / `InventoryService` state. Initializes the `GameLoopService`. Injects `ZoneService`, `GameLoopService`, `BroadcastService`, `CharacterService` (for party validation), `UserService`, `JwtService`, **`InventoryService`**.
@@ -169,7 +169,7 @@ graph TD
 *   **Scenes:**
     *   `BootScene`, `PreloadScene`, `LoginScene`, `CharacterSelectScene`: Handle setup, asset loading (incl. enemy sprites), auth, party selection.
     *   `GameScene`: Main gameplay area. Manages sprites for all entities (`playerCharacters`, `otherCharacters`, `enemySprites` Maps). Handles network events (`playerJoined`, `playerLeft`, `entityUpdate`, `chatMessage`, `combatAction`, `entityDied`, initial `enemyState` on `enterZone`, **`inventoryUpdate`, `equipmentUpdate`, `itemDropped`, `itemPickedUp`**) to manage sprites and UI updates. Processes player input (movement, attack clicks). Manages camera. Launches `UIScene`.
-    *   `UIScene`: Handles overlay UI elements (Chatbox, **Inventory Window**, **Equipment Window**, Tooltips). Manages DOM elements for UI interaction (drag/drop, right-click menus). Sends commands like `equipItemCommand`, `unequipItem`, `moveInventoryItem`, `dropInventoryItem`.
+    *   `UIScene`: Handles overlay UI elements (Chatbox, **Inventory Window**, **Equipment Window**, Tooltips, **Party Panel**). Manages DOM elements for UI interaction (drag/drop, right-click menus). Sends commands like `equipItemCommand`, `unequipItem`, `moveInventoryItem`, `dropInventoryItem`.
 *   **GameObjects:**
     *   `CharacterSprite.ts`: Represents player characters. Handles interpolation, name label, health bar, chat bubbles, **basic death visuals (alpha)**.
     *   `EnemySprite.ts`: Represents enemies. Handles interpolation, name label, health bar. Set interactive for clicks. **Destroyed on death.**
@@ -206,6 +206,8 @@ graph TD
     *   **`itemDropped` { itemId: string, templateId: string, x: number, y: number } (NEW - Loot Phase)**
     *   **`itemPickedUp` { pickerCharacterId: string, itemId: string } (NEW - Loot Phase)**
     *   **`itemsDropped` { items: DroppedItemData[] } (NEW - Loot Phase: Provides full item data for rendering)**
+    *   **`levelUpNotification` { characterId: string, newLevel: number, newBaseStats: {...}, xp: number, xpToNextLevel: number } (NEW - Direct to User)**
+    *   **`xpUpdate` { characterId: string, level: number, xp: number, xpToNextLevel: number } (NEW - Direct to User)**
 
 **7.5 Frontend/Backend Interaction Diagram (Inventory/Equipment)**
 
@@ -292,6 +294,12 @@ graph TD
 
   @Column({ type: 'integer', default: 400, comment: 'Pixel distance from anchor before returning' })
   leashDistance: number;
+
+  @Column({ default: 1 })
+  level: number;
+
+  @Column({ type: 'bigint', default: 0 }) // Use bigint for potentially large XP numbers
+  xp: number; // **NOTE: TypeORM loads bigint as string, requires conversion (e.g., parseInt) for math**
 // ... (timestamps) ...
 
 // backend/src/enemy/enemy.entity.ts
@@ -428,6 +436,11 @@ export class InventoryItem {
 *   **Event-Driven Updates:** Frontend reacts to specific server events (`entityUpdate`, `combatAction`, `entityDied`, etc.) emitted by the `BroadcastService`.
 *   **Component-Based Sprites:** Sprites manage their own visual components (labels, health bars, chat bubbles, death visuals).
 *   **State Machine (Server):** `CharacterStateService` uses a state machine (`idle`, `moving`, `attacking`, `dead`, **`moving_to_loot`, `looting_area`**) for characters to manage behavior (movement, combat, leashing, respawn, **looting**).
+*   **Event-Driven Updates:** Frontend reacts to server events. **Includes specific user events (`levelUpNotification`, `xpUpdate`) and curated UI events (`update-party-hp`, etc.) emitted locally via EventBus between `GameScene` and `UIScene`.**
+*   **Bigint Handling:** `Character.xp` is `bigint` in DB, loaded as `string` by TypeORM. Backend service layer (`CharacterService`) explicitly converts to number (`parseInt`) before calculations.
+*   **XP Curve:** Backend (`CharacterService`) uses a formula (`baseXP * (L-1)^exponent`) to determine total cumulative XP needed for level milestones.
+*   **Level Up Logic:** Backend (`CharacterService`) compares total XP to threshold, applies level/stat gains, handles multi-level gains in a loop, and triggers necessary updates (runtime stats, broadcasts).
+*   **UI Decoupling:** `GameScene` handles raw backend events and sprite updates, emitting simplified, specific events for `UIScene` to consume for UI panel updates, reducing direct dependency.
 
 **10. Testing Strategy (Updated)**
 
@@ -436,83 +449,91 @@ export class InventoryItem {
 *   **Status:** Unit/Integration test implementation is **active**. Tests have been added for the refactored game loop services (`MovementService`, `SpawningService`, `BroadcastService`, `CharacterStateService`, `EnemyStateService`) and related refactored services (`ZoneService`, `CombatService`).
 *   **Policy:** Moving forward, new features or significant refactors **must** include corresponding unit and/or integration tests to ensure correctness and prevent regressions.
 
-**11. Core Real-time Update Flow (Example: Character Auto-Attack - Updated with Services)**
+**11. Core Real-time Update Flow (Example: XP Gain & Level Up)**
 
-1.  **Loop Start (`GameLoopService.tickGameLoop`):** Iterates through players/characters.
-2.  **State Check (`CharacterStateService.processCharacterTick`):** Character is in `idle` state, not at anchor point.
-3.  **Aggro Scan (`CharacterStateService.processCharacterTick` - idle state):** Scans `enemiesInZone`. Finds living `EnemyInstance` within `aggroRange`.
-4.  **State Transition (`CharacterStateService.processCharacterTick`):** Sets `character.state` to `attacking`, sets `character.attackTargetId` to enemy's ID. Returns results.
-5.  **Movement (`GameLoopService.tickGameLoop`):** Calls `MovementService.simulateMovement`. Since character is attacking and likely out of range, target is set by `CharacterStateService`, movement occurs.
-6.  **Aggregation (`GameLoopService.tickGameLoop`):** Queues position update via `BroadcastService.queueEntityUpdate`.
-
-**(Next Tick)**
-7.  **State Check (`CharacterStateService.processCharacterTick`):** Character is in `attacking` state.
-8.  **Target Validation (`CharacterStateService.processCharacterTick`):** Confirms target enemy exists and is alive via `ZoneService`.
-9.  **Range Check (`CharacterStateService.processCharacterTick`):** Calculates distance. Assume still outside `attackRange`. Target position remains set.
-10. **Movement (`GameLoopService.tickGameLoop`):** Calls `MovementService.simulateMovement`. Character moves closer.
-11. **Aggregation (`GameLoopService.tickGameLoop`):** Queues position update via `BroadcastService.queueEntityUpdate`.
-
-**(Later Tick)**
-12. **State Check (`CharacterStateService.processCharacterTick`):** Character is in `attacking` state.
-13. **Target Validation (`CharacterStateService.processCharacterTick`):** Confirms target enemy exists and is alive.
-14. **Range Check (`CharacterStateService.processCharacterTick`):** Character is now within `attackRange`.
-15. **Cooldown Check (`CharacterStateService.processCharacterTick`):** Checks if `now >= character.lastAttackTime + character.attackSpeed`.
-16. **Attack Execution (`CharacterStateService.processCharacterTick`):** If cooldown allows, calls `this.combatService.handleAttack(character, enemy, zoneId)`. Sets `character.lastAttackTime = now`.
-17. **Combat Resolution (`CombatService.handleAttack`):** Calculates damage, updates enemy health via `ZoneService`. Returns `CombatResult { damageDealt: 12, targetDied: false, targetCurrentHealth: 38 }`.
-18. **Result Processing (`CharacterStateService.processCharacterTick`):** Receives `CombatResult`. Prepares `CharacterTickResult` including combat action and enemy health update.
-19. **Aggregation (`GameLoopService.tickGameLoop`):** Processes `CharacterTickResult`:
-    *   Queues combat action via `BroadcastService.queueCombatAction`.
-    *   Queues enemy health update via `BroadcastService.queueEntityUpdate`.
-20. **Movement (`GameLoopService.tickGameLoop`):** Calls `MovementService.simulateMovement`. Character is in range, no target set, no movement.
-21. **Flush Events (`GameLoopService.tickGameLoop`):** At end of zone processing, calls `BroadcastService.flushZoneEvents(zoneId)`.
-22. **Broadcast (`BroadcastService.flushZoneEvents`):** Emits batched `entityUpdate` and `combatAction` events.
-23. **Client Reception/Update (`NetworkManager`, `GameScene`):** Updates enemy health bar, shows attack visual.
-
-**(Example: Enemy Death - Updated)**
-17. **Combat Resolution (`CombatService.handleAttack`):** Calculates damage, updates enemy health to 0. Returns `CombatResult { damageDealt: 15, targetDied: true, targetCurrentHealth: 0 }`.
-18. **Result Processing (`CharacterStateService.processCharacterTick`):** Receives `CombatResult` with `targetDied: true`. Sets `character.attackTargetId = null`, `character.state = 'idle'`. Prepares `CharacterTickResult` indicating `targetDied = true`, including combat action and final enemy health update.
-19. **Aggregation (`GameLoopService.tickGameLoop`):** Processes `CharacterTickResult`:
-    *   Queues combat action via `BroadcastService.queueCombatAction`.
-    *   Queues enemy health update (health: 0) via `BroadcastService.queueEntityUpdate`.
-    *   Detects `targetDied: true`, queues death event via `BroadcastService.queueDeath({ entityId: enemy.id, type: 'enemy' })`.
-    *   Calls `this.zoneService.removeEnemy(zoneId, enemy.id)`.
-20. **Movement/Aggregation (`GameLoopService.tickGameLoop`):** Character is idle, may queue position update if returning to anchor.
-21. **Flush Events (`GameLoopService.tickGameLoop`):** Calls `BroadcastService.flushZoneEvents(zoneId)`.
-22. **Broadcast (`BroadcastService.flushZoneEvents`):** Emits `entityUpdate`, `combatAction`, and `entityDied` events.
-23. **Client Reception/Update (`NetworkManager`, `GameScene`):
-    *   `entityDied` handler finds enemy sprite by ID, calls `sprite.destroy()`, removes from map.
+1.  **Enemy Death (`CharacterStateService.processCharacterTick`):** When `combatResult.targetDied` is true for an enemy:
+2.  **Fetch Template (`CharacterStateService`):** Gets `Enemy` template via `EnemyService` to find `xpReward`.
+3.  **Get Party Members (`CharacterStateService`):** Calls `ZoneService.getPlayerCharactersInZone` to get characters owned by the killer's player.
+4.  **Grant XP Loop (`CharacterStateService`):** Iterates through alive party members, calls `CharacterService.addXp(member.id, xpReward)` for each.
+5.  **Add XP Logic (`CharacterService.addXp`):**
+    *   Converts current `character.xp` (string from bigint) to number using `parseInt`.
+    *   Adds `xpToAdd` numerically.
+    *   Stores new total XP back to `character.xp`.
+6.  **Level Up Check Loop (`CharacterService.addXp`):**
+    *   Calculates `xpNeededForNextLevel = calculateXpForLevel(character.level + 1)`.
+    *   `while (character.xp >= xpNeededForNextLevel)`:
+        *   Increments `character.level`.
+        *   Applies base stat gains (`baseHealth`, `baseAttack`, `baseDefense`).
+        *   Recalculates `xpNeededForNextLevel` for the *new* next level.
+7.  **Post-Level Up Actions (`CharacterService.addXp`):**
+    *   If `leveledUp` is true:
+        *   Saves updated `Character` entity (new level, stats, total XP).
+        *   Calls `calculateEffectiveStats`.
+        *   Calls `ZoneService.updateCharacterEffectiveStats`.
+        *   Calls `ZoneService.setCharacterHealth` to apply full heal.
+        *   Broadcasts `levelUpNotification` via `BroadcastService.sendEventToUser`.
+    *   If `leveledUp` is false, saves `Character` with only updated `xp`.
+8.  **Broadcast XP Update (`CharacterService.addXp`):**
+    *   *Always* (after saving) broadcasts `xpUpdate` via `BroadcastService.sendEventToUser` with final character ID, level, total XP, and total XP needed for next level.
+9.  **Client Reception (`NetworkManager`):**
+    *   Receives `levelUpNotification` -> Emits to `EventBus`.
+    *   Receives `xpUpdate` -> Emits to `EventBus`.
+10. **GameScene Handling:**
+    *   `handleLevelUpNotification`:
+        *   Updates `CharacterSprite` level label and health bar.
+        *   Calculates relative XP values (`currentXP`, `neededSpan`).
+        *   Emits `party-member-level-up` to `EventBus` for UI.
+    *   `handleXpUpdate`:
+        *   If character is a party member:
+            *   Calculates relative XP values.
+            *   Emits `update-party-xp` to `EventBus` for UI.
+11. **UIScene Handling:**
+    *   `handlePartyMemberLevelUp`:
+        *   Updates stored values (`maxHp`, `currentHp`, `currentXp`, `xpToNextLevel`).
+        *   Updates HP/XP bars and text overlays.
+        *   Applies visual flash.
+    *   `handleUpdatePartyXp`:
+        *   Updates stored values (`currentXp`, `xpToNextLevel`).
+        *   Updates XP bar and text overlay.
 
 **12. TODO List / Roadmap (Updated)**
 
-**Phase 0-5 (Partially Complete - Combat Core Implemented)**
+**Phase 0-6 (Complete)**
 *   Auth, Character Mgmt, Party Select, Movement, Chat: Complete.
-*   Basic Enemies & Combat Backend: Implemented (`EnemyEntity`, spawn, `CombatService`).
-*   Basic Combat Frontend: Implemented (`EnemySprite`, health bars, attack input/visuals).
-*   **RTS Character Combat Backend:** Implemented (State machine, aggro, attack, cooldown, leashing).
-*   **Enemy AI (`AIService`):** Implemented (Aggro, chase, attack, cooldown).
-*   **Death Handling:** Implemented (Enemy removal, Character dead state, `entityDied` event).
-*   **Basic Respawn:** Implemented (Character 5s timer, respawn at anchor).
-*   **Stat Configuration:** Implemented (Combat stats moved to `Character` entity).
-*   **Frontend Death Handling:** Implemented (Enemy sprite destruction, basic character visuals).
+*   Basic Enemies & Combat Backend/Frontend: Complete.
+*   RTS Character Combat Backend/AI: Complete.
+*   Death Handling & Basic Respawn: Complete.
+*   Inventory, Loot & Equipment: Complete.
 
-**➡️ Phase 6: Inventory, Loot & Equipment (**Complete**)**
-1.  [X] Backend: Define `ItemTemplate` and `InventoryItem` entities & migrations.
-2.  [X] Backend: Implement `InventoryModule` and `InventoryService`.
-3.  [X] Backend: Implement `LootService` and configure basic loot tables.
-4.  [X] Backend: Trigger loot drops on enemy death (`LootService`). Add `DroppedItem` state to `ZoneService`. Broadcast `itemDropped`.
-5.  [X] Backend: Implement `pickup_item` handler (Click-to-Loot: nearest char moves to item).
-6.  [X] Backend: Implement `loot_all_command` handler (Starts `looting_area` state).
-7.  [X] Backend: Implement `moving_to_loot` and `looting_area` states in `CharacterStateService` (incl. target deconfliction, continuous looting via `commandState`).
-8.  [X] Backend: Broadcast `itemPickedUp` and `inventoryUpdate` correctly.
-9.  [X] Frontend: Display dropped item sprites based on `itemsDropped`.
-10. [X] Frontend: Handle clicking items -> send `pickup_item`.
-11. [X] Frontend: Add "Loot All" button -> send `loot_all_command`.
-12. [X] Frontend: Remove item sprite on `itemPickedUp`.
-13. [X] Frontend: Basic Inventory UI (Grid, Slots, Drag/Drop Move).
-14. [X] Backend: Add `equippedSlotId` and `inventorySlot` to `InventoryItem` entity.
-15. [X] Backend: Implement `equipItem` / `unequipItem` logic.
-16. [X] Frontend: Basic Equipment UI. Allow equipping/unequipping via right-click.
+**➡️ Phase 7: Experience & Leveling (**Complete**)**
+1.  [X] Backend: Add `xpReward` to `Enemy` entity.
+2.  [X] Backend: Grant XP to **all alive party members** involved in killing an enemy (`CharacterStateService` -> `CharacterService.addXp`).
+3.  [X] Backend: Handle `bigint` `xp` type conversion in `CharacterService`.
+4.  [X] Backend: Implement XP curve calculation (`CharacterService.calculateXpForLevel`).
+5.  [X] Backend: Implement level-up logic in `CharacterService.addXp` (check threshold based on total XP, increment level, handle multi-level gains).
+6.  [X] Backend: Apply base stat gains on level up (`CharacterService.addXp`).
+7.  [X] Backend: Update runtime stats (`effectiveStats`) and current health (full heal) via `ZoneService` on level up.
+8.  [X] Backend: Broadcast `levelUpNotification` and `xpUpdate` events directly to the user via `BroadcastService`.
+9.  [X] Frontend: Add listeners in `NetworkManager` for `levelUpNotification` and `xpUpdate`.
+10. [X] Frontend: Centralize backend event handling in `GameScene` (update sprites, emit curated UI events).
+11. [X] Frontend: Add Party UI panel (`UIScene`) displaying Name, Level, HP Bar, XP Bar.
+12. [X] Frontend: Implement logic in `UIScene` to listen for curated events from `GameScene` and update party panel bars/text.
+13. [X] Frontend: Add visual flash effect on level up (`UIScene`).
 
-**Phase 7: Experience & Leveling (NEW)**
-1.  [ ] Backend: Add `xpReward` to `Enemy` entity (Already done!).
-2.  [ ] Backend: Grant XP to player characters involved in killing an enemy (`
+**Phase 8: Stat Allocation & Skills (NEW)**
+1.  [ ] Backend: Define `SkillTemplate` entity (ID, name, description, effects, cost, cooldown, requirements).
+2.  [ ] Backend: Add relation for learned skills to `Character` entity.
+3.  [ ] Backend: Define stat point allocation system (e.g., points per level). Add `unallocatedStatPoints` to `Character`.
+4.  [ ] Backend: Add endpoints/WebSocket commands for allocating stat points (`/character/:id/allocate-stats` or `allocateStatPoint` command).
+5.  [ ] Backend: Add endpoints/WebSocket commands for learning skills (`learnSkill` command).
+6.  [ ] Backend: Implement skill activation command (`activateSkill` { targetId?, skillId }).
+7.  [ ] Backend: Integrate skill effects into `CombatService` (damage modifiers, status effects, healing).
+8.  [ ] Backend: Add skill cooldown tracking to `ZoneService` runtime character data.
+9.  [ ] Frontend: Create Character Sheet UI (`UIScene` or separate scene) displaying stats, allocated points, learned skills.
+10. [ ] Frontend: Allow stat point allocation via Character Sheet UI.
+11. [ ] Frontend: Display Skill Tree/List UI. Allow learning skills.
+12. [ ] Frontend: Add Skill Bar UI (`UIScene`) to assign and activate skills (keybinds/clicks).
+13. [ ] Frontend: Add visual effects for skill activation (`GameScene`).
+14. [ ] Frontend: Display skill cooldowns on Skill Bar.
+
+// ... (Potentially add Phase 9: Status Effects, Phase 10: Basic Quests, etc.) ...

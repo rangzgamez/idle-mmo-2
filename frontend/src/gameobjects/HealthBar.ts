@@ -50,6 +50,11 @@ export class HealthBar {
         this.draw();
     }
 
+    // --- NEW: Getter for max health ---
+    getMaxHealth(): number {
+        return this.maxValue;
+    }
+    // ---------------------------------
 
     private draw(): void {
         this.bar.clear();

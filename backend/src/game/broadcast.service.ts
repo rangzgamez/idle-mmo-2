@@ -220,10 +220,22 @@ export class BroadcastService {
         const sockets = this.server.sockets.sockets; // Get the map of all connected sockets
         let foundSocket = false;
 
+        // +++ Log entry and target +++
+        this.logger.debug(`[BroadcastService] Searching for socket for user ${userId} to send event '${eventName}'.`);
+        // ++++++++++++++++++++++++++++
+
         for (const [, socket] of sockets) {
             // Access custom data attached during authentication
             const socketUserId = socket.data.user?.id;
+
+            // +++ Log comparison +++
+            // this.logger.verbose(`[BroadcastService] Checking socket ${socket.id}, socketUserId: ${socketUserId}`); // Potentially noisy
+            // +++++++++++++++++++++++
+
             if (socketUserId === userId) {
+                // +++ Log found socket +++
+                this.logger.debug(`[BroadcastService] Found matching socket ${socket.id} for user ${userId}. Emitting '${eventName}'.`);
+                // ++++++++++++++++++++++++
                 socket.emit(eventName, payload);
                 this.logger.verbose(`Sent event '${eventName}' directly to user ${userId} (Socket ID: ${socket.id})`);
                 foundSocket = true;
