@@ -69,6 +69,9 @@ export default class UIScene extends Phaser.Scene {
     private invPrevButton: HTMLButtonElement | null = null;
     private invNextButton: HTMLButtonElement | null = null;
     private invPageInfo: HTMLSpanElement | null = null;
+    // Add references for the sort buttons
+    private invSortByNameButton: HTMLButtonElement | null = null;
+    private invSortByTypeButton: HTMLButtonElement | null = null;
     // Add reference for the tooltip element
     private itemTooltipElement: Phaser.GameObjects.DOMElement | null = null;
     // Add references for Equipment UI
@@ -150,6 +153,9 @@ export default class UIScene extends Phaser.Scene {
                     <button id="inv-prev-button" style="padding: 2px 5px; font-size: 12px; margin-right: 10px;">&lt; Prev</button>
                     <span id="inv-page-info" style="color: white; font-size: 12px;">Page 1 / 1</span>
                     <button id="inv-next-button" style="padding: 2px 5px; font-size: 12px; margin-left: 10px;">Next &gt;</button>
+                    <!-- Add Sort Buttons -->
+                    <button id="inv-sort-name-button" style="padding: 2px 5px; font-size: 12px; margin-left: 20px;">Sort: Name</button>
+                    <button id="inv-sort-type-button" style="padding: 2px 5px; font-size: 12px; margin-left: 5px;">Sort: Type</button>
                 </div>
             </div>
         `;
@@ -171,10 +177,13 @@ export default class UIScene extends Phaser.Scene {
         this.invPrevButton = invWindowGameObject.getChildByID('inv-prev-button') as HTMLButtonElement;
         this.invNextButton = invWindowGameObject.getChildByID('inv-next-button') as HTMLButtonElement;
         this.invPageInfo = invWindowGameObject.getChildByID('inv-page-info') as HTMLSpanElement;
+        // ** Store references to sort buttons **
+        this.invSortByNameButton = invWindowGameObject.getChildByID('inv-sort-name-button') as HTMLButtonElement;
+        this.invSortByTypeButton = invWindowGameObject.getChildByID('inv-sort-type-button') as HTMLButtonElement;
 
         // ** Update: Check for new pagination elements **
-        if (!inventoryWindowElement || !this.inventoryItemsElement || !inventoryButton || !inventoryCloseButton || !inventoryTitleBar || !this.invPrevButton || !this.invNextButton || !this.invPageInfo) {
-            console.error("Failed to get all inventory UI elements (incl. pagination)!");
+        if (!inventoryWindowElement || !this.inventoryItemsElement || !inventoryButton || !inventoryCloseButton || !inventoryTitleBar || !this.invPrevButton || !this.invNextButton || !this.invPageInfo || !this.invSortByNameButton || !this.invSortByTypeButton) {
+            console.error("Failed to get all inventory UI elements (incl. pagination and sort buttons)!");
             return; // Exit early if elements aren't found
         }
 
@@ -441,6 +450,25 @@ export default class UIScene extends Phaser.Scene {
             }
         });
 
+        // --- Inventory Sort Button Listeners ---
+        if (this.invSortByNameButton) {
+            this.invSortByNameButton.addEventListener('click', () => {
+                console.log("[UIScene] Sort by Name clicked.");
+                this.networkManager.sendMessage('sortInventoryCommand', { sortType: 'name' });
+            });
+        } else {
+            console.error("[UIScene] Sort by Name button not found!");
+        }
+
+        if (this.invSortByTypeButton) {
+            this.invSortByTypeButton.addEventListener('click', () => {
+                console.log("[UIScene] Sort by Type clicked.");
+                this.networkManager.sendMessage('sortInventoryCommand', { sortType: 'type' });
+            });
+        } else {
+            console.error("[UIScene] Sort by Type button not found!");
+        }
+
         // --- Create Party UI Container (Bottom Right -> Bottom Left, Horizontal) ---
         const partyUiHtml = `
             <div id="party-ui" style="/* REMOVED: position related styles */ display: flex; flex-direction: row; /* <-- CHANGED */ gap: 10px; /* Added more gap */ width: auto; /* Allow dynamic width */">
@@ -669,6 +697,16 @@ export default class UIScene extends Phaser.Scene {
     private handleInventoryUpdate(data: { inventory: (InventoryItem | null)[] }) { 
         console.log('[UIScene] Handling inventory update (sparse array):', data);
         this.inventorySlotsData = data.inventory || []; // Store the sparse array
+
+        // --- BEGIN DEBUG LOG ---
+        console.log('[UIScene] inventorySlotsData before rendering:', this.inventorySlotsData);
+        this.inventorySlotsData.forEach((item, index) => {
+            if (item && !item.itemTemplate) {
+                console.warn(`[UIScene] Item at index ${index} exists but has no itemTemplate:`, item);
+            }
+        });
+        // --- END DEBUG LOG ---
+
         // We assume a fixed size for now based on rendering logic
         const expectedSize = 36 * 6; // 6 pages of 36 slots
         if (this.inventorySlotsData.length !== expectedSize) {

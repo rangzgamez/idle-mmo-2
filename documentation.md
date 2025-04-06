@@ -193,6 +193,7 @@ graph TD
     *   **`requestEquipment` { characterId: string } -> Triggers `equipmentUpdate` (NEW)**
     *   **`pickup_item` { itemId: string } (NEW - Click-to-Loot)**
     *   **`loot_all_command` {} (NEW - Loot All)**
+    *   **`sortInventoryCommand` { sortType: 'name' | 'type' } -> Triggers `inventoryUpdate` (NEW - Sorting)**
 *   **Server -> Client:**
     *   `connect_error` (Auth failed or other issue)
     *   `playerJoined` { characters: ZoneCharacterState[] }
@@ -220,6 +221,8 @@ graph TD
         UI_DragDropOutside[Drag Item Outside Window] -->|Sends 'dropInventoryItem'| NetworkMgr;
         NetworkMgr -->|Receives 'inventoryUpdate'| UI_InvUpdate[Update Inventory Grid];
         NetworkMgr -->|Receives 'equipmentUpdate'| UI_EquipUpdate[Update Equipment Slots];
+        // Added for Sorting
+        UI_SortButton[Click Sort Button] -->|Sends 'sortInventoryCommand'| NetworkMgr; // NEW
     end
 
     subgraph Backend (NestJS)
@@ -244,6 +247,11 @@ graph TD
         IS -- dropInventoryItem --> DB_UpdateInvSlotDrop[DB: Update Item state (e.g., remove inventorySlot)]; // Exact logic TBD
         IS -- dropInventoryItem --> BS; // May trigger itemDropped event later
 
+        // Added for Sorting
+        GG -- sortInventoryCommand --> IS; // NEW
+        IS -- sortInventory --> DB_UpdateInvSlotsSorted[DB: Reassign Item.inventorySlot based on sort]; // NEW
+        IS -- sortInventory --> BS; // NEW
+
         BS -- inventoryUpdate -->|Emits| NetworkMgr;
         BS -- equipmentUpdate -->|Emits| NetworkMgr;
 
@@ -255,6 +263,7 @@ graph TD
         style DB_UpdateEquip fill:#ddd,stroke:#333,stroke-width:1px
         style DB_UpdateUnequip fill:#ddd,stroke:#333,stroke-width:1px
         style DB_UpdateInvSlotDrop fill:#ddd,stroke:#333,stroke-width:1px
+        style DB_UpdateInvSlotsSorted fill:#ddd,stroke:#333,stroke-width:1px // NEW
 
     end
 
@@ -263,6 +272,7 @@ graph TD
         DB_UpdateEquip;
         DB_UpdateUnequip;
         DB_UpdateInvSlotDrop;
+        DB_UpdateInvSlotsSorted; // NEW
     end
 ```
 *(Note: Drop Item logic backend implementation details are still pending in Phase 6 TODOs)*
@@ -495,6 +505,9 @@ export class InventoryItem {
     *   `handleUpdatePartyXp`:
         *   Updates stored values (`currentXp`, `xpToNextLevel`).
         *   Updates XP bar and text overlay.
+    *   **`handleInventoryUpdate`:** (Implicitly handles sorted updates from server)
+        *   Receives full inventory array.
+        *   Clears and re-renders the inventory grid based on the received array order.
 
 **12. TODO List / Roadmap (Updated)**
 
@@ -504,6 +517,7 @@ export class InventoryItem {
 *   RTS Character Combat Backend/AI: Complete.
 *   Death Handling & Basic Respawn: Complete.
 *   Inventory, Loot & Equipment: Complete.
+    *   **Note:** Visual ground items and click-to-pickup are implemented. Loot allocation rules (who gets the drop initially) are basic (first come, first served implicitly by pickup command); complex allocation rules are deferred.
 
 **➡️ Phase 7: Experience & Leveling (**Complete**)**
 1.  [X] Backend: Add `xpReward` to `Enemy` entity.
@@ -520,7 +534,44 @@ export class InventoryItem {
 12. [X] Frontend: Implement logic in `UIScene` to listen for curated events from `GameScene` and update party panel bars/text.
 13. [X] Frontend: Add visual flash effect on level up (`UIScene`).
 
-**Phase 8: Stat Allocation & Skills (NEW)**
+**➡️ Phase 7 Refinements (Current Focus)**
+
+1.  **Inventory Sorting (High Priority - IN PROGRESS):**
+    *   [ ] Frontend (`UIScene`): Add "Sort by Name" / "Sort by Type" buttons to the inventory window HTML, next to pagination controls.
+    *   [ ] Frontend (`UIScene`): Add event listeners to the sort buttons.
+    *   [X] Shared: Define new WebSocket event `sortInventoryCommand { sortType: 'name' | 'type' }`. **(DONE)**
+    *   [X] Frontend (`UIScene`): When a sort button is clicked, send the `sortInventoryCommand` via `NetworkManager`. **(DONE)**
+    *   [ ] Backend (`GameGateway`): Add handler for `sortInventoryCommand`.
+    *   [ ] Backend (`InventoryService`): Implement `sortInventory(userId, sortType)` method.
+        *   Fetch all `InventoryItem`s for the user with non-null `inventorySlot`.
+        *   Sort the items based on `sortType` (e.g., `itemTemplate.name` or `itemTemplate.itemType`).
+        *   Iterate through the sorted items and assign sequential `inventorySlot` values starting from 0. Handle gaps appropriately (items might not fill slots 0 to N contiguously if the inventory isn't full). Save updated items.
+    *   [ ] Backend (`InventoryService` / `GameGateway`): After sorting and saving, fetch the complete (potentially sparse) inventory array for the user (including equipped items and items without slots if necessary for the standard format) and broadcast the standard `inventoryUpdate` event.
+    *   [ ] Frontend (`UIScene`): The existing `handleInventoryUpdate` will receive the sorted data and re-render the grid automatically.
+
+2.  **Tooltip Enhancements (Medium Priority):**
+    *   [ ] Frontend (`UIScene`): Modify `showItemTooltip` to check if the item is equippable.
+    *   [ ] Frontend (`UIScene`): If equippable, get the currently equipped item (if any) in the corresponding slot for the character shown in the Equipment window. Fetch this data from `this.allCharacterEquipment`.
+    *   [ ] Frontend (`UIScene`): Display a comparison section in the tooltip showing the current item's stats alongside the equipped item's stats.
+    *   [ ] Frontend (`UIScene`/Global): Review tooltip positioning and styling across different UI elements (inventory, equipment slots) for better consistency.
+
+3.  **Combat Refinements (Lower Priority):**
+    *   [ ] Shared: Define critical hit chance/multiplier logic (possibly based on stats later).
+    *   [ ] Shared: Define miss chance logic (possibly based on stats/levels later).
+    *   [ ] Backend (`CombatService`): Modify `handleAttack` to incorporate critical hit and miss checks.
+    *   [ ] Shared: Update `combatAction` event payload to include flags/data for crits/misses.
+    *   [ ] Frontend (`GameScene`): Modify floating combat text generation to display "CRIT!", "MISS!", and different styling/color for critical damage numbers.
+    *   [ ] Frontend (`GameScene`): Add a visual targeting indicator (e.g., circle under sprite) when an enemy is targeted via `attackCommand`. Update the indicator when the target changes or dies.
+
+4.  **Loot Allocation Rules (Future):**
+    *   [ ] Backend: Design system to track damage contribution per enemy per user party.
+    *   [ ] Backend: When an enemy dies (`EnemyStateService`), determine the eligible user (killer or top damage dealer).
+    *   [ ] Backend (`DroppedItem` entity?): Add `claimedByUserId` and potentially `claimExpiresAt` fields to dropped items.
+    *   [ ] Backend (`CharacterStateService` - looting): Check `claimedByUserId` before allowing pickup via `pickupItemCommand` or `loot_all_command`.
+    *   [ ] Backend: Implement claim expiration logic (e.g., a separate cleanup task or check during pickup).
+    *   [ ] Frontend: Potentially add visual cues to ground loot indicating if it's claimed by the player or someone else.
+
+**Phase 8: Stat Allocation & Skills (Planned)**
 1.  [ ] Backend: Define `SkillTemplate` entity (ID, name, description, effects, cost, cooldown, requirements).
 2.  [ ] Backend: Add relation for learned skills to `Character` entity.
 3.  [ ] Backend: Define stat point allocation system (e.g., points per level). Add `unallocatedStatPoints` to `Character`.

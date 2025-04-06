@@ -1,10 +1,12 @@
-import { Injectable, NotFoundException, ConflictException, Logger } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException, Logger, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, IsNull, Not } from 'typeorm';
+import { Repository, IsNull, Not, In } from 'typeorm';
 import { InventoryItem } from './inventory.entity';
 import { ItemTemplate } from '../item/item.entity';
 import { ItemService } from '../item/item.service';
 import { EquipmentSlot } from '../item/item.types';
+import { User } from '../user/user.entity';
+import { BroadcastService } from '../game/broadcast.service';
 
 @Injectable()
 export class InventoryService {
@@ -13,6 +15,7 @@ export class InventoryService {
     @InjectRepository(InventoryItem)
     private inventoryItemRepository: Repository<InventoryItem>,
     private readonly itemService: ItemService,
+    private readonly broadcastService: BroadcastService,
   ) {}
 
   // --- Helper to find empty slot ---
@@ -337,5 +340,111 @@ export class InventoryService {
 
     this.logger.verbose(`Character ${characterId} bonuses - Attack: ${totalAttackBonus}, Defense: ${totalDefenseBonus}`);
     return { totalAttackBonus, totalDefenseBonus };
+  }
+
+  // --- NEW: Sort Inventory ---
+  async sortInventory(userId: string, sortType: 'name' | 'type'): Promise<void> {
+    console.log(`[InventoryService] Sorting inventory for user ${userId} by ${sortType}`);
+
+    // 1. Fetch items currently in inventory slots (not equipped)
+    const itemsInSlots = await this.inventoryItemRepository.find({
+      where: {
+        userId: userId,
+        inventorySlot: Not(IsNull()), // Only items with a slot assigned
+        equippedByCharacterId: IsNull() // Explicitly exclude equipped items
+      },
+      relations: ['itemTemplate'], // Need template for sorting
+      order: {
+        inventorySlot: 'ASC' // Fetch in current order initially (optional, but can be useful)
+      }
+    });
+
+    if (itemsInSlots.length <= 1) {
+      console.log(`[InventoryService] No sorting needed for ${itemsInSlots.length} item(s).`);
+      // Still might need to broadcast if the state wasn't perfectly consistent before?
+      // For now, let's just broadcast the current state regardless.
+      await this.broadcastInventoryUpdate(userId);
+      return; 
+    }
+
+    // 2. Sort the items based on the criteria
+    itemsInSlots.sort((a, b) => {
+      if (!a.itemTemplate || !b.itemTemplate) return 0; // Handle missing template data gracefully
+
+      if (sortType === 'name') {
+        return a.itemTemplate.name.localeCompare(b.itemTemplate.name);
+      } else if (sortType === 'type') {
+        // Sort by type, then by name as a secondary criterion
+        const typeComparison = (a.itemTemplate.itemType || '').localeCompare(b.itemTemplate.itemType || '');
+        if (typeComparison !== 0) {
+          return typeComparison;
+        }
+        return a.itemTemplate.name.localeCompare(b.itemTemplate.name);
+      }
+      return 0;
+    });
+
+    // 3. Re-assign sequential inventorySlot values
+    const updatedItems: InventoryItem[] = [];
+    for (let i = 0; i < itemsInSlots.length; i++) {
+      const item = itemsInSlots[i];
+      const newSlotIndex = i; // Assign slots 0, 1, 2, ... based on sorted order
+      if (item.inventorySlot !== newSlotIndex) {
+        console.log(`[InventoryService] Moving item ${item.id} (${item.itemTemplate?.name}) from slot ${item.inventorySlot} to ${newSlotIndex}`);
+        item.inventorySlot = newSlotIndex;
+        updatedItems.push(item); // Add to list of items needing saving
+      }
+    }
+
+    // 4. Save updated items (only if changes were made)
+    if (updatedItems.length > 0) {
+      console.log(`[InventoryService] Saving ${updatedItems.length} items with updated slots.`);
+      await this.inventoryItemRepository.save(updatedItems);
+    }
+
+    // 5. Broadcast the final state
+    await this.broadcastInventoryUpdate(userId);
+    console.log(`[InventoryService] Finished sorting and broadcasted update for user ${userId}.`);
+  }
+
+  // --- Helper to broadcast inventory update ---
+  private async broadcastInventoryUpdate(userId: string): Promise<void> {
+    const payload = await this._getInventoryUpdatePayload(userId);
+    this.broadcastService.sendEventToUser(userId, 'inventoryUpdate', payload);
+  }
+
+  // --- Helper to get the sparse inventory array ---
+  private async _getInventoryUpdatePayload(userId: string): Promise<{ inventory: (InventoryItem | null)[] }> {
+    // Fetch all items belonging to the user that are either equipped or in an inventory slot
+    const allUserItems = await this.inventoryItemRepository.find({
+        where: [
+            { userId: userId, equippedByCharacterId: Not(IsNull()) }, // Equipped items
+            { userId: userId, inventorySlot: Not(IsNull()) }      // Items in inventory slots
+        ],
+        relations: ['itemTemplate'], // Ensure template data is loaded
+    });
+
+    // Determine the total size of the inventory (e.g., 6 pages * 36 slots/page)
+    const INVENTORY_SIZE = 216; // TODO: Make this configurable?
+    const sparseInventory: (InventoryItem | null)[] = Array(INVENTORY_SIZE).fill(null);
+
+    // Populate the sparse array based on inventorySlot
+    allUserItems.forEach(item => {
+        if (item.inventorySlot !== null && item.inventorySlot >= 0 && item.inventorySlot < INVENTORY_SIZE) {
+            // Place the item in its designated slot
+            // We might need to transform the item data slightly if the frontend expects a specific format
+            // For now, let's assume the entity structure is okay, but we must include template details
+            sparseInventory[item.inventorySlot] = item; // Directly assign the InventoryItem entity
+        } else if (item.equippedByCharacterId) {
+            // Equipped items don't go into the sparse array directly
+            // They are handled by equipmentUpdate
+        } else {
+            // Items that are owned but neither equipped nor in a valid slot (shouldn't normally happen)
+            console.warn(`[InventoryService] User ${userId} has item ${item.id} (${item.itemTemplate?.name}) with invalid/null slot: ${item.inventorySlot} and not equipped.`);
+        }
+    });
+
+    // The frontend expects the raw sparse array under the 'inventory' key
+    return { inventory: sparseInventory }; 
   }
 } 

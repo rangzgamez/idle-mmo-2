@@ -8,9 +8,10 @@ import {
   SubscribeMessage,
   MessageBody,
   ConnectedSocket,
+  WsException,
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
-import { Logger, OnApplicationShutdown, UnauthorizedException } from '@nestjs/common';
+import { Logger, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt'; // Import JwtService
 import { UserService } from '../user/user.service'; // Import UserService
 import { User } from '../user/user.entity'; // Import User entity
@@ -21,8 +22,6 @@ import * as sanitizeHtml from 'sanitize-html';
 import { GameLoopService } from './game-loop.service'; // Import the new GameLoopService
 import { InventoryService } from '../inventory/inventory.service'; // Import InventoryService
 import { BroadcastService } from './broadcast.service'; // Import BroadcastService
-import { DroppedItem } from './interfaces/dropped-item.interface'; // Import DroppedItem
-import { InventoryItem } from '../inventory/inventory.entity'; // Import InventoryItem
 import { calculateDistance } from './utils/geometry.utils'; // Import distance util
 import { EquipmentSlot } from '../item/item.types'; // <-- Import EquipmentSlot
 
@@ -40,6 +39,27 @@ interface PickupItemPayload {
     itemId: string;
 }
 // -----------------------------------------
+
+// Define payload types for clarity
+// ... other payload types ...
+interface DropInventoryItemPayload {
+  inventoryIndex: number;
+}
+interface EquipItemPayload {
+  inventoryItemId: string;
+  characterId: string;
+}
+interface UnequipItemPayload {
+  characterId: string;
+  slot: EquipmentSlot;
+  // inventoryItemId?: string; // Optional way to specify item - not used currently
+}
+interface RequestEquipmentPayload {
+  characterId: string;
+}
+interface SortInventoryPayload { // NEW Payload Interface
+  sortType: 'name' | 'type';
+}
 
 @WebSocketGateway({
   cors: { /* ... */ },
@@ -831,4 +851,35 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     }
   }
   // --- END LOOT ALL COMMAND HANDLER ---
+
+  // --- NEW: Inventory Sorting Handler ---
+  @SubscribeMessage('sortInventoryCommand')
+  async handleSortInventory(
+      @ConnectedSocket() client: Socket, 
+      @MessageBody() payload: SortInventoryPayload
+  ): Promise<void> { // No specific ack needed, client updates via inventoryUpdate
+      const userId = client.data.user?.id; // Access userId via user object
+      if (!userId) {
+          console.error('[GameGateway] Missing user.id on authenticated socket for sortInventoryCommand');
+          throw new WsException('User not authenticated for sorting inventory.');
+      }
+
+      const { sortType } = payload;
+      if (!sortType || (sortType !== 'name' && sortType !== 'type')) {
+          console.warn(`[GameGateway] Received invalid sortType: ${sortType} from userId: ${userId}`);
+          // Optionally throw WsException or just ignore
+          return; 
+      }
+
+      console.log(`[GameGateway] User ${userId} requested inventory sort by ${sortType}`);
+
+      try {
+          await this.inventoryService.sortInventory(userId, sortType);
+          // Sorting triggers inventoryUpdate via InventoryService/BroadcastService
+      } catch (error) {
+          console.error(`[GameGateway] Error sorting inventory for user ${userId}:`, error);
+          // Optionally inform the client via a specific error event or WsException
+          throw new WsException('Failed to sort inventory.');
+      }
+  }
 }
