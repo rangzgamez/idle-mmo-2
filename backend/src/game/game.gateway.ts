@@ -58,7 +58,7 @@ interface RequestEquipmentPayload {
   characterId: string;
 }
 interface SortInventoryPayload { // NEW Payload Interface
-  sortType: 'name' | 'type';
+  sortType: 'name' | 'type' | 'newest';
 }
 
 @WebSocketGateway({
@@ -233,92 +233,7 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
   }
   // -------------------------------------
 
-  // --- Pickup Item Handler --- // Renamed old handler
-  @SubscribeMessage('OLD_pickupItemCommand') // Rename to avoid conflict
-  async handleDirectPickupItem(
-      @MessageBody() data: { itemId: string },
-      @ConnectedSocket() client: Socket,
-  ): Promise<{ success: boolean; message?: string }> { // Ack structure
-    const user = client.data.user as User;
-    const party = client.data.selectedCharacters as RuntimeCharacterData[];
-    const zoneId = client.data.currentZoneId as string;
-    const itemIdToPickup = data?.itemId;
-
-    // --- Basic Validation ---
-    if (!user || !party || party.length === 0 || !zoneId) {
-      return { success: false, message: 'Invalid state (not authenticated, no party, or not in zone).' };
-    }
-    if (!itemIdToPickup) {
-      return { success: false, message: 'Missing item ID to pick up.' };
-    }
-
-    const character = this.zoneService.getCharacterStateById(zoneId, party[0].id);
-    // Need a way to get a specific dropped item by ID from ZoneService
-    // For now, assume a method like getDroppedItemById exists or filter the array
-    const droppedItem = this.zoneService.getDroppedItemById(zoneId, itemIdToPickup);
-    // const droppedItem = this.zoneService.getDroppedItems(zoneId).find(item => item.id === itemIdToPickup);
-
-    if (!character) {
-        return { success: false, message: 'Character not found in zone state.' };
-    }
-    if (!droppedItem) {
-        this.logger.verbose(`User ${user.username} tried to pick up non-existent/already picked item ${itemIdToPickup}`);
-        return { success: false, message: 'Item not found.' };
-    }
-
-    // --- Range Check ---
-    const ITEM_PICKUP_RANGE = 50; // Re-define locally if needed
-    const distance = calculateDistance(
-        { x: character.positionX!, y: character.positionY! },
-        droppedItem.position
-    );
-
-    if (distance > ITEM_PICKUP_RANGE) {
-         this.logger.verbose(`User ${user.username} too far from item ${itemIdToPickup} (Dist: ${distance.toFixed(1)})`);
-        return { success: false, message: 'Too far away from the item.' };
-    }
-
-    // --- Attempt Pickup --- 
-    try {
-        // 1. Add item to user's inventory
-        // We need the ItemTemplate ID for this.
-        const addedInventoryItem = await this.inventoryService.addItemToUser(
-            user.id, // Use user.id
-            droppedItem.itemTemplateId,
-            droppedItem.quantity
-        );
-
-        // Check if adding was successful (it throws on error now, but keep check)
-        if (!addedInventoryItem) {
-            throw new Error('Failed to add item to user inventory service.');
-        }
-
-        // 2. Remove item from ground (ZoneService)
-        const removed = this.zoneService.removeDroppedItem(zoneId, itemIdToPickup);
-        if (!removed) {
-            // This *could* happen if another player picked it up in the same tick?
-            // Rollback? For now, log error and maybe let inventory keep item.
-            this.logger.error(`Failed to remove picked up item ${itemIdToPickup} from zone ${zoneId} after adding to inventory!`);
-            // Consider trying to remove item from inventory here if critical
-        } else {
-            this.logger.log(`Item ${removed.itemName} (${removed.id}) picked up by ${user.username}`);
-        }
-
-        // 3. Broadcast itemPickedUp to ZONE (for others to remove visual)
-        this.broadcastService.queueItemPickedUp(zoneId, itemIdToPickup);
-
-        // 4. Send inventory update to the specific player
-        const updatedInventory = await this.inventoryService.getUserInventory(user.id);
-        client.emit('inventoryUpdate', { inventory: updatedInventory });
-
-        return { success: true }; // Acknowledge successful pickup
-
-    } catch (error) {
-        this.logger.error(`Error during pickup for item ${itemIdToPickup} by user ${user.username}: ${error.message}`, error.stack);
-        return { success: false, message: 'An error occurred while picking up the item.' };
-    }
-  }
-
+  
   // --- Equip/Unequip Handlers ---
   @SubscribeMessage('equipItemCommand')
   async handleEquipItem(
@@ -865,7 +780,7 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
       }
 
       const { sortType } = payload;
-      if (!sortType || (sortType !== 'name' && sortType !== 'type')) {
+      if (!sortType || (sortType !== 'name' && sortType !== 'type' && sortType !== 'newest')) {
           console.warn(`[GameGateway] Received invalid sortType: ${sortType} from userId: ${userId}`);
           // Optionally throw WsException or just ignore
           return; 

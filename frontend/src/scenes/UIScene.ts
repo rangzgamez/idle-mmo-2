@@ -69,9 +69,9 @@ export default class UIScene extends Phaser.Scene {
     private invPrevButton: HTMLButtonElement | null = null;
     private invNextButton: HTMLButtonElement | null = null;
     private invPageInfo: HTMLSpanElement | null = null;
-    // Add references for the sort buttons
-    private invSortByNameButton: HTMLButtonElement | null = null;
-    private invSortByTypeButton: HTMLButtonElement | null = null;
+    // Remove old sort buttons, add dropdown refs
+    private invSortButton: HTMLButtonElement | null = null;
+    private invSortDropdown: HTMLElement | null = null;
     // Add reference for the tooltip element
     private itemTooltipElement: Phaser.GameObjects.DOMElement | null = null;
     // Add references for Equipment UI
@@ -85,24 +85,24 @@ export default class UIScene extends Phaser.Scene {
     // private equipPrevButton: HTMLButtonElement | null = null;
     // private equipNextButton: HTMLButtonElement | null = null;
     // private equipCharInfo: HTMLSpanElement | null = null;
-    private equipmentTabsContainer: HTMLElement | null = null; 
+    private equipmentTabsContainer: HTMLElement | null = null;
     private receivedPartyData: any[] = []; // Store data received on init
     // --- Drag state ---
     private draggedItemData: { item: InventoryItem, originalSlot: number } | null = null; // Store original slot
     private draggedElementGhost: HTMLElement | null = null; // Visual ghost element
     // --- Inventory Data ---
     private inventorySlotsData: (InventoryItem | null)[] = []; // Store sparse array from backend
-    // --- Party UI --- 
+    // --- Party UI ---
     private partyUiGameObject: Phaser.GameObjects.DOMElement | null = null;
     // Modify map structure to store bar fill elements and values
-    private partyMemberPanels: Map<string, { 
-        nameElement: HTMLElement | null, 
+    private partyMemberPanels: Map<string, {
+        nameElement: HTMLElement | null,
         hpFillElement: HTMLElement | null, // Reference to HP bar fill
         xpFillElement: HTMLElement | null, // Reference to XP bar fill
         hpTextElement: HTMLElement | null, // Reference to text overlay for HP
         xpTextElement: HTMLElement | null, // Reference to text overlay for XP
-        currentHp: number, 
-        maxHp: number, 
+        currentHp: number,
+        maxHp: number,
         currentXp: number, // Store current XP (relative to level start)
         xpToNextLevel: number // Store XP needed for next level (relative to level start)
     }> = new Map();
@@ -128,34 +128,41 @@ export default class UIScene extends Phaser.Scene {
             <div id="menu-bar" style="position: absolute; top: 10px; left: 10px; display: flex; gap: 5px; background-color: rgba(0,0,0,0.6); padding: 5px; border-radius: 3px;">
                 <button id="inventory-button" style="padding: 3px 6px; font-size: 12px; background-color: #555; color: white; border: 1px solid #777;">Inventory</button>
                 <button id="equipment-button" style="padding: 3px 6px; font-size: 12px; background-color: #555; color: white; border: 1px solid #777;">Equipment</button> <!-- Enable this -->
-                <button style="padding: 3px 6px; font-size: 12px; background-color: #555; color: #aaa; border: 1px solid #777; cursor: not-allowed;">Settings</button> 
-                <button style="padding: 3px 6px; font-size: 12px; background-color: #555; color: #aaa; border: 1px solid #777; cursor: not-allowed;">Logout</button> 
+                <button style="padding: 3px 6px; font-size: 12px; background-color: #555; color: #aaa; border: 1px solid #777; cursor: not-allowed;">Settings</button>
+                <button style="padding: 3px 6px; font-size: 12px; background-color: #555; color: #aaa; border: 1px solid #777; cursor: not-allowed;">Logout</button>
             </div>
         `;
         const menuBar = this.add.dom(0, 0).createFromHTML(menuBarHtml).setOrigin(0, 0);
-        console.log("UIScene: Menu Bar HTML content:", menuBar.node.innerHTML); 
+        console.log("UIScene: Menu Bar HTML content:", menuBar.node.innerHTML);
 
         // --- Create Inventory Window DOM Element (Initially Hidden) ---
         const invWindowHtml = `
-            <div id="inventory-window" style="width: 320px; /* Adjusted width for grid */ max-height: 450px; /* Adjusted height */ flex-direction: column; background-color: rgba(40, 40, 40, 0.9); border: 2px solid #888; border-radius: 5px; font-family: sans-serif; z-index: 100;"> 
+            <div id="inventory-window" style="position: relative; /* Needed for absolute dropdown */ width: 320px; max-height: 450px; flex-direction: column; background-color: rgba(40, 40, 40, 0.9); border: 2px solid #888; border-radius: 5px; font-family: sans-serif; z-index: 100;">
                 <div id="inventory-title-bar" style="background-color: #333; color: white; padding: 5px; font-size: 14px; font-weight: bold; cursor: grab; display: flex; justify-content: space-between; align-items: center;">
                     <span>Inventory</span>
-                    <button id="inventory-close-button" style="background: none; border: none; color: white; font-size: 16px; cursor: pointer; line-height: 1;">&times;</button>
+                    <div> <!-- Container for buttons -->
+                        <button id="inv-sort-button" style="padding: 1px 5px; font-size: 11px; background-color: #555; color: white; border: 1px solid #777; margin-right: 5px;">Sort</button>
+                        <button id="inventory-close-button" style="background: none; border: none; color: white; font-size: 16px; cursor: pointer; line-height: 1;">&times;</button>
+                    </div>
                 </div>
-                
+
+                <!-- Sort Dropdown Menu (Hidden Initially) -->
+                <div id="inv-sort-dropdown" style="position: absolute; top: 30px; /* Position below title bar */ right: 30px; /* Align near sort button */ background-color: #444; border: 1px solid #777; border-radius: 3px; padding: 5px; z-index: 101; display: none; /* Hidden by default */ flex-direction: column; gap: 3px;">
+                    <button class="sort-option" data-sort-type="name" style="padding: 2px 5px; font-size: 11px; background-color: #666; color: white; border: none; text-align: left; cursor: pointer;">By Name</button>
+                    <button class="sort-option" data-sort-type="type" style="padding: 2px 5px; font-size: 11px; background-color: #666; color: white; border: none; text-align: left; cursor: pointer;">By Type</button>
+                    <button class="sort-option" data-sort-type="newest" style="padding: 2px 5px; font-size: 11px; background-color: #666; color: white; border: none; text-align: left; cursor: pointer;">By Newest</button>
+                </div>
+
                 <!-- Grid Container -->
                 <div id="inventory-grid" style="display: grid; grid-template-columns: repeat(6, 45px); grid-template-rows: repeat(6, 45px); gap: 5px; padding: 10px; justify-content: center; align-content: center;">
                     <!-- 36 slots will be generated here by JS -->
                 </div>
-                
-                <!-- Pagination Controls -->
+
+                <!-- Pagination Controls (Sort buttons removed) -->
                 <div id="inventory-pagination" style="display: flex; justify-content: center; align-items: center; padding: 5px; border-top: 1px solid #555;">
                     <button id="inv-prev-button" style="padding: 2px 5px; font-size: 12px; margin-right: 10px;">&lt; Prev</button>
                     <span id="inv-page-info" style="color: white; font-size: 12px;">Page 1 / 1</span>
                     <button id="inv-next-button" style="padding: 2px 5px; font-size: 12px; margin-left: 10px;">Next &gt;</button>
-                    <!-- Add Sort Buttons -->
-                    <button id="inv-sort-name-button" style="padding: 2px 5px; font-size: 12px; margin-left: 20px;">Sort: Name</button>
-                    <button id="inv-sort-type-button" style="padding: 2px 5px; font-size: 12px; margin-left: 5px;">Sort: Type</button>
                 </div>
             </div>
         `;
@@ -164,7 +171,7 @@ export default class UIScene extends Phaser.Scene {
         // Position the Phaser DOM Element (wrapper) - Under menu bar
         const initialInvX = 10;
         const initialInvY = 50; // Approx below menu bar (10px top + ~30px height + 10px gap)
-        invWindowGameObject.setPosition(initialInvX, initialInvY); 
+        invWindowGameObject.setPosition(initialInvX, initialInvY);
         invWindowGameObject.setVisible(false); // Start hidden using Phaser's visibility
 
         // Get references to HTML elements INSIDE the container
@@ -177,13 +184,14 @@ export default class UIScene extends Phaser.Scene {
         this.invPrevButton = invWindowGameObject.getChildByID('inv-prev-button') as HTMLButtonElement;
         this.invNextButton = invWindowGameObject.getChildByID('inv-next-button') as HTMLButtonElement;
         this.invPageInfo = invWindowGameObject.getChildByID('inv-page-info') as HTMLSpanElement;
-        // ** Store references to sort buttons **
-        this.invSortByNameButton = invWindowGameObject.getChildByID('inv-sort-name-button') as HTMLButtonElement;
-        this.invSortByTypeButton = invWindowGameObject.getChildByID('inv-sort-type-button') as HTMLButtonElement;
+        // ** Store references to sort button and dropdown **
+        this.invSortButton = invWindowGameObject.getChildByID('inv-sort-button') as HTMLButtonElement;
+        this.invSortDropdown = invWindowGameObject.getChildByID('inv-sort-dropdown') as HTMLElement;
 
-        // ** Update: Check for new pagination elements **
-        if (!inventoryWindowElement || !this.inventoryItemsElement || !inventoryButton || !inventoryCloseButton || !inventoryTitleBar || !this.invPrevButton || !this.invNextButton || !this.invPageInfo || !this.invSortByNameButton || !this.invSortByTypeButton) {
-            console.error("Failed to get all inventory UI elements (incl. pagination and sort buttons)!");
+
+        // ** Update: Check for new elements **
+        if (!inventoryWindowElement || !this.inventoryItemsElement || !inventoryButton || !inventoryCloseButton || !inventoryTitleBar || !this.invPrevButton || !this.invNextButton || !this.invPageInfo || !this.invSortButton || !this.invSortDropdown) {
+            console.error("Failed to get all inventory UI elements (incl. pagination, sort button, and dropdown)!");
             return; // Exit early if elements aren't found
         }
 
@@ -193,12 +201,17 @@ export default class UIScene extends Phaser.Scene {
         // --- Inventory Button Listener ---
         inventoryButton.addEventListener('click', () => {
             // Toggle visibility using Phaser DOM element
-            invWindowGameObject.setVisible(!invWindowGameObject.visible);
+            const willBeVisible = !invWindowGameObject.visible;
+            invWindowGameObject.setVisible(willBeVisible);
+            if (!willBeVisible) { // If closing, also hide dropdown
+                this.invSortDropdown!.style.display = 'none';
+            }
         });
 
         // --- Inventory Close Button Listener ---
         inventoryCloseButton.addEventListener('click', () => {
              invWindowGameObject.setVisible(false);
+             this.invSortDropdown!.style.display = 'none'; // Hide dropdown on close
         });
 
         // --- Inventory Drag Logic ---
@@ -217,18 +230,49 @@ export default class UIScene extends Phaser.Scene {
             this.inventoryItemsElement.addEventListener('drop', this.handleDrop.bind(this));
             this.inventoryItemsElement.addEventListener('dragend', this.handleDragEnd.bind(this));
             // Need to prevent default for dragover for drop to work
-            this.inventoryItemsElement.addEventListener('dragover', (event) => { 
-                event.preventDefault(); 
+            this.inventoryItemsElement.addEventListener('dragover', (event) => {
+                event.preventDefault();
             });
         } else {
             console.error("Inventory grid element not found, cannot attach drag listeners.");
         }
 
+        // --- Inventory Sort Button Listener (Toggle Dropdown) ---
+        this.invSortButton.addEventListener('click', (event) => {
+            event.stopPropagation(); // Prevent click from closing dropdown immediately if we add a global listener later
+            const currentDisplay = this.invSortDropdown!.style.display;
+            this.invSortDropdown!.style.display = currentDisplay === 'none' ? 'flex' : 'none';
+        });
+
+        // --- Inventory Sort Option Listeners (Event Delegation) ---
+        this.invSortDropdown.addEventListener('click', (event) => {
+            const target = event.target as HTMLElement;
+            if (target.classList.contains('sort-option') && target.dataset.sortType) {
+                const sortType = target.dataset.sortType as 'name' | 'type' | 'newest';
+                console.log(`[UIScene] Sort by ${sortType} clicked.`);
+                // Add validation or specific handling for 'newest' if needed on frontend
+                this.networkManager.sendMessage('sortInventoryCommand', { sortType: sortType });
+                this.invSortDropdown!.style.display = 'none'; // Hide dropdown after selection
+            }
+        });
+
+        // Optional: Add listener to close dropdown if clicking outside
+        document.addEventListener('click', (event) => {
+            // If inventory is visible AND the click was outside the dropdown AND outside the sort button
+            if (invWindowGameObject.visible &&
+                this.invSortDropdown && this.invSortDropdown.style.display !== 'none' &&
+                !this.invSortDropdown.contains(event.target as Node) &&
+                event.target !== this.invSortButton) {
+                    this.invSortDropdown.style.display = 'none';
+            }
+        });
+
+
         // --- Create Equipment Window DOM Element (Initially Hidden) ---
-        const equipmentSlotsHtml = Object.values(EquipmentSlot).map(slot => 
-            `<div class="equip-slot" id="equip-slot-${slot}" title="${slot}" 
-                  style="width: 50px; height: 50px; background-color: rgba(0,0,0,0.4); border: 1px dashed #888; 
-                         display: flex; align-items: center; justify-content: center; color: #666; font-size: 10px; overflow: hidden;" 
+        const equipmentSlotsHtml = Object.values(EquipmentSlot).map(slot =>
+            `<div class="equip-slot" id="equip-slot-${slot}" title="${slot}"
+                  style="width: 50px; height: 50px; background-color: rgba(0,0,0,0.4); border: 1px dashed #888;
+                         display: flex; align-items: center; justify-content: center; color: #666; font-size: 10px; overflow: hidden;"
             >${slot.substring(0,3)}</div>` // Placeholder text
         ).join('');
 
@@ -243,14 +287,14 @@ export default class UIScene extends Phaser.Scene {
                     <!-- Tabs will be generated here -->
                  </div>
                 <!-- Equipment Slot Grid (Updated Layout) -->
-                <div style="padding: 10px; display: grid; grid-template-areas: 
-                    '. helm necklace' 
-                    'mainhand armor offhand' 
-                    'gloves boots .' 
-                    '. ring1 ring2'; 
+                <div style="padding: 10px; display: grid; grid-template-areas:
+                    '. helm necklace'
+                    'mainhand armor offhand'
+                    'gloves boots .'
+                    '. ring1 ring2';
                     grid-template-columns: 1fr 1fr 1fr; gap: 8px; justify-items: center;" >
-                    ${equipmentSlotsHtml} 
-                </div> 
+                    ${equipmentSlotsHtml}
+                </div>
             </div>
         `;
         this.equipWindowGameObject = this.add.dom(0, 0).createFromHTML(equipWindowHtml).setOrigin(0, 0);
@@ -259,7 +303,7 @@ export default class UIScene extends Phaser.Scene {
 
         // Get references to equipment elements
         const equipmentButton = menuBar.getChildByID('equipment-button') as HTMLElement;
-        console.log("UIScene: Found equipmentButton element via getChildByID:", !!equipmentButton); 
+        console.log("UIScene: Found equipmentButton element via getChildByID:", !!equipmentButton);
 
         const equipmentCloseButton = this.equipWindowGameObject.getChildByID('equipment-close-button') as HTMLElement;
         const equipmentTitleBar = this.equipWindowGameObject.getChildByID('equipment-title-bar') as HTMLElement;
@@ -291,44 +335,44 @@ export default class UIScene extends Phaser.Scene {
 
         // --- Equipment Button Listener ---
         if (equipmentButton) {
-            console.log("UIScene: Attaching click listener to equipmentButton"); 
+            console.log("UIScene: Attaching click listener to equipmentButton");
             equipmentButton.addEventListener('click', () => {
-                console.log("UIScene: Equipment button clicked!"); 
-                console.log("UIScene: equipWindowGameObject available:", !!this.equipWindowGameObject); 
+                console.log("UIScene: Equipment button clicked!");
+                console.log("UIScene: equipWindowGameObject available:", !!this.equipWindowGameObject);
 
                 if (this.equipWindowGameObject) {
                     const currentVisibility = this.equipWindowGameObject.visible;
-                    this.equipWindowGameObject.setVisible(!currentVisibility); 
+                    this.equipWindowGameObject.setVisible(!currentVisibility);
                     const newVisibility = this.equipWindowGameObject.visible;
 
                     if (newVisibility) {
-                        console.log("UIScene: Equipment window opened."); 
+                        console.log("UIScene: Equipment window opened.");
 
                         // *** Use receivedPartyData ***
                         this.currentParty = this.receivedPartyData; // Use data passed via init
-                        console.log("UIScene: Using party data received via init:", this.currentParty); 
-                        
+                        console.log("UIScene: Using party data received via init:", this.currentParty);
+
                         this.currentEquipCharacterIndex = 0;
                         this.renderCurrentCharacterEquipment(); // Render initial character
 
                         if (this.currentParty.length > 0) {
                             const firstCharId = this.currentParty[0].id;
-                            console.log(`UIScene: Requesting initial equipment for characterId: ${firstCharId}`); 
+                            console.log(`UIScene: Requesting initial equipment for characterId: ${firstCharId}`);
                             this.networkManager.sendMessage('requestEquipment', { characterId: firstCharId });
                         } else {
                             console.warn("UIScene: Cannot request equipment, no party data received via init.");
                         }
                     } else {
-                         console.log("UIScene: Equipment window closed."); 
+                         console.log("UIScene: Equipment window closed.");
                     }
                 } else {
-                     console.error("UIScene: equipWindowGameObject is null or undefined when button clicked!"); 
+                     console.error("UIScene: equipWindowGameObject is null or undefined when button clicked!");
                 }
             });
         } else {
-            console.error("UIScene: Could not find #equipment-button to attach listener."); 
+            console.error("UIScene: Could not find #equipment-button to attach listener.");
         }
-        
+
         // --- Equipment Close Button Listener ---
         // Need this listener explicitly now
         if(equipmentCloseButton) {
@@ -357,16 +401,16 @@ export default class UIScene extends Phaser.Scene {
 
         // --- Create Chat DOM Elements ---
         const chatContainerHtml = `
-            <div id="chat-container" 
-                 style="/*position: absolute; bottom: 10px; left: 10px;*/ width: 450px; height: 160px; 
-                        display: flex; flex-direction: column; background-color: rgba(0, 0, 0, 0.5); 
+            <div id="chat-container"
+                 style="/*position: absolute; bottom: 10px; left: 10px;*/ width: 450px; height: 160px;
+                        display: flex; flex-direction: column; background-color: rgba(0, 0, 0, 0.5);
                         border: 1px solid #555; border-radius: 3px; font-family: sans-serif;">
-                <div id="chat-log" 
+                <div id="chat-log"
                      style="flex-grow: 1; padding: 5px; overflow-y: auto; margin-bottom: 5px; font-size: 12px; color: white;">
                     Welcome to the game!
                 </div>
                 <div style="display: flex; padding: 0 5px 5px 5px;">
-                    <input type="text" id="chat-input" placeholder="Type message..." 
+                    <input type="text" id="chat-input" placeholder="Type message..."
                            style="flex-grow: 1; padding: 5px; border: 1px solid #777; background-color: #333; color: white; font-size: 12px;">
                     <!-- Loot button removed from here -->
                  </div>
@@ -374,13 +418,13 @@ export default class UIScene extends Phaser.Scene {
         `;
         const chatContainer = this.add.dom(0, 0).createFromHTML(chatContainerHtml).setOrigin(0, 0);
 
-        // --- Positioning --- 
+        // --- Positioning ---
         const gameHeight = Number(this.sys.game.config.height);
         const chatHeight = 160; // The height defined in the style
         const bottomMargin = 10;
         const chatY = gameHeight - chatHeight - bottomMargin;
         chatContainer.setPosition(10, chatY); // Position chat near bottom-left
-        
+
         // Position Loot All button above chat
         const buttonHeight = 30; // Approximate height of button with padding/border
         const buttonMargin = 5;
@@ -401,15 +445,25 @@ export default class UIScene extends Phaser.Scene {
         chatContainer.addListener('click'); // Dummy listener to allow focus
         this.input.keyboard?.on('keydown', (event: KeyboardEvent) => {
             // Update focus check for nested elements
-            if (document.activeElement === this.chatInputElement || invWindowGameObject.node.contains(document.activeElement)) {
+            // Make sure dropdown clicks don't trigger game input suppression incorrectly
+            const activeEl = document.activeElement;
+            const isChatInputFocused = activeEl === this.chatInputElement;
+            const isInvWindowFocused = invWindowGameObject.node.contains(activeEl); // Includes dropdown
+
+            if (isChatInputFocused || isInvWindowFocused) {
                 event.stopPropagation(); // Stop Phaser if chat or inventory window elements have focus
-                if (event.key === 'Enter' && document.activeElement === this.chatInputElement) {
+
+                if (event.key === 'Enter' && isChatInputFocused) {
                     this.handleSendMessage();
                 }
-                 // Add ESC key to close inventory if it's open
-                 if (event.key === 'Escape' && invWindowGameObject.visible) { // Check Phaser visibility
-                    invWindowGameObject.setVisible(false);
-                }
+                 // Add ESC key to close inventory if it's open (also close dropdown)
+                 if (event.key === 'Escape') {
+                     if (this.invSortDropdown && this.invSortDropdown.style.display !== 'none') {
+                         this.invSortDropdown.style.display = 'none';
+                     } else if (invWindowGameObject.visible) { // Check Phaser visibility
+                        invWindowGameObject.setVisible(false);
+                     }
+                 }
             }
         });
 
@@ -423,7 +477,7 @@ export default class UIScene extends Phaser.Scene {
         // --- EventBus Listeners ---
         EventBus.on('chat-message-received', this.handleChatMessage, this);
         EventBus.on('focus-chat-input', this.focusChatInput, this);
-        EventBus.on('inventory-update', this.handleInventoryUpdate, this); 
+        EventBus.on('inventory-update', this.handleInventoryUpdate, this);
         EventBus.on('equipment-update', this.handleEquipmentUpdate, this);
         // --- ADD listeners for events from GameScene ---
         EventBus.on('update-party-hp', this.handleUpdatePartyHp, this);
@@ -450,24 +504,11 @@ export default class UIScene extends Phaser.Scene {
             }
         });
 
-        // --- Inventory Sort Button Listeners ---
-        if (this.invSortByNameButton) {
-            this.invSortByNameButton.addEventListener('click', () => {
-                console.log("[UIScene] Sort by Name clicked.");
-                this.networkManager.sendMessage('sortInventoryCommand', { sortType: 'name' });
-            });
-        } else {
-            console.error("[UIScene] Sort by Name button not found!");
-        }
-
-        if (this.invSortByTypeButton) {
-            this.invSortByTypeButton.addEventListener('click', () => {
-                console.log("[UIScene] Sort by Type clicked.");
-                this.networkManager.sendMessage('sortInventoryCommand', { sortType: 'type' });
-            });
-        } else {
-            console.error("[UIScene] Sort by Type button not found!");
-        }
+        // --- Inventory Sort Button Listeners (Removed) ---
+        /*
+        if (this.invSortByNameButton) { ... }
+        if (this.invSortByTypeButton) { ... }
+        */
 
         // --- Create Party UI Container (Bottom Right -> Bottom Left, Horizontal) ---
         const partyUiHtml = `
@@ -480,7 +521,7 @@ export default class UIScene extends Phaser.Scene {
             .setOrigin(0, 0) // <-- CHANGED
             // Position the Top-Left corner relative to the canvas size
             .setPosition(470, this.scale.height - 60); // <-- CHANGED Y position (Estimate panel height)
-        
+
         const partyUiContainer = this.partyUiGameObject.getChildByID('party-ui') as HTMLElement;
         if (!partyUiContainer) {
             console.error("Failed to create Party UI container!");
@@ -582,13 +623,19 @@ export default class UIScene extends Phaser.Scene {
         console.log('UIScene shutting down, removing listeners.');
         EventBus.off('chat-message-received', this.handleChatMessage, this);
         EventBus.off('focus-chat-input', this.focusChatInput, this);
-        EventBus.off('inventory-update', this.handleInventoryUpdate, this); 
+        EventBus.off('inventory-update', this.handleInventoryUpdate, this);
         EventBus.off('equipment-update', this.handleEquipmentUpdate, this);
         // --- ADD removal for new listeners ---
         EventBus.off('update-party-hp', this.handleUpdatePartyHp, this);
         EventBus.off('update-party-xp', this.handleUpdatePartyXp, this);
         EventBus.off('party-member-level-up', this.handlePartyMemberLevelUp, this);
         // DOM elements added via this.add.dom are usually cleaned up automatically by Phaser
+
+        // --- Clean up global listener ---
+        // It's tricky to find the *exact* listener function reference here.
+        // A better approach would be to store the listener reference when adding it.
+        // For now, let's skip removing the document click listener, as it's less critical.
+        // document.removeEventListener('click', ???);
     }
 
     // --- Temporary Message Display ---
@@ -635,7 +682,7 @@ export default class UIScene extends Phaser.Scene {
         handle.style.cursor = 'grab';
 
         const onMouseDown = (e: MouseEvent) => {
-            // Prevent starting drag on buttons within the handle (like close buttons)
+            // Prevent starting drag on buttons within the handle (like close or sort buttons)
             if ((e.target as HTMLElement)?.tagName === 'BUTTON') {
                 return;
             }
@@ -680,7 +727,7 @@ export default class UIScene extends Phaser.Scene {
                 document.removeEventListener('mouseup', onMouseUp);
             }
         };
-        
+
         // Attach the initial mousedown listener to the handle
         handle.addEventListener('mousedown', onMouseDown);
 
@@ -694,7 +741,7 @@ export default class UIScene extends Phaser.Scene {
     }
 
     // --- Inventory Display Update ---
-    private handleInventoryUpdate(data: { inventory: (InventoryItem | null)[] }) { 
+    private handleInventoryUpdate(data: { inventory: (InventoryItem | null)[] }) {
         console.log('[UIScene] Handling inventory update (sparse array):', data);
         this.inventorySlotsData = data.inventory || []; // Store the sparse array
 
@@ -720,15 +767,15 @@ export default class UIScene extends Phaser.Scene {
             }
             console.warn(`Inventory data length (${data.inventory?.length}) mismatch expected (${expectedSize}). Padded/adjusted.`);
         }
-        
+
         // Pagination logic might need adjustment if total pages isn't fixed
         this.totalPages = 6; // Keep fixed 6 pages assumption
-        this.currentPage = Math.max(1, Math.min(this.currentPage, this.totalPages)); 
-        
+        this.currentPage = Math.max(1, Math.min(this.currentPage, this.totalPages));
+
         this.renderCurrentInventoryPage(); // Render based on the new sparse data
     }
 
-    // --- Renders the items for the current page --- 
+    // --- Renders the items for the current page ---
     private renderCurrentInventoryPage() {
         console.log(`[UIScene] Rendering inventory page ${this.currentPage}/${this.totalPages} using sparse data`);
         if (!this.inventoryItemsElement || !this.invPrevButton || !this.invNextButton || !this.invPageInfo) {
@@ -756,24 +803,26 @@ export default class UIScene extends Phaser.Scene {
             slotElement.style.alignItems = 'center';
             slotElement.style.justifyContent = 'center';
             slotElement.classList.add('inventory-slot');
-            slotElement.dataset.slotIndexOnPage = String(i); // Index 0-35 on the current page view
+            slotElement.dataset.slotIndexOnPage = String(i); // Visual index 0-35
 
-            const actualSlotIndex = startIndex + i;
-            // --- Use actualSlotIndex to get item from sparse array ---
-            slotElement.dataset.inventorySlot = String(actualSlotIndex); // Store the actual DB slot index
-            const item = this.inventorySlotsData[actualSlotIndex]; 
+            const actualSlotIndex = startIndex + i; // Data index (e.g., 0-35 for page 1)
+            slotElement.dataset.inventorySlot = String(actualSlotIndex); // Store the DATA index
+
+            const item = this.inventorySlotsData[actualSlotIndex]; // Fetch from data using DATA index
 
             // Reset listeners/styles
             slotElement.onmouseenter = null;
             slotElement.onmouseleave = null;
-            slotElement.oncontextmenu = null; 
+            slotElement.oncontextmenu = null;
             slotElement.style.cursor = 'default';
             slotElement.draggable = false; // Default to not draggable
 
             if (item) {
-                 // --- Add Drag attributes using actualSlotIndex ---
+                // Render item content (SVG, quantity, listeners)
+                 // *** Log Item and its slot during render loop ***
+                 console.log(`[UIScene] Rendering VISUAL slot ${i} (Data index ${actualSlotIndex}): Item ID=${item.id}, Slot=${item.inventorySlot}, Name=${item.itemTemplate?.name}`);
                  slotElement.draggable = true;
-                 slotElement.dataset.inventoryItemId = item.id; 
+                 slotElement.dataset.inventoryItemId = item.id;
                  // data-inventory-slot is already set above
                  // ------------------------
 
@@ -785,10 +834,10 @@ export default class UIScene extends Phaser.Scene {
                  // Render SVG
                  let itemVisualHtml = '';
                  const itemType = item.itemTemplate?.itemType;
-                 const fillColor = '#aaa'; 
+                 const fillColor = '#aaa';
                  itemVisualHtml = this.getItemSvgShape(itemType, fillColor, 30); // Use helper
                  slotElement.innerHTML = itemVisualHtml;
-                 
+
                  const itemName = item.itemTemplate?.name ?? 'Unknown Item';
                  slotElement.title = itemName;
 
@@ -813,7 +862,7 @@ export default class UIScene extends Phaser.Scene {
                  if (isEquippable) {
                       slotElement.oncontextmenu = (event) => {
                          event.preventDefault(); // Prevent default browser menu
-                         
+
                          // --- Restore Equip Logic ---
                          // 1. Check if equipment window is open and party is selected
                          if (!this.equipWindowGameObject?.visible || this.currentParty.length === 0) {
@@ -836,8 +885,8 @@ export default class UIScene extends Phaser.Scene {
                          }
                          console.log(`[UIScene] Right-clicked inventory item ${inventoryItemId} to equip on character ${targetCharacterId}`);
                          // 4. Send command to server
-                         this.networkManager.sendMessage('equipItemCommand', { 
-                              inventoryItemId: inventoryItemId, 
+                         this.networkManager.sendMessage('equipItemCommand', {
+                              inventoryItemId: inventoryItemId,
                               characterId: targetCharacterId
                          });
                          // --- End Restore Equip Logic ---
@@ -846,16 +895,18 @@ export default class UIScene extends Phaser.Scene {
                       slotElement.oncontextmenu = (e) => e.preventDefault();
                  }
             } else {
-                 // Empty slot
+                // Render empty slot content
+                 // *** Log empty slot during render loop ***
+                 console.log(`[UIScene] Rendering VISUAL slot ${i} (Data index ${actualSlotIndex}): Empty`);
                  slotElement.classList.add('empty-slot');
                  slotElement.innerHTML = ''; // Ensure it's visually empty
             }
-            
+
             this.inventoryItemsElement.appendChild(slotElement);
         }
     }
 
-    // --- Tooltip Methods --- 
+    // --- Tooltip Methods ---
     private showItemTooltip(item: InventoryItem, slotElement: HTMLElement) {
         this.hideItemTooltip(); // Hide any existing tooltip
 
@@ -889,7 +940,7 @@ export default class UIScene extends Phaser.Scene {
         this.itemTooltipElement = this.add.dom(0, 0).createFromHTML(tooltipHtml).setOrigin(0, 0);
         const tooltipNode = this.itemTooltipElement.node as HTMLElement;
         const tooltipRect = tooltipNode.getBoundingClientRect(); // Measure its size
-        
+
         // Calculate desired position relative to the slot
         const slotRect = slotElement.getBoundingClientRect();
         const gameCanvas = this.sys.game.canvas;
@@ -935,17 +986,17 @@ export default class UIScene extends Phaser.Scene {
     // Helper to get SVG shape string (avoids duplicating logic)
     private getItemSvgShape(itemType: string | undefined, fillColor: string, size: number): string {
          switch (itemType) {
-            case 'MATERIAL': 
+            case 'MATERIAL':
                 return `<svg width="${size}" height="${size}" viewBox="0 0 100 100"><circle cx="50" cy="50" r="45" fill="${fillColor}" /></svg>`;
-            case 'WEAPON': 
+            case 'WEAPON':
                  return `<svg width="${size}" height="${size}" viewBox="0 0 100 100"><polygon points="50,5 95,95 5,95" fill="${fillColor}" /></svg>`;
             case 'ARMOR': case 'HELM': case 'GLOVES': case 'BOOTS': case 'OFFHAND':
                  return `<svg width="${size}" height="${size}" viewBox="0 0 100 100"><rect x="10" y="10" width="80" height="80" fill="${fillColor}" /></svg>`;
-            case 'CONSUMABLE': 
+            case 'CONSUMABLE':
                 return `<svg width="${Math.floor(size * 0.66)}" height="${size}" viewBox="0 0 66 100"><rect x="10" y="10" width="46" height="80" rx="15" ry="15" fill="${fillColor}" /></svg>`;
             case 'RING': case 'NECKLACE':
                  return `<svg width="${Math.floor(size * 0.8)}" height="${Math.floor(size * 0.8)}" viewBox="0 0 100 100"><circle cx="50" cy="50" r="35" fill="${fillColor}" stroke="#666" stroke-width="10" /></svg>`;
-            default: 
+            default:
                  return `<span style="font-size: ${size * 0.4}px;">?</span>`;
         }
     }
@@ -994,7 +1045,7 @@ export default class UIScene extends Phaser.Scene {
         }
     }
 
-    // --- Render Equipment for Current Character --- 
+    // --- Render Equipment for Current Character ---
     private renderCurrentCharacterEquipment() {
         // Check for tab container instead of pagination buttons
         if (!this.equipWindowGameObject || !this.equipmentTabsContainer) {
@@ -1003,8 +1054,8 @@ export default class UIScene extends Phaser.Scene {
         }
 
         const partySize = this.currentParty.length;
-        
-        // --- Generate Tabs --- 
+
+        // --- Generate Tabs ---
         this.equipmentTabsContainer.innerHTML = ''; // Clear existing tabs
         if (partySize === 0) {
             this.equipmentTabsContainer.textContent = 'No Party Selected'; // Display message in tab area
@@ -1015,7 +1066,7 @@ export default class UIScene extends Phaser.Scene {
             this.equipmentTabsContainer.style.padding = '0'; // Reset padding
             this.currentParty.forEach((character, index) => {
                 // *** Add null check for safety although covered by function entry check ***
-                if (!this.equipmentTabsContainer) return; 
+                if (!this.equipmentTabsContainer) return;
 
                 const tabButton = document.createElement('button');
                 tabButton.textContent = character.name.substring(0, 8) + (character.name.length > 8 ? '...': ''); // Shorten name
@@ -1094,23 +1145,23 @@ export default class UIScene extends Phaser.Scene {
 
         console.log(`[UIScene] Rendering equipment for ${characterName} (Index: ${this.currentEquipCharacterIndex})`, equipmentData);
 
-        // Update slots 
+        // Update slots
         this.equipmentSlots.forEach((slotElement, slot) => {
-            const item = equipmentData[slot]; 
+            const item = equipmentData[slot];
             // Clear previous content and listeners
-            slotElement.innerHTML = ''; 
-            slotElement.title = slot; 
-            slotElement.style.cursor = 'default'; 
-            slotElement.oncontextmenu = null; 
+            slotElement.innerHTML = '';
+            slotElement.title = slot;
+            slotElement.style.cursor = 'default';
+            slotElement.oncontextmenu = null;
             slotElement.onmouseenter = null; // Clear hover listener
             slotElement.onmouseleave = null; // Clear hover listener
-            
+
             if (item && item.itemTemplate) {
                 const template = item.itemTemplate;
-                slotElement.innerHTML = this.getItemSvgShape(template.itemType, '#ddd', 35); 
-                slotElement.title = `${template.name}\n(${slot})`; 
-                slotElement.style.borderColor = '#ccc'; 
-                slotElement.style.cursor = 'pointer'; 
+                slotElement.innerHTML = this.getItemSvgShape(template.itemType, '#ddd', 35);
+                slotElement.title = `${template.name}\n(${slot})`;
+                slotElement.style.borderColor = '#ccc';
+                slotElement.style.cursor = 'pointer';
 
                 // Add Right-Click Listener for Unequipping (already exists)
                 slotElement.oncontextmenu = (event) => {
@@ -1122,14 +1173,14 @@ export default class UIScene extends Phaser.Scene {
                     }
                     console.log(`[UIScene] Right-clicked to unequip item from slot ${slot} for character ${charId}`);
                     // Send unequip command to server
-                    this.networkManager.sendMessage('unequipItem', { 
-                        characterId: charId, 
+                    this.networkManager.sendMessage('unequipItem', {
+                        characterId: charId,
                         slot: slot // The slot key from the loop
                     });
                     // Optional: Add brief visual feedback here (e.g., highlight)
                 };
 
-                // --- Add Hover Listeners for Tooltip --- 
+                // --- Add Hover Listeners for Tooltip ---
                 slotElement.onmouseenter = () => this.showItemTooltip(item, slotElement);
                 slotElement.onmouseleave = () => this.hideItemTooltip();
                 // ------------------------------------------
@@ -1137,9 +1188,9 @@ export default class UIScene extends Phaser.Scene {
             } else {
                 // Empty slot: Show placeholder text
                 slotElement.textContent = slot.substring(0, 3);
-                slotElement.style.borderColor = '#888'; 
+                slotElement.style.borderColor = '#888';
                 // Ensure listeners and cursor are reset for empty slots
-                slotElement.oncontextmenu = null; 
+                slotElement.oncontextmenu = null;
                 slotElement.onmouseenter = null;
                 slotElement.onmouseleave = null;
                 slotElement.style.cursor = 'default';
@@ -1151,7 +1202,7 @@ export default class UIScene extends Phaser.Scene {
         // this.equipNextButton.disabled = ...
     }
 
-    // --- Change Character View --- 
+    // --- Change Character View ---
     // REMOVED - No longer needed
     // private changeEquipmentCharacter(delta: number) { ... }
 
@@ -1164,7 +1215,7 @@ export default class UIScene extends Phaser.Scene {
             const inventorySlot = parseInt(target.dataset.inventorySlot, 10);
             const item = this.inventorySlotsData[inventorySlot]; // Get from sparse array
 
-            if (item && item.id === itemId) { 
+            if (item && item.id === itemId) {
                 this.draggedItemData = { item: item, originalSlot: inventorySlot }; // Store original slot
                 event.dataTransfer?.setData('text/plain', itemId);
                 event.dataTransfer!.effectAllowed = 'move';
@@ -1193,7 +1244,7 @@ export default class UIScene extends Phaser.Scene {
         if (target.classList.contains('inventory-slot')) {
             // Reset background - Check if it was empty or had an item originally?
             // For simplicity, just reset to the default slot bg color
-            target.style.backgroundColor = 'rgba(0, 0, 0, 0.3)'; 
+            target.style.backgroundColor = 'rgba(0, 0, 0, 0.3)';
         }
     }
 
@@ -1202,7 +1253,7 @@ export default class UIScene extends Phaser.Scene {
         if (!this.draggedItemData) return;
 
         const target = event.target as HTMLElement;
-        const targetSlotDiv = target.closest('.inventory-slot') as HTMLElement | null; 
+        const targetSlotDiv = target.closest('.inventory-slot') as HTMLElement | null;
 
         // Case 1: Dropped onto an inventory slot
         // Use data-inventory-slot now
@@ -1212,9 +1263,9 @@ export default class UIScene extends Phaser.Scene {
 
             if (this.draggedItemData.originalSlot !== targetInventorySlot) {
                 console.log(`[Drop] Item ${this.draggedItemData.item.id} from slot ${this.draggedItemData.originalSlot} dropped onto slot ${targetInventorySlot}`);
-                this.networkManager.sendMessage('moveInventoryItem', { 
+                this.networkManager.sendMessage('moveInventoryItem', {
                     fromIndex: this.draggedItemData.originalSlot,
-                    toIndex: targetInventorySlot 
+                    toIndex: targetInventorySlot
                 });
             } else {
                 console.log("[Drop] Item dropped onto its own slot.");
@@ -1223,7 +1274,7 @@ export default class UIScene extends Phaser.Scene {
         // Case 2: Dropped OUTSIDE the inventory window (Drop Item)
         else {
              console.log(`[Drop] Item ${this.draggedItemData.item.id} dropped outside inventory (from slot ${this.draggedItemData.originalSlot})`);
-              this.networkManager.sendMessage('dropInventoryItem', { 
+              this.networkManager.sendMessage('dropInventoryItem', {
                   inventoryIndex: this.draggedItemData.originalSlot // Use original DB slot index
               });
         }
@@ -1310,7 +1361,7 @@ export default class UIScene extends Phaser.Scene {
     private handlePartyMemberLevelUp(payload: PartyMemberLevelUpPayload) {
         console.log("Received party member level up event:", payload);
         const panelRefs = this.partyMemberPanels.get(payload.characterId);
-        if (panelRefs) { 
+        if (panelRefs) {
             // Update stored values
             panelRefs.maxHp = payload.maxHp;
             panelRefs.currentHp = payload.currentHp; // Already full HP from payload
@@ -1370,7 +1421,7 @@ export default class UIScene extends Phaser.Scene {
             // Update stored values
             panelRefs.currentXp = payload.currentXp;
             panelRefs.xpToNextLevel = payload.xpToNextLevel;
-            
+
             // Update XP Bar
             if (panelRefs.xpFillElement) {
                 const xpPercent = panelRefs.xpToNextLevel > 0 ? (panelRefs.currentXp / panelRefs.xpToNextLevel) * 100 : 0;

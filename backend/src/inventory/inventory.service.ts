@@ -162,7 +162,7 @@ export class InventoryService {
         equippedByCharacterId: IsNull(),
       },
       relations: ['itemTemplate'],
-      order: { createdAt: 'ASC' },
+      order: { inventorySlot: 'ASC' },
     });
   }
 
@@ -343,7 +343,7 @@ export class InventoryService {
   }
 
   // --- NEW: Sort Inventory ---
-  async sortInventory(userId: string, sortType: 'name' | 'type'): Promise<void> {
+  async sortInventory(userId: string, sortType: 'name' | 'type' | 'newest'): Promise<void> {
     console.log(`[InventoryService] Sorting inventory for user ${userId} by ${sortType}`);
 
     // 1. Fetch items currently in inventory slots (not equipped)
@@ -380,6 +380,12 @@ export class InventoryService {
           return typeComparison;
         }
         return a.itemTemplate.name.localeCompare(b.itemTemplate.name);
+      } else if (sortType === 'newest') {
+        // Sort by creation date, newest first
+        // Fallback to 0 if createdAt is somehow missing, though it shouldn't be
+        const dateA = a.createdAt?.getTime() || 0;
+        const dateB = b.createdAt?.getTime() || 0;
+        return dateB - dateA; // Newest (larger timestamp) comes first
       }
       return 0;
     });
