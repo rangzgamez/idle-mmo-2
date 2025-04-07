@@ -428,8 +428,6 @@ export default class CharacterSelectScene extends Phaser.Scene {
 
     // Class UI display logic (now populates the MODAL)
     displayClassSelectionUI() { 
-        // This method needs to be MODIFIED to target the modal's container
-        // and create richer elements (card with image, name, desc)
         const container = this.createModalContainer.node.querySelector('#modal-class-select-container') as HTMLElement;
         if (!container) {
             console.error('Modal class selection container not found!');
@@ -440,8 +438,8 @@ export default class CharacterSelectScene extends Phaser.Scene {
 
         this.availableClasses.forEach(charClass => {
             const card = document.createElement('div');
-            card.className = 'class-card'; // Add a class for easier selection/styling
-            card.style.width = '100px';
+            card.className = 'class-card';
+            card.style.width = '110px'; // Adjusted width slightly for padding/border
             card.style.padding = '10px';
             card.style.border = '2px solid #ccc';
             card.style.borderRadius = '8px';
@@ -455,22 +453,17 @@ export default class CharacterSelectScene extends Phaser.Scene {
             card.style.justifyContent = 'space-between'; 
             card.dataset.classId = charClass.classId;
 
-            // Basic Image Placeholder (Replace with actual loading later)
-            const img = document.createElement('img');
-            // TODO: Dynamically load sprite based on charClass.spriteKeyBase
-            if (charClass.spriteKeyBase === 'Wizard') {
-                // Assuming Wizard-Idle.png is loaded with key 'wizard-idle'
-                // We need to ensure assets are loaded and keys are consistent
-                 img.src = 'assets/Wizard-Idle.png'; // Direct path for now, adjust as needed
-                 img.alt = 'Wizard';
-            } else {
-                img.src = 'assets/placeholder.png'; // Need a placeholder image
-                 img.alt = 'Placeholder';
-            }
-            img.style.width = '48px';
-            img.style.height = '48px';
-            img.style.marginBottom = '5px';
-            img.style.objectFit = 'contain'; // Prevent stretching
+            // +++ Image Preview using CSS Background +++
+            const imgPreview = document.createElement('div');
+            const spriteSheetPath = `assets/sprites/characters/${charClass.spriteKeyBase}/idle.png`;
+            imgPreview.style.width = '100px';
+            imgPreview.style.height = '100px';
+            imgPreview.style.backgroundImage = `url('${spriteSheetPath}')`;
+            imgPreview.style.backgroundPosition = '0px 0px'; // Top-left frame
+            imgPreview.style.backgroundRepeat = 'no-repeat';
+            imgPreview.style.marginBottom = '5px';
+            imgPreview.style.border = '1px solid #444'; // Optional border for the frame
+            // +++++++++++++++++++++++++++++++++++++++++++
 
             const name = document.createElement('div');
             name.textContent = charClass.name;
@@ -481,13 +474,13 @@ export default class CharacterSelectScene extends Phaser.Scene {
             const desc = document.createElement('div');
             desc.textContent = charClass.description;
             desc.style.fontSize = '11px';
-            desc.style.flexGrow = '1'; // Allow description to take space
+            desc.style.flexGrow = '1';
 
-            card.appendChild(img);
+            card.appendChild(imgPreview); // Add the div preview
             card.appendChild(name);
             card.appendChild(desc);
 
-            // Select logic
+            // Select logic (remains the same)
             card.onclick = () => {
                 this.selectedClassId = charClass.classId;
                 container.querySelectorAll('div.class-card').forEach(el => {
@@ -497,7 +490,7 @@ export default class CharacterSelectScene extends Phaser.Scene {
                     htmlEl.style.backgroundColor = isSelected ? '#383' : '#666';
                 });
                 console.log(`Selected class: ${this.selectedClassId}`);
-                this.updateModalCreateButtonState(); // Update button state on selection
+                this.updateModalCreateButtonState();
             };
 
             container.appendChild(card);
