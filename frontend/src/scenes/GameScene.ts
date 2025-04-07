@@ -137,6 +137,7 @@ export default class GameScene extends Phaser.Scene {
         EventBus.on('combat-action', this.handleCombatAction, this); // +++ ADD LISTENER for ATTACK VISUAL +++
         EventBus.on('items-dropped', this.handleItemsDropped, this); // <-- ADD LISTENER for dropped items
         EventBus.on('item-picked-up', this.handleItemPickedUp, this); // <-- ADD LISTENER for item pickup confirmation
+        EventBus.on('item-despawned', this.handleItemDespawned, this); // <-- ADD LISTENER for item despawn
         this.events.on('droppedItemClicked', this.handleDroppedItemClicked, this); // <-- CORRECTED: Use this.events
         // --- ADD Listeners for XP/Level Events ---
         EventBus.on('levelUpNotification', this.handleLevelUpNotification, this);
@@ -521,6 +522,7 @@ export default class GameScene extends Phaser.Scene {
         EventBus.off('combat-action', this.handleCombatAction, this);
         EventBus.off('items-dropped', this.handleItemsDropped, this);
         EventBus.off('item-picked-up', this.handleItemPickedUp, this);
+        EventBus.off('item-despawned', this.handleItemDespawned, this);
         this.events.off('droppedItemClicked', this.handleDroppedItemClicked, this);
         // --- Remove XP/Level Listeners ---
         EventBus.off('levelUpNotification', this.handleLevelUpNotification, this);
@@ -555,6 +557,7 @@ export default class GameScene extends Phaser.Scene {
         EventBus.off('combat-action', this.handleCombatAction, this);
         EventBus.off('items-dropped', this.handleItemsDropped, this);
         EventBus.off('item-picked-up', this.handleItemPickedUp, this);
+        EventBus.off('item-despawned', this.handleItemDespawned, this);
         this.events.off('droppedItemClicked', this.handleDroppedItemClicked, this);
         // --- Remove XP/Level Listeners ---
         EventBus.off('levelUpNotification', this.handleLevelUpNotification, this);
@@ -837,4 +840,16 @@ export default class GameScene extends Phaser.Scene {
         }
     }
      // --- END NEW ---
+
+    private handleItemDespawned(data: { itemId: string }) {
+        console.log(`[GameScene] Handling item despawn for item ${data.itemId}`);
+        const itemSprite = this.droppedItemSprites.get(data.itemId);
+        if (itemSprite) {
+            itemSprite.destroy(); // This will remove the sprite and any associated elements (tooltip, etc.)
+            this.droppedItemSprites.delete(data.itemId);
+            console.log(`[GameScene] Successfully removed despawned item sprite ${data.itemId}`);
+        } else {
+            console.warn(`[GameScene] Could not find sprite for despawned item ${data.itemId}`);
+        }
+    }
 }

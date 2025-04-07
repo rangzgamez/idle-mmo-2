@@ -167,7 +167,17 @@ export class NetworkManager {
                 console.warn('[NetworkManager] Received invalid "itemPickedUp" data format:', data);
             }
         });
-        // ++++++++++++++++++++++++++++++++++++++++
+
+        // +++ ADDED: Listen for item despawn events +++
+        this.socket.on('itemDespawned', (data: { itemId: string }) => {
+            console.log('[NetworkManager] Received "itemDespawned" event:', data);
+            if (data && data.itemId) {
+                EventBus.emit('item-despawned', data);
+                console.log('[NetworkManager] Emitted "item-despawned" to EventBus.');
+            } else {
+                console.warn('[NetworkManager] Received invalid "itemDespawned" data format:', data);
+            }
+        });
 
         // +++ ADDED: Listen for inventory updates (direct to player) +++
         this.socket.on('inventoryUpdate', (data: { inventory: any[] }) => {

@@ -405,7 +405,8 @@ export class GameLoopService implements OnApplicationShutdown {
                         const removed = this.zoneService.removeDroppedItem(zoneId, droppedItem.id);
                         if (removed) {
                             this.logger.verbose(`Despawned item ${removed.itemName} (${removed.id})`);
-                            // TODO: Broadcast itemDespawned event? (Optional)
+                            // Queue the despawn event for broadcast
+                            this.broadcastService.queueItemDespawned(zoneId, removed.id);
                         }
                     }
                 }

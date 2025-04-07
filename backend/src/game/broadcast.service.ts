@@ -46,8 +46,9 @@ export class BroadcastService {
     private combatActionQueue: Map<string, CombatActionData[]> = new Map();
     private deathQueue: Map<string, DeathData[]> = new Map();
     private spawnQueue: Map<string, SpawnData[]> = new Map();
-    private itemDroppedQueue: Map<string, DroppedItemPayload[]> = new Map(); // Add queue
-    private itemPickedUpQueue: Map<string, { itemId: string }[]> = new Map(); // Add queue for item pickup
+    private itemDroppedQueue: Map<string, DroppedItemPayload[]> = new Map();
+    private itemPickedUpQueue: Map<string, { itemId: string }[]> = new Map();
+    private itemDespawnedQueue: Map<string, { itemId: string }[]> = new Map(); // Add queue for despawns
 
     // Inject Logger through the constructor
     constructor(private readonly logger: Logger) {
@@ -130,6 +131,18 @@ export class BroadcastService {
             queue.push({ itemId });
         }
     }
+
+    // Add method to queue item despawn events
+    queueItemDespawned(zoneId: string, itemId: string): void {
+        if (!this.itemDespawnedQueue.has(zoneId)) {
+            this.itemDespawnedQueue.set(zoneId, []);
+        }
+        // Avoid queueing duplicates in the same tick
+        const queue = this.itemDespawnedQueue.get(zoneId);
+        if (queue && !queue.some(p => p.itemId === itemId)) {
+            queue.push({ itemId });
+        }
+    }
     // ---------------------------------------------
 
     // --- Broadcasting Method ---
@@ -197,6 +210,17 @@ export class BroadcastService {
                 this.server?.to(zoneId).emit('itemPickedUp', pickup);
             });
             this.itemPickedUpQueue.delete(zoneId); // Clear queue
+        }
+
+        // --- NEW: Emit itemDespawned events ---
+        const itemsDespawned = this.itemDespawnedQueue.get(zoneId);
+        if (itemsDespawned && itemsDespawned.length > 0) {
+            this.logger.verbose(`[Broadcast] Emitting itemDespawned for zone ${zoneId} with ${itemsDespawned.length} item(s).`);
+            // Client expects individual 'itemDespawned' events { itemId: string }
+            itemsDespawned.forEach(despawn => {
+                this.server?.to(zoneId).emit('itemDespawned', despawn);
+            });
+            this.itemDespawnedQueue.delete(zoneId); // Clear queue
         }
         // -------------------------------------
     }
