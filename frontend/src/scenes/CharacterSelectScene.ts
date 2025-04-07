@@ -1,6 +1,6 @@
 // frontend/src/scenes/CharacterSelectScene.ts
 import Phaser from 'phaser';
-import { NetworkManager } from '../network/NetworkManager';
+import { NetworkManager, CharacterClassTemplateData } from '../network/NetworkManager';
 import { EventBus } from '../EventBus';
 
 // Define an interface for the character data we expect from the backend
@@ -8,6 +8,7 @@ interface CharacterData {
     id: string;
     name: string;
     level: number;
+    class: string;
     // Add other relevant fields later (e.g., class, appearance)
 }
 
@@ -15,13 +16,15 @@ export default class CharacterSelectScene extends Phaser.Scene {
     private characters: CharacterData[] = [];
     private selectedCharacterIds: Set<string> = new Set();
     private readonly MAX_SELECTED_CHARACTERS = 3;
+    private availableClasses: CharacterClassTemplateData[] = [];
+    private selectedClassId: string | null = null;
 
     // UI Elements
     private characterListText: Phaser.GameObjects.Text[] = [];
-    private newCharacterInput!: Phaser.GameObjects.DOMElement;
-    private createButton!: Phaser.GameObjects.DOMElement;
     private enterGameButton!: Phaser.GameObjects.DOMElement;
     private statusText!: Phaser.GameObjects.Text;
+    private showCreateModalButton!: Phaser.GameObjects.DOMElement;
+    private createModalContainer!: Phaser.GameObjects.DOMElement;
 
     constructor() {
         super('CharacterSelectScene');
@@ -29,45 +32,80 @@ export default class CharacterSelectScene extends Phaser.Scene {
 
     create() {
         console.log('CharacterSelectScene create');
-        this.cameras.main.setBackgroundColor('#3d3d3d'); // Slightly lighter background
+        this.cameras.main.setBackgroundColor('#3d3d3d');
 
         const { width, height }: { width: any, height: any } = this.sys.game.config;
         const centerW = Number(width) / 2;
-        // const centerH = Number(height) / 2;
+        const bottomAreaY = height - 60; // Y position for bottom buttons
 
         this.add.text(centerW, 50, 'Select Your Party (Up to 3)', { fontSize: '28px', color: '#fff' }).setOrigin(0.5);
 
-        // Status Text
+        // Status Text (moved slightly up)
         this.statusText = this.add.text(centerW, height - 30, '', { fontSize: '16px', color: '#ff0000', align: 'center' })
             .setOrigin(0.5);
 
-        // --- Character Creation UI ---
-        this.newCharacterInput = this.add.dom(centerW - 150, height - 100).createFromHTML(`
-            <input type="text" name="charName" placeholder="New Character Name" style="width: 200px; padding: 10px; font-size: 14px;">
+        // --- Add "Create New Character" Button --- 
+        this.showCreateModalButton = this.add.dom(centerW - 100, bottomAreaY).createFromHTML(`
+            <button name="showCreate" style="width: 180px; padding: 10px; font-size: 14px;">Create New Character</button>
         `);
-        this.createButton = this.add.dom(centerW + 100, height - 100).createFromHTML(`
-            <button name="create" style="width: 120px; padding: 10px; font-size: 14px;">Create</button>
-        `);
-
-        this.createButton.addListener('click');
-        this.createButton.on('click', () => {
-            this.handleCreateCharacter();
+        this.showCreateModalButton.addListener('click');
+        this.showCreateModalButton.on('click', () => {
+            this.showCreateCharacterModal();
         });
 
-        // --- Enter Game Button ---
-        this.enterGameButton = this.add.dom(centerW, height - 60).createFromHTML(`
-            <button name="enter" style="width: 332px; padding: 10px; font-size: 16px; background-color: #4CAF50; color: white;">Enter Game</button>
+        // --- Enter Game Button (moved slightly right) ---
+        this.enterGameButton = this.add.dom(centerW + 100, bottomAreaY).createFromHTML(`
+            <button name="enter" style="width: 180px; padding: 10px; font-size: 14px; background-color: #4CAF50; color: white;">Enter Game</button>
         `);
         this.enterGameButton.addListener('click');
         this.enterGameButton.on('click', () => {
             this.handleEnterGame();
         });
-        // Initially disable Enter Game button until characters are selected
         this.toggleEnterGameButton(false);
 
+        // --- Add Modal Container (Initially Hidden) ---
+        this.createModalContainer = this.add.dom(centerW, height / 2).createFromHTML(`
+            <div id="create-modal" style="
+                display: none; /* Hidden by default */
+                position: absolute;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                width: 500px;
+                padding: 20px;
+                background-color: #555;
+                border: 2px solid #ccc;
+                border-radius: 8px;
+                z-index: 100; 
+                color: white;
+                box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+            ">
+                <h3 style="text-align: center; margin-top: 0;">Create New Character</h3>
+                
+                <div style="margin-bottom: 15px;">
+                    <label>Select Class:</label>
+                    <div id="modal-class-select-container" style="display: flex; justify-content: space-around; align-items: stretch; margin-top: 10px; flex-wrap: wrap; gap: 10px;">
+                        <!-- Class options will be loaded here -->
+                    </div>
+                </div>
+                
+                <div style="margin-bottom: 20px;">
+                    <label for="modalCharName">Name:</label>
+                    <input type="text" id="modalCharName" name="modalCharName" placeholder="Character Name" style="width: calc(100% - 22px); padding: 10px; font-size: 14px; margin-top: 5px;">
+                </div>
+                
+                <div style="display: flex; justify-content: space-between;">
+                    <button id="modal-cancel-button" style="padding: 10px 20px; font-size: 14px;">Cancel</button>
+                    <button id="modal-create-button" style="padding: 10px 20px; font-size: 14px; background-color: #888; color: #ccc; cursor: not-allowed;" disabled>Create Character</button>
+                </div>
+            </div>
+        `);
 
-        // --- Fetch and Display Characters ---
+        // Add listeners for modal buttons later when modal is shown
+
+        // --- Fetch Initial Data ---
         this.fetchCharacters();
+        this.fetchAndDisplayClasses(); // Fetches classes, will populate modal later
     }
 
     setStatus(message: string, isError: boolean = false) {
@@ -121,17 +159,24 @@ export default class CharacterSelectScene extends Phaser.Scene {
 
         const startY = 100;
         const spacing = 40;
+        const centerW = Number(this.sys.game.config.width) / 2;
 
         if (this.characters.length === 0) {
-             this.add.text(Number(this.sys.game.config.width) / 2, startY + 50, 'No characters found. Create one below!', { fontSize: '18px', color: '#ccc' }).setOrigin(0.5);
-             return; // No need to proceed further
+             this.add.text(centerW, startY + 50, 'No characters found. Create one below!', { fontSize: '18px', color: '#ccc' }).setOrigin(0.5);
+             return;
         }
 
+        // Create a map for class ID to Name for easy lookup
+        const classNameMap = new Map(this.availableClasses.map(c => [c.classId, c.name]));
+
         this.characters.forEach((char, index) => {
+            // +++ Get class name, default to ID if not found +++
+            const className = classNameMap.get(char.class) || char.class || 'Unknown'; 
             const charText = this.add.text(
-                Number(this.sys.game.config.width) / 2,
+                centerW,
                 startY + index * spacing,
-                `Lv ${char.level} - ${char.name}`,
+                // +++ Update display text +++
+                `Lv ${char.level} ${className} - ${char.name}`,
                 { fontSize: '20px', color: '#fff' }
             ).setOrigin(0.5).setInteractive(); // Make text clickable
 
@@ -184,7 +229,6 @@ export default class CharacterSelectScene extends Phaser.Scene {
         }
     }
 
-
     toggleEnterGameButton(enabled: boolean) {
         const buttonElement = (this.enterGameButton.node as HTMLElement).querySelector('button');
         if (buttonElement) {
@@ -195,16 +239,27 @@ export default class CharacterSelectScene extends Phaser.Scene {
     }
 
     async handleCreateCharacter() {
-        const inputContainer = this.newCharacterInput.node as HTMLElement;
-        const inputElement = inputContainer.querySelector('input[name="charName"]') as HTMLInputElement | null;
+        // This is now triggered by the MODAL's create button
+        const modalElement = this.createModalContainer.node.querySelector('#create-modal') as HTMLElement;
+        if (!modalElement) return; // Should not happen if button is clickable
 
+        const inputElement = modalElement.querySelector('#modalCharName') as HTMLInputElement | null;
+        
+        // Class selection check remains
+        if (!this.selectedClassId) {
+            this.setStatus('Please select a class for the new character.', true);
+            return;
+        }
+
+        // Input element check
         if (!inputElement) {
-            console.error('Cannot find character name input element.');
+            console.error('Cannot find character name input element in modal.');
             this.setStatus('Internal error creating character.', true);
             return;
         }
 
         const name = inputElement.value.trim();
+        // Name validation checks remain
         if (!name) {
             this.setStatus('Please enter a name for the new character.', true);
             return;
@@ -215,10 +270,10 @@ export default class CharacterSelectScene extends Phaser.Scene {
          }
 
         this.setStatus('Creating character...', false);
-        // Disable create button during request
-        const createBtnElement = (this.createButton.node as HTMLElement).querySelector('button');
+        
+        // Disable modal's create button during request
+        const createBtnElement = modalElement.querySelector('#modal-create-button') as HTMLButtonElement;
         if(createBtnElement) createBtnElement.disabled = true;
-
 
         const token = localStorage.getItem('jwtToken');
         if (!token) {
@@ -229,33 +284,32 @@ export default class CharacterSelectScene extends Phaser.Scene {
         }
 
         try {
-            const response = await fetch('http://localhost:3000/characters', //'http://141.155.171.22:3000/auth/login', 
+            const response = await fetch(`${NetworkManager.getInstance()['apiBaseUrl']}/characters`, // Use NM's base URL
             {
                 method: 'POST',
                 headers: {
                     'Authorization': `Bearer ${token}`,
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({ name }),
+                body: JSON.stringify({ name, classId: this.selectedClassId }), // Send selected classId
             });
 
             const data = await response.json();
-
             if (!response.ok) {
                 throw new Error(data.message || `Failed to create character (${response.status})`);
             }
 
             // Creation successful
             this.setStatus(`Character '${name}' created!`, false);
-            inputElement.value = ''; // Clear input field
-            this.fetchCharacters(); // Refresh the character list
+            this.hideCreateCharacterModal(); // Close the modal
+            // No need to reset modal state here, resetModalState called on show
+            await this.fetchCharacters(); // Re-fetch character list
 
         } catch (error: any) {
             console.error('Create Character Error:', error);
             this.setStatus(error.message || 'Failed to create character.', true);
         } finally {
-             // Re-enable create button
-             if(createBtnElement) createBtnElement.disabled = false;
+             if(createBtnElement) createBtnElement.disabled = false; // Re-enable modal button if needed (though modal closes)
         }
     }
 
@@ -289,6 +343,164 @@ export default class CharacterSelectScene extends Phaser.Scene {
                  this.setStatus('Server error selecting party. Please try again.', true);
                  // Keep the user on this scene
             }
+        });
+    }
+
+    async fetchAndDisplayClasses() {
+        this.setStatus('Loading classes...', false);
+        try {
+            this.availableClasses = await NetworkManager.getInstance().getAvailableClasses();
+            this.setStatus(''); // Clear status if characters also loaded
+        } catch (error: any) {
+            console.error('Fetch Classes Error:', error);
+            this.setStatus(error.message || 'Failed to load classes.', true);
+            // Handle error appropriately, maybe disable creation
+        }
+    }
+
+    // +++ Add Modal Show/Hide Functions +++
+    showCreateCharacterModal() {
+        const modalElement = this.createModalContainer.node.querySelector('#create-modal') as HTMLElement;
+        if (modalElement) {
+            modalElement.style.display = 'block';
+            this.resetModalState(); // Clear previous state
+            this.displayClassSelectionUI(); // Re-populate classes in the modal
+            this.updateModalCreateButtonState(); // Set initial button state
+
+            // Add listeners for modal buttons now that it's visible
+            const cancelButton = modalElement.querySelector('#modal-cancel-button') as HTMLButtonElement;
+            const createButton = modalElement.querySelector('#modal-create-button') as HTMLButtonElement;
+            const nameInput = modalElement.querySelector('#modalCharName') as HTMLInputElement;
+
+            cancelButton?.removeEventListener('click', this.hideCreateCharacterModal);
+            cancelButton?.addEventListener('click', this.hideCreateCharacterModal.bind(this)); // Use bind or arrow func
+
+            createButton?.removeEventListener('click', this.handleCreateCharacter);
+            createButton?.addEventListener('click', this.handleCreateCharacter.bind(this));
+            
+            nameInput?.removeEventListener('input', this.updateModalCreateButtonState);
+            nameInput?.addEventListener('input', this.updateModalCreateButtonState.bind(this));
+        }
+    }
+
+    hideCreateCharacterModal() {
+        const modalElement = this.createModalContainer.node.querySelector('#create-modal') as HTMLElement;
+        if (modalElement) {
+            modalElement.style.display = 'none';
+        }
+    }
+
+    resetModalState() {
+        this.selectedClassId = null;
+        const modalElement = this.createModalContainer.node.querySelector('#create-modal') as HTMLElement;
+        if (modalElement) {
+            const nameInput = modalElement.querySelector('#modalCharName') as HTMLInputElement;
+            if(nameInput) nameInput.value = '';
+            const classContainer = modalElement.querySelector('#modal-class-select-container') as HTMLElement;
+            if (classContainer) {
+                classContainer.querySelectorAll('div.class-card').forEach(el => {
+                    (el as HTMLElement).style.borderColor = '#ccc';
+                    (el as HTMLElement).style.backgroundColor = '#666'; 
+                });
+            }
+        }
+    }
+
+    // +++ Add Function to Update Modal Create Button State +++
+    updateModalCreateButtonState() {
+        const modalElement = this.createModalContainer.node.querySelector('#create-modal') as HTMLElement;
+        if (!modalElement) return;
+
+        const nameInput = modalElement.querySelector('#modalCharName') as HTMLInputElement;
+        const createButton = modalElement.querySelector('#modal-create-button') as HTMLButtonElement;
+        
+        const nameIsValid = nameInput && nameInput.value.trim().length >= 3 && nameInput.value.trim().length <= 50;
+        const classIsSelected = !!this.selectedClassId;
+        const shouldBeEnabled = nameIsValid && classIsSelected;
+
+        if (createButton) {
+            createButton.disabled = !shouldBeEnabled;
+            createButton.style.backgroundColor = shouldBeEnabled ? '#4CAF50' : '#888';
+            createButton.style.color = shouldBeEnabled ? 'white' : '#ccc';
+            createButton.style.cursor = shouldBeEnabled ? 'pointer' : 'not-allowed';
+        }
+    }
+
+    // Class UI display logic (now populates the MODAL)
+    displayClassSelectionUI() { 
+        // This method needs to be MODIFIED to target the modal's container
+        // and create richer elements (card with image, name, desc)
+        const container = this.createModalContainer.node.querySelector('#modal-class-select-container') as HTMLElement;
+        if (!container) {
+            console.error('Modal class selection container not found!');
+            return;
+        }
+        container.innerHTML = ''; // Clear previous options
+        console.log(`Displaying ${this.availableClasses.length} classes in modal.`);
+
+        this.availableClasses.forEach(charClass => {
+            const card = document.createElement('div');
+            card.className = 'class-card'; // Add a class for easier selection/styling
+            card.style.width = '100px';
+            card.style.padding = '10px';
+            card.style.border = '2px solid #ccc';
+            card.style.borderRadius = '8px';
+            card.style.cursor = 'pointer';
+            card.style.textAlign = 'center';
+            card.style.backgroundColor = '#666'; 
+            card.style.color = '#fff';
+            card.style.display = 'flex';
+            card.style.flexDirection = 'column';
+            card.style.alignItems = 'center';
+            card.style.justifyContent = 'space-between'; 
+            card.dataset.classId = charClass.classId;
+
+            // Basic Image Placeholder (Replace with actual loading later)
+            const img = document.createElement('img');
+            // TODO: Dynamically load sprite based on charClass.spriteKeyBase
+            if (charClass.spriteKeyBase === 'Wizard') {
+                // Assuming Wizard-Idle.png is loaded with key 'wizard-idle'
+                // We need to ensure assets are loaded and keys are consistent
+                 img.src = 'assets/Wizard-Idle.png'; // Direct path for now, adjust as needed
+                 img.alt = 'Wizard';
+            } else {
+                img.src = 'assets/placeholder.png'; // Need a placeholder image
+                 img.alt = 'Placeholder';
+            }
+            img.style.width = '48px';
+            img.style.height = '48px';
+            img.style.marginBottom = '5px';
+            img.style.objectFit = 'contain'; // Prevent stretching
+
+            const name = document.createElement('div');
+            name.textContent = charClass.name;
+            name.style.fontWeight = 'bold';
+            name.style.fontSize = '14px';
+            name.style.marginBottom = '5px';
+
+            const desc = document.createElement('div');
+            desc.textContent = charClass.description;
+            desc.style.fontSize = '11px';
+            desc.style.flexGrow = '1'; // Allow description to take space
+
+            card.appendChild(img);
+            card.appendChild(name);
+            card.appendChild(desc);
+
+            // Select logic
+            card.onclick = () => {
+                this.selectedClassId = charClass.classId;
+                container.querySelectorAll('div.class-card').forEach(el => {
+                    const htmlEl = el as HTMLElement;
+                    const isSelected = htmlEl.dataset.classId === this.selectedClassId;
+                    htmlEl.style.borderColor = isSelected ? '#0f0' : '#ccc';
+                    htmlEl.style.backgroundColor = isSelected ? '#383' : '#666';
+                });
+                console.log(`Selected class: ${this.selectedClassId}`);
+                this.updateModalCreateButtonState(); // Update button state on selection
+            };
+
+            container.appendChild(card);
         });
     }
 }

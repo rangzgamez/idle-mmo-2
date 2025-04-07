@@ -13,6 +13,7 @@ import {
   import { User } from '../user/user.entity'; // Import User entity
   import { InventoryItem } from '../inventory/inventory.entity'; // Re-add InventoryItem import for equipment slots
   // import { EquipmentSlot } from '../item/item.types'; // We might need this for validation/logic later
+  import { CharacterClass } from '../common/enums/character-class.enum'; // Add this import
   
   @Entity('characters') // Database table name
   export class Character {
@@ -38,6 +39,11 @@ import {
     currentZoneId: string | null;
     @Column({ length: 50 })
     name: string;
+  
+    // --- ADDED CLASS --- Add this section
+    @Column({ type: 'enum', enum: CharacterClass, nullable: false, default: CharacterClass.FIGHTER })
+    class: CharacterClass;
+    // -----------------
   
     @Column({ default: 1 })
     level: number;

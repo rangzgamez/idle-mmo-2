@@ -47,9 +47,25 @@ interface CombatActionData {
     type: string;
 }
 
+// +++ Interface for Character Class Template data received from API +++
+export interface CharacterClassTemplateData {
+    classId: string; // Matches CharacterClass enum values (e.g., 'WIZARD')
+    name: string;
+    description: string;
+    baseHealth: number;
+    baseAttack: number;
+    baseDefense: number;
+    attackSpeed: number;
+    attackRange: number;
+    attackType: string; // Matches AttackType enum values
+    spriteKeyBase: string;
+}
+
 export class NetworkManager {
     private socket: Socket | null = null;
     private static instance: NetworkManager;
+    // +++ Add Backend API Base URL (Adjust if needed) +++
+    private apiBaseUrl = 'http://localhost:3000'; // REMOVED /api prefix
 
     private constructor() {}
 
@@ -244,4 +260,35 @@ export class NetworkManager {
         }
         // console.log(`Sent message [${eventName}]:`, data); // Can be noisy
     }
+
+    // +++ NEW Method to fetch available character classes via HTTP +++
+    public async getAvailableClasses(): Promise<CharacterClassTemplateData[]> {
+        const url = `${this.apiBaseUrl}/classes`;
+        console.log(`[NetworkManager] Fetching available classes from ${url}...`);
+        try {
+            const response = await fetch(url, {
+                method: 'GET',
+                headers: {
+                    'Content-Type': 'application/json',
+                    // Add Authorization header if this endpoint requires login
+                    // 'Authorization': `Bearer ${your_token_variable}`
+                },
+            });
+
+            if (!response.ok) {
+                const errorText = await response.text();
+                console.error(`[NetworkManager] Error fetching classes: ${response.status} ${response.statusText}`, errorText);
+                throw new Error(`Failed to fetch classes: ${response.statusText}`);
+            }
+
+            const classes: CharacterClassTemplateData[] = await response.json();
+            console.log(`[NetworkManager] Successfully fetched ${classes.length} classes.`);
+            return classes;
+        } catch (error) {
+            console.error('[NetworkManager] Network or parsing error fetching classes:', error);
+            // Re-throw or return empty array/handle as appropriate for the UI
+            throw error;
+        }
+    }
+    // +++ END NEW Method +++
 }

@@ -28,6 +28,7 @@ This document outlines the architecture, database schema, and development plan f
     *   **Return to Anchor:** Idle characters with no targets return to their anchor point.
     *   **Attack Cooldown:** Characters respect `attackSpeed` between attacks.
     *   **Enemy AI (`AIService`):** Enemies find nearest living character, move within range, and attack based on their stats.
+    *   **Item Despawn:** Dropped items are automatically removed after a set duration, with events broadcasted to all clients.
     *   Broadcasts updates (`entityUpdate`).
 *   **Client-Side Interpolation:** Frontend smoothly interpolates sprites (`CharacterSprite`, `EnemySprite`).
 *   **Multiplayer Zones:** Multiple players and enemies inhabit shared zones (`ZoneService`).
@@ -206,6 +207,7 @@ graph TD
     *   **`equipmentUpdate` { characterId: string, equipment: Partial<Record<EquipmentSlot, InventoryItem>> } (NEW)**
     *   **`itemDropped` { itemId: string, templateId: string, x: number, y: number } (NEW - Loot Phase)**
     *   **`itemPickedUp` { pickerCharacterId: string, itemId: string } (NEW - Loot Phase)**
+    *   **`itemDespawned` { itemId: string } (NEW - Item Removal)**
     *   **`itemsDropped` { items: DroppedItemData[] } (NEW - Loot Phase: Provides full item data for rendering)**
     *   **`levelUpNotification` { characterId: string, newLevel: number, newBaseStats: {...}, xp: number, xpToNextLevel: number } (NEW - Direct to User)**
     *   **`xpUpdate` { characterId: string, level: number, xp: number, xpToNextLevel: number } (NEW - Direct to User)**
@@ -518,6 +520,7 @@ export class InventoryItem {
 *   Death Handling & Basic Respawn: Complete.
 *   Inventory, Loot & Equipment: Complete.
     *   **Note:** Visual ground items and click-to-pickup are implemented. Loot allocation rules (who gets the drop initially) are basic (first come, first served implicitly by pickup command); complex allocation rules are deferred.
+    *   **Item Despawn:** Dropped items automatically despawn after a set duration, with proper cleanup on both backend and frontend.
 
 **➡️ Phase 7: Experience & Leveling (**Complete**)**
 1.  [X] Backend: Add `xpReward` to `Enemy` entity.

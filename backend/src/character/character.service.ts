@@ -11,6 +11,8 @@ import { ItemTemplate } from '../item/item.entity'; // Import ItemTemplate
 import { EquipmentSlot, ItemType } from '../item/item.types'; // Import Enums
 import { ZoneService } from '../game/zone.service'; // <-- Import ZoneService
 import { BroadcastService } from '../game/broadcast.service'; // + ADDED
+import { CharacterClassService } from '../character-class/character-class.service'; // +++ IMPORT CLASS SERVICE
+import { CharacterClassTemplate } from '../character-class/character-class-template.entity'; // +++ IMPORT CLASS TEMPLATE
 
 @Injectable()
 export class CharacterService {
@@ -29,6 +31,8 @@ export class CharacterService {
     // + ADDED BroadcastService injection
     @Inject(forwardRef(() => BroadcastService))
     private broadcastService: BroadcastService,
+    // +++ INJECT CHARACTER CLASS SERVICE +++
+    private readonly characterClassService: CharacterClassService,
   ) {}
 
   // Add logger instance at the end of the class definition
@@ -38,7 +42,8 @@ export class CharacterService {
     createCharacterDto: CreateCharacterDto,
     user: User, // Receive the authenticated user object
   ): Promise<Character> {
-    const { name } = createCharacterDto;
+    // +++ Destructure classId +++
+    const { name, classId } = createCharacterDto;
 
     // 1. Check character count for the user
     const count = await this.characterRepository.count({ where: { userId: user.id } });
@@ -46,23 +51,35 @@ export class CharacterService {
       throw new ForbiddenException(`Maximum character limit (${this.MAX_CHARACTERS_PER_USER}) reached.`);
     }
 
-    // 2. Check if character name already exists for this user (optional, maybe allow same name?)
-    // const existingName = await this.characterRepository.findOneBy({ userId: user.id, name });
-    // if (existingName) {
-    //   throw new ConflictException('Character name already exists for this user.');
-    // }
+    // +++ 2. Fetch the Class Template +++
+    const classTemplate = await this.characterClassService.findOneByClassId(classId); // Assuming findOneByClassId exists
+    if (!classTemplate) {
+      throw new BadRequestException(`Invalid character class ID: ${classId}`);
+    }
 
-    // 3. Create and save the new character
+    // 3. Check if character name already exists (optional)
+    // ... (existing name check logic)
+
+    // +++ 4. Create and save the new character with class stats +++
     const newCharacter = this.characterRepository.create({
       name,
       userId: user.id,
-      // user: user, // Can assign the relation object directly if needed later
-      // Set initial stats/level if desired
+      class: classId, // Assign the chosen class
       level: 1,
       xp: 0,
+      // Assign stats from the template
+      baseHealth: classTemplate.baseHealth,
+      baseAttack: classTemplate.baseAttack,
+      baseDefense: classTemplate.baseDefense,
+      attackSpeed: classTemplate.attackSpeed,
+      attackRange: classTemplate.attackRange,
+      // Keep existing defaults for aggro/leash unless defined in template
+      // aggroRange: classTemplate.aggroRange ?? 150, 
+      // leashDistance: classTemplate.leashDistance ?? 400,
     });
 
     await this.characterRepository.save(newCharacter);
+    this.logger.log(`Created character ${newCharacter.id} (${newCharacter.name}) for user ${user.id} with class ${classId}`);
     return newCharacter; // Return the created character data
   }
 

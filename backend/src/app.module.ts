@@ -11,6 +11,7 @@ import { DebugModule } from './debug/debug.module';
 import { ItemModule } from './item/item.module';
 import { InventoryModule } from './inventory/inventory.module';
 import { LootModule } from './loot/loot.module';
+import { CharacterClassModule } from './character-class/character-class.module';
 
 @Module({
   imports: [
@@ -36,6 +37,7 @@ import { LootModule } from './loot/loot.module';
     ItemModule,
     InventoryModule,
     LootModule,
+    CharacterClassModule,
     // Add other modules here as you create them
     // AuthModule, UserModule, CharacterModule, GameModule, etc.
   ],

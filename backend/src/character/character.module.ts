@@ -8,12 +8,14 @@ import { Character } from './character.entity';
 import { AuthModule } from '../auth/auth.module';
 import { InventoryModule } from '../inventory/inventory.module';
 import { GameModule } from '../game/game.module';
+import { CharacterClassModule } from '../character-class/character-class.module';
 @Module({
   imports: [
     TypeOrmModule.forFeature([Character]), // Register Character repository
     AuthModule, // Needed for guards if applied here
     forwardRef(() => InventoryModule), // Use forwardRef for InventoryModule
     forwardRef(() => GameModule), // Use forwardRef for ZoneModule
+    CharacterClassModule,
   ],
   controllers: [CharacterController],
   providers: [CharacterService],
