@@ -22,6 +22,9 @@ export default class CharacterSelectScene extends Phaser.Scene {
     private activeWalkAnimationIntervalId: NodeJS.Timeout | null = null;
     private activeWalkAnimationClassId: string | null = null;
     // -------------------------------------
+    // --- Map to store calculated frame counts --- 
+    private animationFrameCounts: Map<string, { attack: number, walk: number }> = new Map();
+    // ------------------------------------------
 
     // UI Elements
     private characterListText: Phaser.GameObjects.Text[] = [];
@@ -30,11 +33,11 @@ export default class CharacterSelectScene extends Phaser.Scene {
     private showCreateModalButton!: Phaser.GameObjects.DOMElement;
     private createModalContainer!: Phaser.GameObjects.DOMElement;
 
-    // --- Animation Constants (Adjust as needed) ---
+    // --- Animation Constants (used as fallbacks) ---
     private readonly FRAME_WIDTH = 100;
-    private readonly ATTACK_FRAME_COUNT = 4; // Example: 4 frames in attack sheet
-    private readonly WALK_FRAME_COUNT = 4; // Example: 4 frames in walk sheet
-    private readonly ANIM_INTERVAL_MS = 150; // Milliseconds per frame
+    private readonly ATTACK_FRAME_COUNT = 4; 
+    private readonly WALK_FRAME_COUNT = 4; 
+    private readonly ANIM_INTERVAL_MS = 150; 
     // -------------------------------------------
 
     constructor() {
@@ -444,10 +447,9 @@ export default class CharacterSelectScene extends Phaser.Scene {
             console.error('Modal class selection container not found!');
             return;
         }
-        container.innerHTML = ''; // Clear previous options
-        // --- Stop any existing animation when repopulating ---
+        container.innerHTML = ''; 
         this.stopAndResetAllAnimations(container);
-        // -------------------------------------------------
+        this.animationFrameCounts.clear(); // Clear old counts when rebuilding UI
         console.log(`Displaying ${this.availableClasses.length} classes in modal.`);
 
         this.availableClasses.forEach(charClass => {
@@ -467,20 +469,22 @@ export default class CharacterSelectScene extends Phaser.Scene {
             card.style.justifyContent = 'space-between'; 
             card.dataset.classId = charClass.classId;
 
-            // --- Store sprite paths in dataset --- 
             const idleSpritePath = `assets/sprites/characters/${charClass.spriteKeyBase}/idle.png`;
             const attackSpritePath = `assets/sprites/characters/${charClass.spriteKeyBase}/attack.png`;
             const walkSpritePath = `assets/sprites/characters/${charClass.spriteKeyBase}/walk.png`;
             card.dataset.idleSprite = idleSpritePath;
             card.dataset.attackSprite = attackSpritePath;
             card.dataset.walkSprite = walkSpritePath;
-            // -------------------------------------
+            
+            // --- Initiate image loading to calculate frame counts --- 
+            this.loadAndStoreFrameCounts(charClass.classId, attackSpritePath, walkSpritePath);
+            // --------------------------------------------------------
 
             const imgPreview = document.createElement('div');
             imgPreview.id = `img-preview-${charClass.classId}`;
             imgPreview.style.width = `${this.FRAME_WIDTH}px`;
             imgPreview.style.height = `${this.FRAME_WIDTH}px`;
-            imgPreview.style.backgroundImage = `url('${idleSpritePath}')`; // Start with idle
+            imgPreview.style.backgroundImage = `url('${idleSpritePath}')`;
             imgPreview.style.backgroundPosition = '0px 0px';
             imgPreview.style.backgroundRepeat = 'no-repeat';
             imgPreview.style.marginBottom = '5px';
@@ -539,15 +543,51 @@ export default class CharacterSelectScene extends Phaser.Scene {
             container.appendChild(card);
         });
     }
+    
+    // --- Helper to load images and store frame counts --- 
+    loadAndStoreFrameCounts(classId: string, attackSrc: string, walkSrc: string) {
+        const counts = { attack: this.ATTACK_FRAME_COUNT, walk: this.WALK_FRAME_COUNT }; // Initialize with defaults
+        this.animationFrameCounts.set(classId, counts); // Store defaults immediately
+
+        const attackImg = new Image();
+        attackImg.onload = () => {
+            const frameCount = Math.max(1, Math.floor(attackImg.width / this.FRAME_WIDTH)); // Ensure at least 1 frame
+            console.log(`Loaded ${attackSrc}: width=${attackImg.width}, calculated attack frames=${frameCount}`);
+            counts.attack = frameCount;
+            this.animationFrameCounts.set(classId, counts); // Update map with actual count
+            console.log(`Animation frame counts: ${JSON.stringify(this.animationFrameCounts)}`);
+        };
+        attackImg.onerror = () => {
+            console.error(`Failed to load attack image for frame count: ${attackSrc}`);
+        };
+        attackImg.src = attackSrc;
+
+        const walkImg = new Image();
+        walkImg.onload = () => {
+            const frameCount = Math.max(1, Math.floor(walkImg.width / this.FRAME_WIDTH));
+            console.log(`Loaded ${walkSrc}: width=${walkImg.width}, calculated walk frames=${frameCount}`);
+            counts.walk = frameCount;
+            this.animationFrameCounts.set(classId, counts); // Update map with actual count
+        };
+        walkImg.onerror = () => {
+            console.error(`Failed to load walk image for frame count: ${walkSrc}`);
+        };
+        walkImg.src = walkSrc;
+    }
+    // ----------------------------------------------------
 
     // --- Helper to stop all animations and reset previews ---
     stopAndResetAllAnimations(container: HTMLElement) {
+        // Clear the active walking interval (if any)
+        const previouslyWalkingClassId = this.activeWalkAnimationClassId; 
         if (this.activeWalkAnimationIntervalId !== null) {
             clearInterval(this.activeWalkAnimationIntervalId);
             this.activeWalkAnimationIntervalId = null;
             this.activeWalkAnimationClassId = null;
+            console.log(`Cleared walk interval for: ${previouslyWalkingClassId}`); 
         }
-        // Ensure all previews are reset to idle frame even if interval wasn't active
+        
+        console.log("Resetting all card previews to idle...");
         container.querySelectorAll('div.class-card').forEach(el => {
             const card = el as HTMLElement;
             const classId = card.dataset.classId;
@@ -555,12 +595,28 @@ export default class CharacterSelectScene extends Phaser.Scene {
             if (classId && idleSprite) {
                 const imgPreview = container.querySelector(`#img-preview-${classId}`) as HTMLElement;
                 if (imgPreview) {
+                    // --- Clear any active ATTACK interval for this preview --- 
+                    const attackIntervalIdStr = imgPreview.dataset.attackIntervalId;
+                    if (attackIntervalIdStr) {
+                        const attackIntervalIdNum = parseInt(attackIntervalIdStr, 10);
+                        if (!isNaN(attackIntervalIdNum)) {
+                            clearInterval(attackIntervalIdNum);
+                            console.log(` > Cleared stray attack interval ${attackIntervalIdNum} for ${classId}`);
+                        }
+                        delete imgPreview.dataset.attackIntervalId; // Remove from dataset
+                    }
+                    // -------------------------------------------------------
+
+                    console.log(` > Resetting preview for ${classId}`);
                     imgPreview.style.backgroundImage = `url('${idleSprite}')`;
                     imgPreview.style.backgroundPosition = '0px 0px';
+                } else {
+                    console.warn(`Could not find imgPreview element to reset for ${classId}`);
                 }
+            } else {
+                console.warn("Card missing classId or idleSprite dataset", card);
             }
         });
-        console.log("Stopped and reset all animations.");
     }
     // ----------------------------------------------------
 
@@ -569,7 +625,7 @@ export default class CharacterSelectScene extends Phaser.Scene {
         const card = this.createModalContainer.node.querySelector(`.class-card[data-class-id="${classId}"]`) as HTMLElement;
         const imgPreview = this.createModalContainer.node.querySelector(`#img-preview-${classId}`) as HTMLElement;
         
-        if (!card || !imgPreview) {
+        if (!card || !imgPreview) { 
             console.error(`Cannot find card or imgPreview for animation: ${classId}`);
             return;
         }
@@ -580,40 +636,54 @@ export default class CharacterSelectScene extends Phaser.Scene {
 
         if (!attackSprite || !walkSprite || !idleSprite) {
             console.error(`Missing sprite paths for animation: ${classId}`);
-            return; // Cannot animate without paths
+            return; 
         }
+
+        // --- Use stored/calculated frame counts (with fallbacks) --- 
+        const counts = this.animationFrameCounts.get(classId) || { attack: this.ATTACK_FRAME_COUNT, walk: this.WALK_FRAME_COUNT };
+        const attackFrameCount = counts.attack;
+        const walkFrameCount = counts.walk;
+        console.log(`Animating ${classId}: Attack Frames=${attackFrameCount}, Walk Frames=${walkFrameCount}`);
 
         let attackFrame = 0;
         imgPreview.style.backgroundImage = `url('${attackSprite}')`;
-        imgPreview.style.backgroundPosition = '0px 0px';
-        console.log(`Starting attack animation for ${classId}`);
-
+        
         const attackIntervalId = setInterval(() => {
+            // --- Store attack interval ID on the element --- 
+            // Note: setInterval returns Timeout in NodeJS, need to handle potential type differences
+            // For simplicity in DOM context, let's assume it behaves like window.setInterval (returns number)
+            imgPreview.dataset.attackIntervalId = String(attackIntervalId as unknown as number); 
+            // -----------------------------------------------
+
+            const currentX = -attackFrame * this.FRAME_WIDTH;
+            imgPreview.style.backgroundPosition = `${currentX}px 0px`;
             attackFrame++;
-            if (attackFrame < this.ATTACK_FRAME_COUNT) {
-                const newX = -attackFrame * this.FRAME_WIDTH;
-                imgPreview.style.backgroundPosition = `${newX}px 0px`;
-            } else {
+            
+            if (attackFrame >= attackFrameCount) {
                 // Attack finished
                 clearInterval(attackIntervalId);
+                // --- Remove attack interval ID from dataset --- 
+                if (imgPreview.dataset.attackIntervalId) {
+                    delete imgPreview.dataset.attackIntervalId;
+                }
+                // --------------------------------------------
                 console.log(`Attack finished for ${classId}, starting walk.`);
                 
-                // Start walking animation
+                // --- Start walking animation (logic remains the same) ---
                 let walkFrame = 0;
                 imgPreview.style.backgroundImage = `url('${walkSprite}')`;
                 imgPreview.style.backgroundPosition = '0px 0px';
-
-                // Clear any lingering walk interval just in case
+                
                 if (this.activeWalkAnimationIntervalId !== null) {
                     clearInterval(this.activeWalkAnimationIntervalId);
                 }
-
                 this.activeWalkAnimationClassId = classId;
-                this.activeWalkAnimationIntervalId = setInterval(() => {
-                    walkFrame = (walkFrame + 1) % this.WALK_FRAME_COUNT;
-                    const newX = -walkFrame * this.FRAME_WIDTH;
-                    imgPreview.style.backgroundPosition = `${newX}px 0px`;
+                this.activeWalkAnimationIntervalId = setInterval(() => { 
+                    const currentWalkX = -walkFrame * this.FRAME_WIDTH;
+                    imgPreview.style.backgroundPosition = `${currentWalkX}px 0px`;
+                    walkFrame = (walkFrame + 1) % walkFrameCount;
                 }, this.ANIM_INTERVAL_MS);
+                // ----------------------------------------------------
             }
         }, this.ANIM_INTERVAL_MS);
     }
