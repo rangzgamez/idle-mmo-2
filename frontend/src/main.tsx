@@ -10,15 +10,15 @@ import UIScene from './scenes/UIScene';
 // Define the Phaser game configuration
 const config: Phaser.Types.Core.GameConfig = {
     type: Phaser.AUTO, // Use WebGL if available, otherwise Canvas
-    width: 1280,       // Set your desired game width
-    height: 720,      // Set your desired game height
+    width: 1024,       // Set your desired game width
+    height: 768,      // Set your desired game height
     parent: 'game-container', // ID of the DOM element to attach the canvas to
     pixelArt: true,    // Recommended for crisp pixel art
     physics: {
         default: 'arcade', // Using Arcade physics initially
         arcade: {
             // gravity: { y: 0 }, // No gravity for top-down
-            debug: import.meta.env.DEV, // Show physics debug bodies in development
+            debug: false, // Show physics debug bodies in development
         },
     },
     // Define all the scenes in your game

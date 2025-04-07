@@ -18,6 +18,10 @@ export default class CharacterSelectScene extends Phaser.Scene {
     private readonly MAX_SELECTED_CHARACTERS = 3;
     private availableClasses: CharacterClassTemplateData[] = [];
     private selectedClassId: string | null = null;
+    // --- Store active animation interval --- 
+    private activeWalkAnimationIntervalId: NodeJS.Timeout | null = null;
+    private activeWalkAnimationClassId: string | null = null;
+    // -------------------------------------
 
     // UI Elements
     private characterListText: Phaser.GameObjects.Text[] = [];
@@ -25,6 +29,13 @@ export default class CharacterSelectScene extends Phaser.Scene {
     private statusText!: Phaser.GameObjects.Text;
     private showCreateModalButton!: Phaser.GameObjects.DOMElement;
     private createModalContainer!: Phaser.GameObjects.DOMElement;
+
+    // --- Animation Constants (Adjust as needed) ---
+    private readonly FRAME_WIDTH = 100;
+    private readonly ATTACK_FRAME_COUNT = 4; // Example: 4 frames in attack sheet
+    private readonly WALK_FRAME_COUNT = 4; // Example: 4 frames in walk sheet
+    private readonly ANIM_INTERVAL_MS = 150; // Milliseconds per frame
+    // -------------------------------------------
 
     constructor() {
         super('CharacterSelectScene');
@@ -434,6 +445,9 @@ export default class CharacterSelectScene extends Phaser.Scene {
             return;
         }
         container.innerHTML = ''; // Clear previous options
+        // --- Stop any existing animation when repopulating ---
+        this.stopAndResetAllAnimations(container);
+        // -------------------------------------------------
         console.log(`Displaying ${this.availableClasses.length} classes in modal.`);
 
         this.availableClasses.forEach(charClass => {
@@ -453,17 +467,26 @@ export default class CharacterSelectScene extends Phaser.Scene {
             card.style.justifyContent = 'space-between'; 
             card.dataset.classId = charClass.classId;
 
-            // +++ Image Preview using CSS Background +++
+            // --- Store sprite paths in dataset --- 
+            const idleSpritePath = `assets/sprites/characters/${charClass.spriteKeyBase}/idle.png`;
+            const attackSpritePath = `assets/sprites/characters/${charClass.spriteKeyBase}/attack.png`;
+            const walkSpritePath = `assets/sprites/characters/${charClass.spriteKeyBase}/walk.png`;
+            card.dataset.idleSprite = idleSpritePath;
+            card.dataset.attackSprite = attackSpritePath;
+            card.dataset.walkSprite = walkSpritePath;
+            // -------------------------------------
+
             const imgPreview = document.createElement('div');
-            const spriteSheetPath = `assets/sprites/characters/${charClass.spriteKeyBase}/idle.png`;
-            imgPreview.style.width = '100px';
-            imgPreview.style.height = '100px';
-            imgPreview.style.backgroundImage = `url('${spriteSheetPath}')`;
-            imgPreview.style.backgroundPosition = '0px 0px'; // Top-left frame
+            imgPreview.id = `img-preview-${charClass.classId}`;
+            imgPreview.style.width = `${this.FRAME_WIDTH}px`;
+            imgPreview.style.height = `${this.FRAME_WIDTH}px`;
+            imgPreview.style.backgroundImage = `url('${idleSpritePath}')`; // Start with idle
+            imgPreview.style.backgroundPosition = '0px 0px';
             imgPreview.style.backgroundRepeat = 'no-repeat';
             imgPreview.style.marginBottom = '5px';
-            imgPreview.style.border = '1px solid #444'; // Optional border for the frame
-            // +++++++++++++++++++++++++++++++++++++++++++
+            imgPreview.style.transformOrigin = 'center'; 
+            imgPreview.style.transform = 'scale(2.0)';
+            imgPreview.style.imageRendering = 'pixelated';
 
             const name = document.createElement('div');
             name.textContent = charClass.name;
@@ -476,24 +499,123 @@ export default class CharacterSelectScene extends Phaser.Scene {
             desc.style.fontSize = '11px';
             desc.style.flexGrow = '1';
 
-            card.appendChild(imgPreview); // Add the div preview
+            card.appendChild(imgPreview);
             card.appendChild(name);
             card.appendChild(desc);
 
-            // Select logic (remains the same)
             card.onclick = () => {
-                this.selectedClassId = charClass.classId;
+                const previouslySelectedClassId = this.selectedClassId;
+                const newlySelectedClassId = charClass.classId;
+                
+                // Don't re-trigger animation if clicking the already selected card
+                if (previouslySelectedClassId === newlySelectedClassId) {
+                    return; 
+                }
+
+                this.selectedClassId = newlySelectedClassId;
+                console.log(`Selected class: ${this.selectedClassId}`);
+
+                // --- Stop animations and update styles --- 
+                this.stopAndResetAllAnimations(container); // Stop all animations first
                 container.querySelectorAll('div.class-card').forEach(el => {
                     const htmlEl = el as HTMLElement;
-                    const isSelected = htmlEl.dataset.classId === this.selectedClassId;
+                    const currentCardClassId = htmlEl.dataset.classId;
+                    const isSelected = currentCardClassId === this.selectedClassId;
+                    
                     htmlEl.style.borderColor = isSelected ? '#0f0' : '#ccc';
                     htmlEl.style.backgroundColor = isSelected ? '#383' : '#666';
+
+                    // Reset non-selected card previews to idle (already done by stopAndResetAllAnimations)
                 });
-                console.log(`Selected class: ${this.selectedClassId}`);
+                // -----------------------------------------
+
+                // --- Start animation for the newly selected card --- 
+                this.playAttackThenWalkAnimation(newlySelectedClassId);
+                // -------------------------------------------------
+
                 this.updateModalCreateButtonState();
             };
 
             container.appendChild(card);
         });
     }
+
+    // --- Helper to stop all animations and reset previews ---
+    stopAndResetAllAnimations(container: HTMLElement) {
+        if (this.activeWalkAnimationIntervalId !== null) {
+            clearInterval(this.activeWalkAnimationIntervalId);
+            this.activeWalkAnimationIntervalId = null;
+            this.activeWalkAnimationClassId = null;
+        }
+        // Ensure all previews are reset to idle frame even if interval wasn't active
+        container.querySelectorAll('div.class-card').forEach(el => {
+            const card = el as HTMLElement;
+            const classId = card.dataset.classId;
+            const idleSprite = card.dataset.idleSprite;
+            if (classId && idleSprite) {
+                const imgPreview = container.querySelector(`#img-preview-${classId}`) as HTMLElement;
+                if (imgPreview) {
+                    imgPreview.style.backgroundImage = `url('${idleSprite}')`;
+                    imgPreview.style.backgroundPosition = '0px 0px';
+                }
+            }
+        });
+        console.log("Stopped and reset all animations.");
+    }
+    // ----------------------------------------------------
+
+    // --- Helper to play Attack -> Walk sequence ---
+    playAttackThenWalkAnimation(classId: string) {
+        const card = this.createModalContainer.node.querySelector(`.class-card[data-class-id="${classId}"]`) as HTMLElement;
+        const imgPreview = this.createModalContainer.node.querySelector(`#img-preview-${classId}`) as HTMLElement;
+        
+        if (!card || !imgPreview) {
+            console.error(`Cannot find card or imgPreview for animation: ${classId}`);
+            return;
+        }
+        
+        const attackSprite = card.dataset.attackSprite;
+        const walkSprite = card.dataset.walkSprite;
+        const idleSprite = card.dataset.idleSprite;
+
+        if (!attackSprite || !walkSprite || !idleSprite) {
+            console.error(`Missing sprite paths for animation: ${classId}`);
+            return; // Cannot animate without paths
+        }
+
+        let attackFrame = 0;
+        imgPreview.style.backgroundImage = `url('${attackSprite}')`;
+        imgPreview.style.backgroundPosition = '0px 0px';
+        console.log(`Starting attack animation for ${classId}`);
+
+        const attackIntervalId = setInterval(() => {
+            attackFrame++;
+            if (attackFrame < this.ATTACK_FRAME_COUNT) {
+                const newX = -attackFrame * this.FRAME_WIDTH;
+                imgPreview.style.backgroundPosition = `${newX}px 0px`;
+            } else {
+                // Attack finished
+                clearInterval(attackIntervalId);
+                console.log(`Attack finished for ${classId}, starting walk.`);
+                
+                // Start walking animation
+                let walkFrame = 0;
+                imgPreview.style.backgroundImage = `url('${walkSprite}')`;
+                imgPreview.style.backgroundPosition = '0px 0px';
+
+                // Clear any lingering walk interval just in case
+                if (this.activeWalkAnimationIntervalId !== null) {
+                    clearInterval(this.activeWalkAnimationIntervalId);
+                }
+
+                this.activeWalkAnimationClassId = classId;
+                this.activeWalkAnimationIntervalId = setInterval(() => {
+                    walkFrame = (walkFrame + 1) % this.WALK_FRAME_COUNT;
+                    const newX = -walkFrame * this.FRAME_WIDTH;
+                    imgPreview.style.backgroundPosition = `${newX}px 0px`;
+                }, this.ANIM_INTERVAL_MS);
+            }
+        }, this.ANIM_INTERVAL_MS);
+    }
+    // -------------------------------------------
 }
