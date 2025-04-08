@@ -10,6 +10,7 @@ interface EntityUpdateData {
     y?: number | null;
     health?: number | null;
     state?: string;
+    className?: string;
 }
 
 interface CombatActionData {

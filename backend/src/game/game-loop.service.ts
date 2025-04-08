@@ -284,8 +284,10 @@ export class GameLoopService implements OnApplicationShutdown {
                                  x: character.positionX,
                                  y: character.positionY,
                                  health: character.currentHealth,
-                                 state: character.state
+                                 state: character.state,
+                                 className: character.class
                              };
+                             console.log('[GameLoop] Queueing entityUpdate:', updateData);
                               this.broadcastService.queueEntityUpdate(zoneId, updateData);
                          }
 
@@ -319,7 +321,8 @@ export class GameLoopService implements OnApplicationShutdown {
                             id: charUpdate.id, 
                             x: charState?.positionX, 
                             y: charState?.positionY, 
-                            health: charUpdate.health 
+                            health: charUpdate.health,
+                            className: charState?.class
                         };
                          this.broadcastService.queueEntityUpdate(zoneId, updatePayload);
                      });

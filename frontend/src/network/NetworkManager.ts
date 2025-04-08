@@ -127,9 +127,17 @@ export class NetworkManager {
             EventBus.emit('chat-message-received', data); // Emit local event
         });
         // Entity Updates (receives batched updates)
-        this.socket.on('entityUpdate', (data: { updates: EntityUpdateData[] }) => {
-            // console.log('NetworkManager: Received "entityUpdate"', data); // Can be very noisy!
-            EventBus.emit('entity-update', data);
+        this.socket.on('entityUpdate', (payload: { updates: EntityUpdateData[] }) => {
+            // console.log('NetworkManager: Received raw "entityUpdate" payload:', payload);
+            if (payload && Array.isArray(payload.updates)) {
+                 // Loop through the array and emit one event per update
+                 payload.updates.forEach(updateData => {
+                     // console.log('[NetworkManager] Emitting single entity-update:', updateData);
+                     EventBus.emit('entity-update', updateData); // Emit single update object
+                 });
+             } else {
+                 console.warn('[NetworkManager] Received malformed entityUpdate payload:', payload);
+             }
         });
 
         // --- ADDED: Listen for entity deaths ---

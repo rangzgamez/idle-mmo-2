@@ -115,12 +115,10 @@ export default class UIScene extends Phaser.Scene {
 
     // *** Add init method ***
     init(data: { selectedParty?: any[] }) {
-        console.log("UIScene init received data:", data);
         this.receivedPartyData = data.selectedParty || []; // Store the passed data
     }
 
     create() {
-        console.log('UIScene create');
         this.networkManager = NetworkManager.getInstance();
 
         // --- Create Top Menu Bar DOM Element ---
@@ -133,7 +131,6 @@ export default class UIScene extends Phaser.Scene {
             </div>
         `;
         const menuBar = this.add.dom(0, 0).createFromHTML(menuBarHtml).setOrigin(0, 0);
-        console.log("UIScene: Menu Bar HTML content:", menuBar.node.innerHTML);
 
         // --- Create Inventory Window DOM Element (Initially Hidden) ---
         const invWindowHtml = `
@@ -216,7 +213,6 @@ export default class UIScene extends Phaser.Scene {
 
         // --- Inventory Drag Logic ---
         if (invWindowGameObject && inventoryTitleBar) {
-             console.log("[UIScene] Attaching drag handler to Inventory Window");
              this.makeDraggable(invWindowGameObject, inventoryTitleBar);
         } else {
              console.error("[UIScene] Failed to attach drag handler to Inventory: Missing elements.");
@@ -249,7 +245,6 @@ export default class UIScene extends Phaser.Scene {
             const target = event.target as HTMLElement;
             if (target.classList.contains('sort-option') && target.dataset.sortType) {
                 const sortType = target.dataset.sortType as 'name' | 'type' | 'newest';
-                console.log(`[UIScene] Sort by ${sortType} clicked.`);
                 // Add validation or specific handling for 'newest' if needed on frontend
                 this.networkManager.sendMessage('sortInventoryCommand', { sortType: sortType });
                 this.invSortDropdown!.style.display = 'none'; // Hide dropdown after selection
@@ -303,7 +298,6 @@ export default class UIScene extends Phaser.Scene {
 
         // Get references to equipment elements
         const equipmentButton = menuBar.getChildByID('equipment-button') as HTMLElement;
-        console.log("UIScene: Found equipmentButton element via getChildByID:", !!equipmentButton);
 
         const equipmentCloseButton = this.equipWindowGameObject.getChildByID('equipment-close-button') as HTMLElement;
         const equipmentTitleBar = this.equipWindowGameObject.getChildByID('equipment-title-bar') as HTMLElement;
@@ -335,10 +329,7 @@ export default class UIScene extends Phaser.Scene {
 
         // --- Equipment Button Listener ---
         if (equipmentButton) {
-            console.log("UIScene: Attaching click listener to equipmentButton");
             equipmentButton.addEventListener('click', () => {
-                console.log("UIScene: Equipment button clicked!");
-                console.log("UIScene: equipWindowGameObject available:", !!this.equipWindowGameObject);
 
                 if (this.equipWindowGameObject) {
                     const currentVisibility = this.equipWindowGameObject.visible;
@@ -346,24 +337,19 @@ export default class UIScene extends Phaser.Scene {
                     const newVisibility = this.equipWindowGameObject.visible;
 
                     if (newVisibility) {
-                        console.log("UIScene: Equipment window opened.");
 
                         // *** Use receivedPartyData ***
                         this.currentParty = this.receivedPartyData; // Use data passed via init
-                        console.log("UIScene: Using party data received via init:", this.currentParty);
 
                         this.currentEquipCharacterIndex = 0;
                         this.renderCurrentCharacterEquipment(); // Render initial character
 
                         if (this.currentParty.length > 0) {
                             const firstCharId = this.currentParty[0].id;
-                            console.log(`UIScene: Requesting initial equipment for characterId: ${firstCharId}`);
                             this.networkManager.sendMessage('requestEquipment', { characterId: firstCharId });
                         } else {
                             console.warn("UIScene: Cannot request equipment, no party data received via init.");
                         }
-                    } else {
-                         console.log("UIScene: Equipment window closed.");
                     }
                 } else {
                      console.error("UIScene: equipWindowGameObject is null or undefined when button clicked!");
@@ -388,7 +374,6 @@ export default class UIScene extends Phaser.Scene {
 
         // --- Equipment Drag Logic ---
         if (this.equipWindowGameObject && equipmentTitleBar) {
-             console.log("[UIScene] Attaching drag handler to Equipment Window");
             this.makeDraggable(this.equipWindowGameObject, equipmentTitleBar);
         } else {
              console.error("[UIScene] Failed to attach drag handler to Equipment: Missing elements.");
@@ -469,7 +454,6 @@ export default class UIScene extends Phaser.Scene {
 
         // --- Loot All Button Listener (using the separate element) ---
         lootAllButtonElement.addEventListener('click', () => {
-            console.log('[UIScene] Loot All button clicked. Sending command...');
             this.networkManager.sendMessage('loot_all_command', {}); // Send empty payload for now
         });
         // -----------------------------------
@@ -484,7 +468,6 @@ export default class UIScene extends Phaser.Scene {
         EventBus.on('update-party-xp', this.handleUpdatePartyXp, this);
         EventBus.on('party-member-level-up', this.handlePartyMemberLevelUp, this);
 
-        console.log('UI Elements Created (Chat, Menu, Inventory Window).');
         if (!this.chatLogElement || !this.chatInputElement) {
              console.error("Failed to get chat log or input elements!");
         }
@@ -560,7 +543,6 @@ export default class UIScene extends Phaser.Scene {
                     console.error(`Failed to find panel element #party-panel-${charData.id} after adding it.`);
                 }
             });
-            console.log("Populated initial party panels. Panel references:", this.partyMemberPanels);
         }
         // -----------------------------------------
 
@@ -601,7 +583,6 @@ export default class UIScene extends Phaser.Scene {
     handleChatMessage(data: { senderName: string, message: string, timestamp?: number }) {
         if (!this.chatLogElement) return;
 
-        console.log('UIScene received chat message:', data); // Debug log
 
         // Create a new paragraph element for the message
         const messageElement = document.createElement('p');
@@ -620,7 +601,6 @@ export default class UIScene extends Phaser.Scene {
 
     // --- Scene Cleanup ---
     shutdown() {
-        console.log('UIScene shutting down, removing listeners.');
         EventBus.off('chat-message-received', this.handleChatMessage, this);
         EventBus.off('focus-chat-input', this.focusChatInput, this);
         EventBus.off('inventory-update', this.handleInventoryUpdate, this);
@@ -742,11 +722,9 @@ export default class UIScene extends Phaser.Scene {
 
     // --- Inventory Display Update ---
     private handleInventoryUpdate(data: { inventory: (InventoryItem | null)[] }) {
-        console.log('[UIScene] Handling inventory update (sparse array):', data);
         this.inventorySlotsData = data.inventory || []; // Store the sparse array
 
         // --- BEGIN DEBUG LOG ---
-        console.log('[UIScene] inventorySlotsData before rendering:', this.inventorySlotsData);
         this.inventorySlotsData.forEach((item, index) => {
             if (item && !item.itemTemplate) {
                 console.warn(`[UIScene] Item at index ${index} exists but has no itemTemplate:`, item);
@@ -777,7 +755,6 @@ export default class UIScene extends Phaser.Scene {
 
     // --- Renders the items for the current page ---
     private renderCurrentInventoryPage() {
-        console.log(`[UIScene] Rendering inventory page ${this.currentPage}/${this.totalPages} using sparse data`);
         if (!this.inventoryItemsElement || !this.invPrevButton || !this.invNextButton || !this.invPageInfo) {
             console.error("Cannot render inventory page, elements missing.");
             return;
@@ -820,7 +797,6 @@ export default class UIScene extends Phaser.Scene {
             if (item) {
                 // Render item content (SVG, quantity, listeners)
                  // *** Log Item and its slot during render loop ***
-                 console.log(`[UIScene] Rendering VISUAL slot ${i} (Data index ${actualSlotIndex}): Item ID=${item.id}, Slot=${item.inventorySlot}, Name=${item.itemTemplate?.name}`);
                  slotElement.draggable = true;
                  slotElement.dataset.inventoryItemId = item.id;
                  // data-inventory-slot is already set above
@@ -883,7 +859,6 @@ export default class UIScene extends Phaser.Scene {
                               console.error("Cannot equip item: Item ID is missing.");
                               return;
                          }
-                         console.log(`[UIScene] Right-clicked inventory item ${inventoryItemId} to equip on character ${targetCharacterId}`);
                          // 4. Send command to server
                          this.networkManager.sendMessage('equipItemCommand', {
                               inventoryItemId: inventoryItemId,
@@ -897,7 +872,6 @@ export default class UIScene extends Phaser.Scene {
             } else {
                 // Render empty slot content
                  // *** Log empty slot during render loop ***
-                 console.log(`[UIScene] Rendering VISUAL slot ${i} (Data index ${actualSlotIndex}): Empty`);
                  slotElement.classList.add('empty-slot');
                  slotElement.innerHTML = ''; // Ensure it's visually empty
             }
@@ -1033,14 +1007,12 @@ export default class UIScene extends Phaser.Scene {
 
     // --- Equipment Display Update ---
     private handleEquipmentUpdate(data: EquipmentUpdatePayload) {
-        console.log('[UIScene] Handling equipment update for char:', data.characterId, data.equipment);
         // Store the updated equipment data for the specific character
         this.allCharacterEquipment.set(data.characterId, data.equipment);
 
         // If the update is for the currently viewed character, re-render
         const currentCharacter = this.currentParty[this.currentEquipCharacterIndex];
         if (currentCharacter && currentCharacter.id === data.characterId) {
-            console.log('[UIScene] Equipment update is for current view, re-rendering.');
             this.renderCurrentCharacterEquipment();
         }
     }
@@ -1101,13 +1073,11 @@ export default class UIScene extends Phaser.Scene {
                     const clickedIndex = parseInt(tabButton.dataset.index || '0', 10);
                     if (clickedIndex !== this.currentEquipCharacterIndex) {
                         this.currentEquipCharacterIndex = clickedIndex;
-                        console.log(`[UIScene] Switched equipment tab to index: ${this.currentEquipCharacterIndex}`);
                         this.renderCurrentCharacterEquipment(); // Re-render to update slots and highlight
 
                         // Optional: Request equipment if not loaded
                         const charId = this.currentParty[this.currentEquipCharacterIndex]?.id;
                         if (charId && !this.allCharacterEquipment.has(charId)) {
-                            console.log(`[UIScene] Requesting equipment for newly viewed character via tab: ${charId}`);
                             this.networkManager.sendMessage('requestEquipment', { characterId: charId });
                         }
                     }
@@ -1143,7 +1113,6 @@ export default class UIScene extends Phaser.Scene {
         // Update character info display (REMOVED - now handled by active tab highlight)
         // this.equipCharInfo.textContent = `${characterName} (${this.currentEquipCharacterIndex + 1}/${partySize})`;
 
-        console.log(`[UIScene] Rendering equipment for ${characterName} (Index: ${this.currentEquipCharacterIndex})`, equipmentData);
 
         // Update slots
         this.equipmentSlots.forEach((slotElement, slot) => {
@@ -1171,7 +1140,6 @@ export default class UIScene extends Phaser.Scene {
                         console.error("Cannot unequip: Current character ID not found.");
                         return;
                     }
-                    console.log(`[UIScene] Right-clicked to unequip item from slot ${slot} for character ${charId}`);
                     // Send unequip command to server
                     this.networkManager.sendMessage('unequipItem', {
                         characterId: charId,
@@ -1220,7 +1188,6 @@ export default class UIScene extends Phaser.Scene {
                 event.dataTransfer?.setData('text/plain', itemId);
                 event.dataTransfer!.effectAllowed = 'move';
                 target.style.opacity = '0.5';
-                console.log(`[Drag] Start: Item ${itemId} from slot ${inventorySlot}`);
             } else {
                 event.preventDefault();
             }
@@ -1262,18 +1229,14 @@ export default class UIScene extends Phaser.Scene {
             targetSlotDiv.style.backgroundColor = 'rgba(0, 0, 0, 0.3)'; // Reset background
 
             if (this.draggedItemData.originalSlot !== targetInventorySlot) {
-                console.log(`[Drop] Item ${this.draggedItemData.item.id} from slot ${this.draggedItemData.originalSlot} dropped onto slot ${targetInventorySlot}`);
                 this.networkManager.sendMessage('moveInventoryItem', {
                     fromIndex: this.draggedItemData.originalSlot,
                     toIndex: targetInventorySlot
                 });
-            } else {
-                console.log("[Drop] Item dropped onto its own slot.");
             }
         }
         // Case 2: Dropped OUTSIDE the inventory window (Drop Item)
         else {
-             console.log(`[Drop] Item ${this.draggedItemData.item.id} dropped outside inventory (from slot ${this.draggedItemData.originalSlot})`);
               this.networkManager.sendMessage('dropInventoryItem', {
                   inventoryIndex: this.draggedItemData.originalSlot // Use original DB slot index
               });
@@ -1288,7 +1251,6 @@ export default class UIScene extends Phaser.Scene {
                  originalSlot.style.opacity = '1';
                  originalSlot.style.backgroundColor = 'rgba(0, 0, 0, 0.3)';
             }
-             console.log(`[DragEnd] Drag operation finished for item from slot ${this.draggedItemData.originalSlot}`);
         }
         this.draggedItemData = null;
     }
@@ -1359,7 +1321,6 @@ export default class UIScene extends Phaser.Scene {
 
     // --- Handle Level Up Notification (Renamed and Updated for Bars) ---
     private handlePartyMemberLevelUp(payload: PartyMemberLevelUpPayload) {
-        console.log("Received party member level up event:", payload);
         const panelRefs = this.partyMemberPanels.get(payload.characterId);
         if (panelRefs) {
             // Update stored values

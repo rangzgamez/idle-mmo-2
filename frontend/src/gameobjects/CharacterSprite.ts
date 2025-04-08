@@ -1,6 +1,7 @@
 // frontend/src/gameobjects/CharacterSprite.ts
 import Phaser from 'phaser';
 import { HealthBar } from './HealthBar'; // Import HealthBar
+import { PhaserSpriteAnimator, StateTextureKeys } from '../graphics/PhaserSpriteAnimator'; // <<< Import Phaser Animator
 
 // Add the interface definition if you don't have it shared elsewhere
 interface ZoneCharacterState {
@@ -8,6 +9,7 @@ interface ZoneCharacterState {
     ownerId: string;
     ownerName: string;
     name: string;
+    className: string; // <<<--- ADD CLASS NAME (Ensure backend sends this!)
     level: number;
     x: number | null;
     y: number | null;
@@ -19,6 +21,7 @@ export class CharacterSprite extends Phaser.GameObjects.Sprite {
     characterId: string;
     ownerId: string; // ID of the controlling player
     isPlayerCharacter: boolean; // Is this one of the client's own characters?
+    className: string; // <<<--- ADD CLASS NAME PROPERTY
     // --- Interpolation properties ---
     targetX: number;
     targetY: number;
@@ -27,6 +30,8 @@ export class CharacterSprite extends Phaser.GameObjects.Sprite {
     // --- Chat Bubble Properties ---
     private activeBubbles: Phaser.GameObjects.Text[] = [];
     private healthBar: HealthBar; // Add health bar property
+    private animator?: PhaserSpriteAnimator; // <<<--- ADD ANIMATOR (optional for safety)
+    private isFacingRight: boolean = true; // <<<--- ADD FACING DIRECTION
 
     private readonly BUBBLE_MAX_WIDTH = 150; // Max width before wrapping
     private readonly BUBBLE_OFFSET_Y = 20;  // Initial offset above sprite center/top
@@ -35,8 +40,8 @@ export class CharacterSprite extends Phaser.GameObjects.Sprite {
     private readonly BUBBLE_FONT_STYLE: Phaser.Types.GameObjects.Text.TextStyle = {
         fontFamily: 'Arial',
         fontSize: '10px',
-        color: '#ffffff', // Black text
-        backgroundColor: '#000000', // White background
+        color: '#ffffff',
+        backgroundColor: '#000000',
         padding: { x: 5, y: 3 },
         align: 'center',
         wordWrap: { width: this.BUBBLE_MAX_WIDTH }
@@ -44,38 +49,87 @@ export class CharacterSprite extends Phaser.GameObjects.Sprite {
     private nameLabel: Phaser.GameObjects.Text;
 
     constructor(scene: Phaser.Scene, x: number, y: number, texture: string, data: ZoneCharacterState, isPlayer: boolean) {
-        super(scene, x, y, texture);
-        scene.add.existing(this); // Add sprite to the scene
+        // Use placeholder texture initially if idle texture isn't guaranteed yet
+        // Or pass the expected idle key directly if preloaded reliably
+        const initialTextureKey = `${data.className}_idle`;
+        super(scene, x, y, scene.textures.exists(initialTextureKey) ? initialTextureKey : texture); // Use idle if exists, else placeholder
+        scene.add.existing(this);
         scene.physics.add.existing(this); // Add basic physics body
 
         this.characterId = data.id;
         this.ownerId = data.ownerId;
         this.isPlayerCharacter = isPlayer;
-        this.targetX = x; // Initialize target position
+        this.className = data.className; // <<<--- STORE CLASS NAME
+        this.setName(this.characterId); // <<<--- SET UNIQUE NAME FOR ANIMATOR PREFIX
+        this.targetX = x;
         this.targetY = y;
 
         // Name Label
-        this.nameLabel = scene.add.text(x, y - this.height / 2 - 5, `${data.name} (Lvl ${data.level})`, { // Updated label format
+        this.nameLabel = scene.add.text(x, y - this.height / 2 - 5, `${data.name} (Lvl ${data.level})`, {
             fontSize: '10px',
             color: isPlayer ? '#00ff00' : '#ffffff',
             align: 'center',
         }).setOrigin(0.5);
-        this.nameLabel.y = y - this.height / 2 - 15;
+        this.updateNameLabelPosition(); // Use helper
 
         if (!isPlayer) {
             this.setAlpha(0.8);
         }
 
         // --- Health Bar --- 
-        const maxHealth = data.baseHealth ?? 100; // Provide default if baseHealth is undefined
-        const currentHealth = data.currentHealth ?? maxHealth; // Use currentHealth or default to max
-
-        this.healthBar = new HealthBar(scene, this.x, this.y - 30, 40, 5, maxHealth); 
-        this.updateHealthBarPosition(); 
-        this.setHealth(currentHealth, maxHealth); // Initialize health visually using correct values
+        const maxHealth = data.baseHealth ?? 100; 
+        const currentHealth = data.currentHealth ?? maxHealth; 
+        this.healthBar = new HealthBar(scene, this.x, this.y - 30, 40, 5, maxHealth);
+        this.updateHealthBarPosition();
+        this.setHealth(currentHealth, maxHealth); // Initialize health visually
         // -----------------
+
+        // <<<--- SETUP ANIMATOR ---
+        this.setupAnimator(scene);
+        // <<<---------------------
     }
-    // --- New Method to Show a Bubble ---
+
+    // <<<--- NEW METHOD TO SETUP ANIMATOR ---
+    private setupAnimator(scene: Phaser.Scene): void {
+        // Use the same frame dimensions as preloaded
+        const frameWidth = 100; // Or get from config/data
+        const frameHeight = 100; // Or get from config/data
+        const animIntervalMs = 150; // Animation speed
+
+        // Texture keys based on className (MUST match preload keys)
+        const textureKeys: StateTextureKeys = {
+            idle: `${this.className}_idle`,
+            walk: `${this.className}_walk`,
+            attack: `${this.className}_attack`,
+            // Add other states here if needed (ensure they are preloaded)
+        };
+
+        // Check if essential idle texture was loaded
+        if (!scene.textures.exists(textureKeys.idle)) {
+            console.error(`[CharacterSprite ${this.characterId}] Idle texture '${textureKeys.idle}' not found! Cannot create animator.`);
+            return; // Don't create animator if basic texture is missing
+        }
+
+        try {
+            // Create the animator instance
+            this.animator = new PhaserSpriteAnimator(
+                scene,
+                this, // Pass the sprite itself
+                textureKeys,
+                frameWidth,
+                frameHeight,
+                animIntervalMs,
+                this.characterId // Pass characterId as unique prefix
+            );
+             console.log(`[CharacterSprite ${this.characterId}] Animator created successfully.`);
+             // Animator should set the initial idle animation via its constructor
+        } catch (error) {
+             console.error(`[CharacterSprite ${this.characterId}] Failed to create PhaserSpriteAnimator:`, error);
+        }
+    }
+    // <<<------------------------------------
+
+    // ... (Keep showChatBubble, calculateBubbleY) ...
     showChatBubble(message: string) {
         if (!this.scene) return; // Guard against calls after destruction
 
@@ -109,90 +163,140 @@ export class CharacterSprite extends Phaser.GameObjects.Sprite {
         newBubble.setData('fadeTween', fadeTween);
     }
     private calculateBubbleY(index: number): number {
-        const baseBubbleY = this.y - this.height / 2 - this.BUBBLE_OFFSET_Y;
-        // If creating a new bubble, numBubbles hasn't been incremented yet,
-        // so the new bubble's index *will be* numBubbles.
-        // Let's adjust the formula based on the provided index directly.
-        // Example: 3 bubbles (indices 0, 1, 2). New index = 3.
-        // Total bubbles after adding will be 4.
-        // We want the bubble at index 'i' to be positioned correctly relative to others.
-
-        // Let's use the formula derived in the thought process:
-        // The bubble at index `i` has `(numBubbles - 1 - i)` bubbles below it (newer).
-        // If index === numBubbles (the one being added), this becomes (numBubbles - 1 - numBubbles) = -1 ?? Problem.
-
-        // Let's rethink. We add to the end. Index 0 is oldest/highest. Index N-1 is newest/lowest.
-        // Newest bubble (index N-1) should be at baseBubbleY.
-        // Bubble at index 'i' is (N - 1 - i) steps *above* the newest bubble.
-        return baseBubbleY - ((this.activeBubbles.length - 1 - index) * this.BUBBLE_SPACING_Y);
+        // Calculate Y position based on index to stack bubbles
+        const baseBubbleY = this.y - (this.displayHeight * this.originY) - this.BUBBLE_OFFSET_Y; // Anchor above sprite based on origin
+        const effectiveIndex = this.activeBubbles.length - 1 - index;
+        return baseBubbleY - (effectiveIndex * this.BUBBLE_SPACING_Y);
     }
+
     // Method to update target position based on server updates
     updateTargetPosition(x: number, y: number) {
         this.targetX = x;
         this.targetY = y;
+        // Optional: Flip immediately when target is set? 
+        // Or let the update loop handle it smoothly.
+        // Let's let the update loop handle it for now.
     }
+
+    // <<<--- NEW METHOD TO SET FACING DIRECTION ---
+    facePosition(targetX: number): void {
+        const xDifference = targetX - this.x;
+        // Only flip if the horizontal difference is significant (e.g., > 1 pixel)
+        if (Math.abs(xDifference) > 1) { 
+            const shouldFaceRight = xDifference > 0;
+            if (this.isFacingRight !== shouldFaceRight) {
+                this.isFacingRight = shouldFaceRight;
+                this.setFlipX(!this.isFacingRight); // Flip if facing left
+                // console.log(`[CharacterSprite ${this.characterId}] Flipping ${this.isFacingRight ? 'Right' : 'Left'}`);
+            }
+        }
+    }
+    // <<<-----------------------------------------
 
     update(time: number, delta: number) {
-        // Interpolate position (existing code)
-        this.x = Phaser.Math.Linear(this.x, this.targetX, this.lerpSpeed);
-        this.y = Phaser.Math.Linear(this.y, this.targetY, this.lerpSpeed);
+        const currentX = this.x;
+        const currentY = this.y;
+        
+        // Interpolate position
+        this.x = Phaser.Math.Linear(currentX, this.targetX, this.lerpSpeed);
+        this.y = Phaser.Math.Linear(currentY, this.targetY, this.lerpSpeed);
 
-        // Update name label position
-        this.nameLabel.x = this.x;
-        this.nameLabel.y = this.y - this.height / 2 - 15;
+        // <<<--- FLIP SPRITE BASED ON MOVEMENT DIRECTION ---
+        // Check if actively moving horizontally
+        if (this.targetX !== null && Math.abs(this.targetX - currentX) > 1) {
+             // Only flip if moving, not if already at target
+             if (Math.abs(this.x - this.targetX) > 1) { // Check current interpolated position vs target
+                this.facePosition(this.targetX);
+             }
+        }
+        // <<<---------------------------------------------
 
-        // --- Update positions of active chat bubbles ---
-        this.activeBubbles.forEach((bubble, index) => {
-            // Keep bubble horizontally centered on sprite
-            bubble.x = this.x;
-            bubble.y = this.calculateBubbleY(index); // Update Y using the helper            // Relative Y position is handled by initial placement and upward push
-        });
-        // ---------------------------------------------
+        // Update name label & health bar positions
+        this.updateNameLabelPosition();
         this.updateHealthBarPosition();
+
+        // Update chat bubble positions
+        this.activeBubbles.forEach((bubble, index) => {
+            bubble.x = this.x;
+            bubble.y = this.calculateBubbleY(index);
+        });
     }
+
     setHealth(currentHealth: number, maxHealth?: number): void {
         this.healthBar.setHealth(currentHealth, maxHealth);
     }
 
-    // --- NEW: Getter for max health ---
     getMaxHealth(): number {
         return this.healthBar.getMaxHealth();
     }
-    // ---------------------------------
 
     private updateHealthBarPosition(): void {
-        this.healthBar.setPosition(this.x, this.y - 25); // Position below name label
+        // Position below name label, using displayHeight for robustness
+        const yOffset = (this.displayHeight * (1 - this.originY)) + 20; // Below origin + offset
+        this.healthBar.setPosition(this.x, this.y + yOffset);
+    }
+
+    private updateNameLabelPosition(): void {
+         // Position above sprite, using displayHeight and origin
+         const yOffset = (this.displayHeight * this.originY) + 5; // Above origin + offset
+         this.nameLabel.setPosition(this.x, this.y - yOffset);
     }
 
     // Add method to update name/level label if needed later
     updateNameLabel(name: string, level: number) {
         this.nameLabel.setText(`${name} (Lvl ${level})`);
-        // Optional: Recalculate position if origin/size changes significantly
-        this.nameLabel.y = this.y - this.height / 2 - 15;
+        this.updateNameLabelPosition(); // Recalculate position
     }
 
     // --- NEW: Method to set level (updates label) ---
     setLevel(level: number) {
-        // Assuming the name doesn't change, just update the level part
         const currentText = this.nameLabel.text;
-        const nameMatch = currentText.match(/^(.*?)\s+\(Lvl \d+\)$/); // Extract name part
-        const name = nameMatch ? nameMatch[1] : currentText; // Fallback to full text if regex fails
+        const nameMatch = currentText.match(/^(.*?)\s+\(Lvl \d+\)$/);
+        const name = nameMatch ? nameMatch[1] : currentText;
         this.updateNameLabel(name, level);
     }
     // -----------------------------------------------
 
-    // Override destroy to clean up label too
+    // <<<--- NEW METHOD TO CONTROL ANIMATION ---
+    setAnimation(state: 'idle' | 'walk' | 'attack', forceRestart: boolean = false): void {
+        if (!this.animator) {
+            // console.warn(`[CharacterSprite ${this.characterId}] Animator not available, cannot set animation state: ${state}`);
+            return; // Animator not initialized
+        }
+
+        // Determine if the animation should ignore if already playing (default: true)
+        let ignoreIfPlaying = true;
+        if (state === 'attack') { // Always restart attack animations
+            forceRestart = true;
+            ignoreIfPlaying = false;
+        }
+
+        // Handle movement interruption/state change logic if needed
+        // Example: Stop interpolation when attacking
+        // if (state === 'attack') {
+        //    this.targetX = this.x;
+        //    this.targetY = this.y;
+        // }
+
+        try {
+             this.animator.playAnimation(state, forceRestart, ignoreIfPlaying);
+        } catch (error) {
+            console.error(`[CharacterSprite ${this.characterId}] Error setting animation to '${state}':`, error);
+        }
+    }
+    // <<<---------------------------------------
+
+    // Override destroy to clean up animator too
     destroy(fromScene?: boolean) {
         this.nameLabel.destroy();
-        // Destroy health bar later
-        // --- Destroy active bubbles and stop tweens ---
         this.activeBubbles.forEach(bubble => {
             const tween = bubble.getData('fadeTween') as Phaser.Tweens.Tween;
-            tween?.stop(); // Stop tween if it exists
+            tween?.stop();
             bubble.destroy();
         });
-        this.activeBubbles = []; // Clear array
-        this.healthBar.destroy(); // Destroy health bar
+        this.activeBubbles = [];
+        this.healthBar.destroy();
+        this.animator?.destroy(); // <<<--- DESTROY ANIMATOR
         super.destroy(fromScene);
     }
 }

@@ -7,7 +7,7 @@ import UIScene from './UIScene';
 import { EnemySprite } from '../gameobjects/EnemySprite';
 import { DroppedItemSprite, DroppedItemData } from '../gameobjects/DroppedItemSprite'; // <-- Import DroppedItemSprite
 // Add the interface definitions if not shared
-interface ZoneCharacterState { id: string; ownerId: string; ownerName: string; name: string; level: number; x: number | null; y: number | null; currentHealth?: number; baseHealth?: number; }
+interface ZoneCharacterState { id: string; ownerId: string; ownerName: string; name: string; level: number; x: number | null; y: number | null; currentHealth?: number; baseHealth?: number; className: string; }
 interface EntityUpdateData { id: string; x?: number | null; y?: number | null; health?: number | null; state?: string; }
 // --- Add Entity Death Interface ---
 interface EntityDeathData { entityId: string; type: 'character' | 'enemy'; }
@@ -65,6 +65,7 @@ export default class GameScene extends Phaser.Scene {
     playerCharacters: Map<string, CharacterSprite> = new Map(); // Key: characterId
     otherCharacters: Map<string, CharacterSprite> = new Map(); // Key: characterId
     selectedPartyData: any[] = []; // Data passed from CharacterSelectScene
+    private playerClassMap: Map<string, string> = new Map(); // <<<--- NEW: Store player class names
     private lastMarkerTarget: Phaser.Math.Vector2 | null = null; // Store the target associated with the marker
     private clickMarker: Phaser.GameObjects.Sprite | null = null; // Add property for the marker
     private markerFadeTween: Phaser.Tweens.Tween | null = null; // Store the active fade tween
@@ -78,9 +79,24 @@ export default class GameScene extends Phaser.Scene {
 
     // Receive data from the previous scene (CharacterSelectScene)
     init(data: { selectedParty?: any[] }) {
-        console.log('GameScene init with data:', data);
-        this.selectedPartyData = data.selectedParty || []; // Store the selected party data
+        console.log('[GameScene.init] Received data:', JSON.stringify(data)); // Log the raw data structure
+        this.selectedPartyData = data?.selectedParty || []; // Safely access selectedParty
+        console.log('[GameScene.init] Parsed selectedPartyData:', JSON.stringify(this.selectedPartyData)); // Log parsed data
         this.networkManager = NetworkManager.getInstance();
+
+        // <<<--- Populate Player Class Map ---
+        this.playerClassMap.clear(); // Clear previous map if scene restarts
+        this.selectedPartyData.forEach(char => {
+            console.log('[GameScene.init] Processing character:', char);
+            if (char.id && char.class) { // Use 'className' based on previous context
+                this.playerClassMap.set(char.id, char.class.toLowerCase());
+            } else {
+                console.warn('[GameScene.init] Selected character data missing id or className:', char);
+            }
+        });
+        console.log('[GameScene.init] Player class map populated:', this.playerClassMap);
+        // <<<-------------------------------
+
         // --- Store current player's username ---
         this.currentPlayerUsername = null; // Reset on init
         if (this.selectedPartyData.length > 0 && this.selectedPartyData[0].ownerName) {
@@ -103,8 +119,43 @@ export default class GameScene extends Phaser.Scene {
         this.load.image('clickMarker', 'assets/ui/click_marker.png'); // <-- Load the marker
         this.load.image('goblin', 'assets/sprites/goblin.png'); // Example sprite - add more
         this.load.image('spider', 'assets/sprites/spider.png');   // Load spider sprite
+
+        // <<<--- LOAD CHARACTER SPRITESHEETS ---
+        // IMPORTANT: Replace 'warrior', 'mage' etc. with your actual class names
+        // IMPORTANT: Ensure frameWidth/frameHeight match CharacterSprite/PhaserSpriteAnimator setup (e.g., 100x100)
+        const classesToLoad = ['fighter', 'wizard', 'archer', 'priest']; // !!! UPDATE THIS ARRAY with your actual class names !!!
+        const frameConfig = { frameWidth: 100, frameHeight: 100 }; // !!! UPDATE frame dimensions if different !!!
+
+        classesToLoad.forEach(className => {
+            console.log(`[GameScene.preload] Preloading spritesheets for class: ${className}`);
+            const basePath = `assets/sprites/characters/${className}/`;
+
+            // Define states and their corresponding file names
+            const states = {
+                idle: 'idle.png',
+                walk: 'walk.png',
+                attack: 'attack.png'
+                // Add other states like 'hurt', 'death' here if they exist
+            };
+
+            for (const state in states) {
+                const fileName = states[state as keyof typeof states];
+                const path = basePath + fileName;
+                const key = `${className}_${state}`; // e.g., "warrior_idle", "mage_walk"
+
+                // You might want to add error checking here in a real project
+                // to confirm the file actually exists before trying to load it.
+                this.load.spritesheet(key, path, frameConfig);
+                console.log(` - Loading ${state}: key=${key}, path=${path}`);
+            }
+        });
+         // Example error handling during loading
+         this.load.on('fileerror', (key: string, file: Phaser.Loader.File) => {
+            console.error(`[GameScene.preload] Error loading file: ${key} - ${file.url}`);
+         });
+        // <<<-------------------------------------
+
         // this.load.tilemapTiledJSON('zone1Map', 'assets/tilemaps/zone1.json');
-        // this.load.image('tileset', 'assets/tilesets/your_tileset.png');
     }
 
     create() {
@@ -357,97 +408,136 @@ export default class GameScene extends Phaser.Scene {
 
     // --- Event Handlers ---
 
-    handlePlayerJoined(data: { characters: ZoneCharacterState[] }) {
-        console.log('Handling player joined:', data);
-        data.characters.forEach(charData => {
-            this.createOrUpdateCharacterSprite(charData, false);
-        });
+    handlePlayerJoined(data: ZoneCharacterState) {
+        console.log('Player joined event received:', data);
+        if (!data.className) {
+            console.error('[GameScene] Missing className in player joined data:', data);
+            return;
+        }
+        this.createOrUpdateCharacterSprite(data, false);
     }
 
-    handlePlayerLeft(data: { playerId: string }) {
-        console.log('Handling player left:', data);
-        // Find and remove all characters associated with the leaving player ID
+    handlePlayerLeft(data: { ownerId: string }) {
+        console.log('Player left event received:', data);
         this.otherCharacters.forEach((sprite, charId) => {
-            if (sprite.ownerId === data.playerId) {
+            if (sprite.ownerId === data.ownerId) {
                 sprite.destroy();
                 this.otherCharacters.delete(charId);
-                 console.log(`Removed character ${charId} for leaving player ${data.playerId}`);
+                console.log(`Removed character ${charId} for leaving owner ${data.ownerId}`);
             }
         });
     }
 
-    handleEntityUpdate(data: { updates: EntityUpdateData[] }) {
-        // console.log('[GameScene] Received entity updates:', data.updates); // Can be very noisy
-        if (!this) return; // Scene might be shutting down
+    handleEntityUpdate(data: EntityUpdateData) {
+        // <<<--- REMOVE LOG AT THE VERY START
+        // console.log(`[GameScene.handleEntityUpdate] Handler triggered for ID: ${data?.id}`);
 
-        data.updates.forEach(update => {
-            const sprite = this.playerCharacters.get(update.id) || this.otherCharacters.get(update.id) || this.enemySprites.get(update.id);
-            if (sprite) {
-                // Update sprite target position for interpolation
-                if (update.x !== undefined && update.y !== undefined && update.x !== null && update.y !== null) {
-                    // Use the correct method name from CharacterSprite/EnemySprite
-                    if ('updateTargetPosition' in sprite) {
-                         sprite.updateTargetPosition(update.x, update.y);
-                    } else {
-                        console.warn(`Sprite ${update.id} missing updateTargetPosition method?`);
-                    }
-                }
-                // Update sprite health bar
-                if (update.health !== undefined && update.health !== null) {
-                    sprite.setHealth(update.health); // Let sprite handle its maxHP logic
-                    
-                    // --- Emit Party HP Update ---
-                    if (this.playerCharacters.has(update.id)) {
-                        const charSprite = sprite as CharacterSprite; // Cast needed to access maxHp
-                        let maxHp = 100; // Default fallback
-                        // Check if getMaxHealth method exists before calling
-                        if (typeof charSprite.getMaxHealth === 'function') {
-                             maxHp = charSprite.getMaxHealth(); 
-                        } else {
-                             console.warn(`CharacterSprite ${update.id} missing getMaxHealth method?`);
-                        }
-                        EventBus.emit('update-party-hp', { 
-                            characterId: update.id, 
-                            currentHp: update.health,
-                            maxHp: maxHp
-                        });
-                    }
-                    // ---------------------------
-                }
-                // Update sprite state (for animations etc.)
-                if (update.state) {
-                    // TODO: Add state handling to sprites if needed (e.g., sprite.setState(update.state))
+        // <<<--- REMOVE RAW DATA LOG (OR KEEP COMMENTED OUT) ---
+        // console.log(`[GameScene.handleEntityUpdate] Received update for ${data.id}:`, JSON.stringify(data));
+
+        const sprite = this.findSpriteById(data.id);
+
+        if (sprite) {
+            // Update Position (Interpolation Target)
+            if (data.x !== undefined && data.y !== undefined && data.x !== null && data.y !== null) {
+                // Check if the method exists before calling
+                if (typeof sprite.updateTargetPosition === 'function') {
+                    // <<<--- REMOVE LOG BEFORE UPDATE
+                    // console.log(`[GameScene.handleEntityUpdate] Updating target position for ${data.id} to (${data.x}, ${data.y})`);
+                   sprite.updateTargetPosition(data.x, data.y);
+                } else {
+                    // <<<--- REMOVE WARNING (Optional, could keep if useful)
+                    // console.warn(`[GameScene.handleEntityUpdate] Sprite ${data.id} missing updateTargetPosition method.`);
                 }
             } else {
-                // console.warn(`[GameScene] Received update for unknown entity ID: ${update.id}`);
+                 // <<<--- REMOVE LOG IF POSITION DATA IS MISSING/NULL
+                 // if ('x' in data || 'y' in data) { 
+                 //    console.log(`[GameScene.handleEntityUpdate] Received update for ${data.id} WITHOUT valid position data.`);
+                 // }
             }
-        });
+
+            // Update Health
+            if (data.health !== undefined && data.health !== null) {
+                if (typeof sprite.setHealth === 'function') {
+                   sprite.setHealth(data.health);
+                   // --- Emit Party HP Update only for player characters ---
+                   if (sprite instanceof CharacterSprite && this.playerCharacters.has(data.id)) {
+                       EventBus.emit('update-party-hp', {
+                           characterId: data.id,
+                           currentHp: data.health,
+                           maxHp: sprite.getMaxHealth() // Safe now, it's a CharacterSprite
+                       });
+                   }
+                   // -------------------------------------------------------
+                }
+            }
+
+            // <<<--- Update Animation State ---
+            if (sprite instanceof CharacterSprite && data.state) {
+                 // Map server state to animation state
+                 let animState: 'idle' | 'walk' | 'attack' = 'idle'; // Default to idle
+                 switch (data.state) {
+                     case 'idle':
+                         animState = 'idle';
+                         break;
+                     case 'moving':
+                     case 'moving_to_loot': // Treat moving to loot as walking
+                         animState = 'walk';
+                         break;
+                     case 'attacking':
+                     case 'looting_area': // Maybe use 'attack' animation for looting?
+                         animState = 'attack';
+                         break;
+                     case 'dead':
+                         // Optionally handle dead state animation here (e.g., sprite.setFrame(deadFrame))
+                         // Currently handled by alpha in createOrUpdate?
+                         break;
+                     default:
+                         console.warn(`[GameScene] Unknown character state received: ${data.state}. Defaulting to idle.`);
+                         animState = 'idle';
+                 }
+
+                // Set animation unless dead (handle dead state separately if needed)
+                 if (data.state !== 'dead') {
+                     const forceRestart = (animState === 'attack'); // Only force restart attack
+                     sprite.setAnimation(animState, forceRestart);
+                 }
+            } else if (sprite instanceof EnemySprite && data.state) {
+                 // TODO: Add animation handling for EnemySprite if needed
+                 // e.g., sprite.setAnimation(data.state);
+            }
+            // <<<-------------------------------
+        } else {
+             // console.warn('[GameScene] Received entity update for unknown ID:', data.id);
+        }
     }
 
     handleEntityDied(data: EntityDeathData) {
-        console.log('Handling entity died:', data);
-        const { entityId, type } = data;
-
-        if (type === 'character') {
-            let sprite = this.playerCharacters.get(entityId) || this.otherCharacters.get(entityId);
-            if (sprite) {
-                console.log(`Character sprite ${entityId} died. Applying death visual.`);
-                // Implement visual change directly here instead of calling non-existent method
-                sprite.setAlpha(0.4); // Example: Make semi-transparent
-                sprite.disableInteractive(); // Make non-clickable (if it was interactive)
-                // We might need logic in update or a respawn event to revert this later
-            } else {
-                 console.warn(`Received death event for unknown character ID: ${entityId}`);
+        console.log('Entity died event received:', data);
+        const sprite = this.findSpriteById(data.entityId);
+        if (sprite) {
+            if (sprite instanceof EnemySprite) {
+                // Remove enemy sprite immediately
+                console.log(`Destroying enemy sprite: ${data.entityId}`);
+                this.enemySprites.delete(data.entityId);
+                sprite.destroy();
+            } else if (sprite instanceof CharacterSprite) {
+                // Handle character death visually (e.g., fade out, play death animation)
+                console.log(`Character died: ${data.entityId}. Applying visual effect.`);
+                sprite.setAlpha(0.4); // Example: Fade slightly
+                // Optionally stop animations using the public method if needed
+                 if (typeof sprite.setAnimation === 'function') {
+                    // If you have a specific 'dead' animation:
+                    // sprite.setAnimation('dead', true);
+                    // Otherwise, maybe revert to idle (though visually faded)
+                    // sprite.setAnimation('idle');
+                    // Or simply stop: (Requires adding a public stop method to CharacterSprite or modifying setAnimation)
+                    // sprite.stopAnimation(); // Assuming a public stop method exists
+                 }
+                 // The character respawn logic is handled server-side based on documentation
             }
-        } else if (type === 'enemy') {
-             const enemySprite = this.enemySprites.get(entityId);
-             if (enemySprite) {
-                 console.log(`Enemy sprite ${entityId} died. Destroying.`);
-                 enemySprite.destroy();
-                 this.enemySprites.delete(entityId);
-             } else {
-                  console.warn(`Received death event for unknown enemy ID: ${entityId}`);
-             }
+        } else {
+            console.warn(`Received entityDied event for unknown ID: ${data.entityId}`);
         }
     }
 
@@ -475,37 +565,88 @@ export default class GameScene extends Phaser.Scene {
 
     // --- Helper Functions ---
 
-    createOrUpdateCharacterSprite(charData: ZoneCharacterState, isPlayer: boolean, defaultX?: number, defaultY?: number) {
-        const id = charData.id;
-        const map = isPlayer ? this.playerCharacters : this.otherCharacters;
-        let sprite = map.get(id);
-        const x = charData.x ?? defaultX ?? 100;
-        const y = charData.y ?? defaultY ?? 100;
-        const baseHealth = charData.baseHealth ?? 100; // Get base health
-        const currentHealth = charData.currentHealth ?? baseHealth; // Use current or default to base
+    private createOrUpdateCharacterSprite(charData: ZoneCharacterState, isPlayer: boolean, initialX?: number, initialY?: number) {
+        let determinedClassName: string | undefined = charData.className; // Start with potentially undefined value
 
-        if (sprite) {
+        // Attempt to get className for the player from the map if missing from charData
+        if (isPlayer && !determinedClassName) {
+             determinedClassName = this.playerClassMap.get(charData.id);
+             if (determinedClassName) {
+                 console.log(`[GameScene] Using className '${determinedClassName}' from playerClassMap for player character ${charData.id}`);
+             } else {
+                 console.error(`[GameScene] Cannot find className for player character ${charData.id} in playerClassMap! Assigning placeholder.`);
+                 determinedClassName = 'fighter'; // Assign placeholder
+             }
+        } 
+        // Assign placeholder if still missing (covers other players missing data, or player lookup failure)
+        if (!determinedClassName) {
+             if (!isPlayer) {
+                console.error(`[GameScene] Other character data is missing className: ${charData.id}. Assigning placeholder.`);
+             }
+             determinedClassName = 'fighter'; // Assign placeholder
+        }
+
+        // At this point, determinedClassName should ALWAYS be a string.
+        const className: string = determinedClassName;
+
+        const existingSprite = isPlayer
+            ? this.playerCharacters.get(charData.id)
+            : this.otherCharacters.get(charData.id);
+
+        const posX = initialX ?? charData.x ?? this.cameras.main.width / 2;
+        const posY = initialY ?? charData.y ?? this.cameras.main.height / 2;
+        const textureKey = `${className}_idle`;
+
+        if (existingSprite) {
             // Update existing sprite
-            console.log(`Updating existing ${isPlayer ? 'player' : 'other'} character sprite: ${id}`);
-            sprite.updateTargetPosition(x, y); // Use correct method
-            // Update name/level label
-            sprite.updateNameLabel(charData.name, charData.level); // Use correct method
-            // Update health
-            sprite.setHealth(currentHealth, baseHealth); // Use correct method
+            console.log(`[GameScene] Updating existing character sprite: ${charData.id}`);
+            existingSprite.updateTargetPosition(posX, posY);
+            // Optionally snap position for existing sprites on zone join/major update?
+            // existingSprite.setPosition(posX, posY);
+            existingSprite.updateNameLabel(charData.name, charData.level);
+            existingSprite.setHealth(charData.currentHealth ?? charData.baseHealth ?? 100, charData.baseHealth);
+            existingSprite.setAlpha(1); // Reset alpha in case they were dead
+
+            // Check if class changed (unlikely but possible)
+            if (existingSprite.className !== charData.className) {
+                 console.warn(`[GameScene] Character ${charData.id} changed class. Recreating sprite.`);
+                 // Easiest way to handle animator change is full recreation
+                 existingSprite.destroy();
+                 this.createOrUpdateCharacterSprite(charData, isPlayer, posX, posY); // Re-call to create new
+                 return;
+            }
+
+            // Ensure animation is reset correctly (e.g., if respawning)
+            if (typeof existingSprite.setAnimation === 'function') {
+                existingSprite.setAnimation('idle');
+            }
 
         } else {
             // Create new sprite
-            console.log(`Creating new ${isPlayer ? 'player' : 'other'} character sprite: ${id}`);
-            // Pass baseHealth to constructor if it uses it, or set after
-            // Ensure charData type matches constructor expectations (baseHealth handled in constructor now)
-            const spriteData: any = { ...charData }; // Create a copy to avoid type issues if necessary
-            if (spriteData.baseHealth === undefined) spriteData.baseHealth = 100; // Ensure default
-            if (spriteData.currentHealth === undefined) spriteData.currentHealth = spriteData.baseHealth;
+            console.log(`[GameScene] Creating new character sprite: ${charData.id} (${charData.className})`);
 
-            sprite = new CharacterSprite(this, x, y, 'playerPlaceholder', spriteData as ZoneCharacterState, isPlayer);
-            // Health is set within the constructor now based on data
-            // sprite.setHealth(currentHealth, baseHealth);
-            map.set(id, sprite);
+            // Check if the initial texture is loaded
+            if (!this.textures.exists(textureKey)) {
+                console.error(`[GameScene] Texture '${textureKey}' not found for character ${charData.id}. Using placeholder.`);
+                // Fallback to placeholder if idle texture isn't loaded
+                const placeholderTexture = 'playerPlaceholder';
+                const sprite = new CharacterSprite(this, posX, posY, placeholderTexture, charData, isPlayer);
+                 if (isPlayer) { this.playerCharacters.set(charData.id, sprite); }
+                 else { this.otherCharacters.set(charData.id, sprite); }
+                 // Note: Animator setup will fail inside CharacterSprite, but sprite exists
+                 return;
+            }
+
+            // Create with the correct initial texture
+            // Ensure the ZoneCharacterState being passed includes the determined className
+            const finalCharData: ZoneCharacterState = { ...charData, className: className };
+            const sprite = new CharacterSprite(this, posX, posY, textureKey, finalCharData, isPlayer);
+            if (isPlayer) {
+                this.playerCharacters.set(charData.id, sprite);
+            } else {
+                this.otherCharacters.set(charData.id, sprite);
+            }
+            // Animator is set up inside CharacterSprite constructor
         }
     }
 
@@ -622,77 +763,34 @@ export default class GameScene extends Phaser.Scene {
 
     // +++ ADDED: Handler for Combat Action Visuals +++
     private handleCombatAction(data: CombatActionData) {
-        console.log('[GameScene] Handling combat action event:', data); // <-- UNCOMMENT/ADD THIS LOG
+        const attackerSprite = this.findSpriteById(data.attackerId);
+        const targetSprite = this.findSpriteById(data.targetId);
 
-        // Find the target sprite
-        let targetSprite: CharacterSprite | EnemySprite | undefined;
-        targetSprite = this.playerCharacters.get(data.targetId) ||
-                       this.otherCharacters.get(data.targetId) ||
-                       this.enemySprites.get(data.targetId);
-
-        if (targetSprite && targetSprite.scene) { // Check if sprite exists and is part of the scene
-            console.log(`[GameScene] Found target sprite (${targetSprite.name}) for combat visual.`); // <-- ADD THIS LOG
-
-            // --- Attack Circle Visual (Existing) ---
-            const effect = this.add.graphics({ x: targetSprite.x, y: targetSprite.y });
-            effect.fillStyle(0xff0000, 0.8); // Red color, slightly transparent
-            effect.fillCircle(0, 0, 6); // Small circle at the graphic's origin (target's position)
-            effect.setDepth(targetSprite.depth + 1); // Ensure it's drawn above the target
-
-            this.tweens.add({
-                targets: effect,
-                alpha: { from: 0.8, to: 0 },
-                scale: { from: 1, to: 1.6 }, // Make it expand slightly
-                duration: 300, // Short duration (300ms)
-                ease: 'Quad.easeOut',
-                onComplete: () => {
-                    if (effect?.scene) { // Check if effect still exists before destroying
-                       effect.destroy(); // Clean up the graphics object
-                    }
-                }
-            });
-
-            // --- Floating Combat Text (NEW) ---
-            if (data.damage > 0) { // Only show text if there's damage
-                const damage = Math.round(data.damage); // Use rounded damage
-                // Determine color: Red if target is one of OUR characters, white otherwise
-                const isPlayerTarget = this.playerCharacters.has(data.targetId);
-                const textColor = isPlayerTarget ? '#ff0000' : '#ffffff'; // Red for player damage taken, white otherwise
-                const combatText = this.add.text(
-                    targetSprite.x,
-                    targetSprite.y - targetSprite.displayHeight / 2, // Start slightly above the sprite's center/top
-                    `${damage}`,
-                    {
-                        fontFamily: 'Arial, sans-serif', // Choose a suitable font
-                        fontSize: '14px',
-                        fontStyle: 'bold',
-                        color: textColor,
-                        stroke: '#000000', // Black stroke for visibility
-                        strokeThickness: 3
-                    }
-                );
-                combatText.setOrigin(0.5, 0.5); // Center the text
-                combatText.setDepth(targetSprite.depth + 2); // Ensure text is above the circle effect
-
-                // Tween for floating up and fading out
-                this.tweens.add({
-                    targets: combatText,
-                    y: combatText.y - 40, // Float upwards by 40 pixels
-                    alpha: { from: 1, to: 0 }, // Fade out
-                    duration: 1000, // 1 second duration
-                    ease: 'Quad.easeOut',
-                    onComplete: () => {
-                        if (combatText?.scene) { // Check if text still exists
-                            combatText.destroy(); // Clean up the text object
-                        }
-                    }
-                });
-            }
-            // ------------------------------------
-
-        } else {
-            console.warn(`[GameScene] Combat action target sprite not found or already removed: ${data.targetId}`); // <-- ADD/MODIFY THIS LOG
+        // <<<--- Face Target Before Attacking (If Character) ---
+        if (attackerSprite instanceof CharacterSprite && targetSprite) {
+             attackerSprite.facePosition(targetSprite.x);
         }
+        // <<<---------------------------------------------------
+
+        // Play Attacker Animation
+        if (attackerSprite instanceof CharacterSprite) {
+             // console.log(`[GameScene] Playing attack animation for ${data.attackerId}`);
+             attackerSprite.setAnimation('attack', true); // Force restart attack animation
+         } else if (attackerSprite instanceof EnemySprite) {
+            // TODO: Trigger enemy attack animation if implemented
+            // attackerSprite.playAttackAnimation();
+         }
+
+        if (targetSprite) {
+            // Restore or implement floating damage text / visual effects here if needed
+            if (data.damage > 0 && targetSprite.scene) {
+                this.showFloatingText(targetSprite.x, targetSprite.y, `${Math.round(data.damage)}`, '#ffffff');
+                // Maybe add a brief tint or shake effect to the target?
+                // this.tweens.add({ targets: targetSprite, alpha: 0.5, duration: 50, yoyo: true });
+            }
+         } else {
+             // console.warn(`[GameScene] Combat action target not found: ${data.targetId}`);
+         }
     }
 
     // --- New Event Handlers for Items ---
@@ -851,5 +949,27 @@ export default class GameScene extends Phaser.Scene {
         } else {
             console.warn(`[GameScene] Could not find sprite for despawned item ${data.itemId}`);
         }
+    }
+
+    private findSpriteById(id: string): CharacterSprite | EnemySprite | undefined {
+        return this.playerCharacters.get(id) || this.otherCharacters.get(id) || this.enemySprites.get(id);
+    }
+
+    // Simple helper for floating text (can be expanded)
+    private showFloatingText(x: number, y: number, message: string, color: string = '#ffffff', duration: number = 1000) {
+        const text = this.add.text(x, y, message, {
+            fontFamily: 'Arial', fontSize: '14px', color: color, stroke: '#000000', strokeThickness: 3
+        });
+        text.setOrigin(0.5, 1); // Anchor bottom-center
+        text.setDepth(100); // Ensure on top
+
+        this.tweens.add({
+            targets: text,
+            y: y - 30, // Float up
+            alpha: { from: 1, to: 0 },
+            duration: duration,
+            ease: 'Quad.easeOut',
+            onComplete: () => { text.destroy(); }
+        });
     }
 }

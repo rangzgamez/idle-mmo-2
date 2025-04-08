@@ -527,6 +527,7 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
           level: char.level,
           x: char.positionX,
           y: char.positionY,
+          className: char.class
       }));
       // Broadcast only the NEW player's characters to existing players in the room
       client.to(zoneId).emit('playerJoined', { characters: newPlayerCharacterStates }); // Send array of characters
