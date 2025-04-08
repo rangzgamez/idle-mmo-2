@@ -2,6 +2,9 @@
 import Phaser from 'phaser';
 import { NetworkManager, CharacterClassTemplateData } from '../network/NetworkManager';
 import { EventBus } from '../EventBus';
+// --- Import the new component --- 
+import { CharacterCardComponent, CharacterCardData } from '../components/CharacterCardComponent';
+// ------------------------------
 
 // Define an interface for the character data we expect from the backend
 interface CharacterData {
@@ -14,112 +17,202 @@ interface CharacterData {
 
 export default class CharacterSelectScene extends Phaser.Scene {
     private characters: CharacterData[] = [];
-    private selectedCharacterIds: Set<string> = new Set();
+    private selectedCharacterIds = new Set<string>(); // Keep using Set for selected IDs
     private readonly MAX_SELECTED_CHARACTERS = 3;
     private availableClasses: CharacterClassTemplateData[] = [];
-    private selectedClassId: string | null = null;
-    // --- Store active animation interval --- 
-    private activeWalkAnimationIntervalId: NodeJS.Timeout | null = null;
-    private activeWalkAnimationClassId: string | null = null;
-    // -------------------------------------
-    // --- Map to store calculated frame counts --- 
-    private animationFrameCounts: Map<string, { attack: number, walk: number }> = new Map();
-    // ------------------------------------------
+    private selectedClassId: string | null = null; // Keep for creation modal
+    
+    // --- Store Component Instances --- 
+    private characterCardComponents: Map<string, CharacterCardComponent> = new Map();
+    private classCardComponents: Map<string, CharacterCardComponent> = new Map();
+    // -------------------------------
 
     // UI Elements
-    private characterListText: Phaser.GameObjects.Text[] = [];
+    // private characterListText: Phaser.GameObjects.Text[] = []; // REMOVE old text list
+    private characterListContainer!: Phaser.GameObjects.DOMElement; // Scroll container
     private enterGameButton!: Phaser.GameObjects.DOMElement;
     private statusText!: Phaser.GameObjects.Text;
     private showCreateModalButton!: Phaser.GameObjects.DOMElement;
     private createModalContainer!: Phaser.GameObjects.DOMElement;
-
-    // --- Animation Constants (used as fallbacks) ---
-    private readonly FRAME_WIDTH = 100;
-    private readonly ATTACK_FRAME_COUNT = 4; 
-    private readonly WALK_FRAME_COUNT = 4; 
-    private readonly ANIM_INTERVAL_MS = 150; 
-    // -------------------------------------------
+    private modalBgGraphics: Phaser.GameObjects.Graphics | null = null; // For dimming background
 
     constructor() {
         super('CharacterSelectScene');
     }
 
     create() {
-        console.log('CharacterSelectScene create');
-        this.cameras.main.setBackgroundColor('#3d3d3d');
+        // --- Scene Setup --- 
+        console.log("CharacterSelectScene create");
+        const { width, height } = this.scale;
+        const centerW = width / 2;
+        const centerH = height / 2;
 
-        const { width, height }: { width: any, height: any } = this.sys.game.config;
-        const centerW = Number(width) / 2;
-        const bottomAreaY = height - 60; // Y position for bottom buttons
+        // --- Revert to Grey Background --- 
+        this.cameras.main.setBackgroundColor('#3d3d3d'); 
+        // ---------------------------------
 
-        this.add.text(centerW, 50, 'Select Your Party (Up to 3)', { fontSize: '28px', color: '#fff' }).setOrigin(0.5);
+        // Title
+        this.add.text(centerW, 50, 'Select Your Party', { 
+            fontSize: '32px', 
+            color: '#fff', 
+            stroke: '#000', 
+            strokeThickness: 4 
+        }).setOrigin(0.5);
 
-        // Status Text (moved slightly up)
-        this.statusText = this.add.text(centerW, height - 30, '', { fontSize: '16px', color: '#ff0000', align: 'center' })
-            .setOrigin(0.5);
+        // --- Create Scrollable Container for Character List --- 
+        const listStartY = 100; // Position below title
+        const listHeight = 220; // Increased height for cards+text
+        this.characterListContainer = this.add.dom(centerW, listStartY + listHeight / 2).createFromHTML(`
+            <div id="character-scroll-container" style="
+                width: ${width * 0.85}px; /* 85% of game width */
+                height: ${listHeight}px;
+                overflow-x: auto; /* Enable horizontal scroll */
+                overflow-y: hidden; /* Disable vertical scroll */
+                display: flex; /* Arrange cards horizontally */
+                flex-wrap: nowrap; /* Prevent wrapping */
+                align-items: center; 
+                padding: 15px;
+                border: 1px solid #555;
+                background-color: rgba(0,0,0,0.3);
+                gap: 20px; /* Space between cards */
+                scrollbar-width: thin; /* Firefox scrollbar */
+                scrollbar-color: #888 #333; /* Firefox scrollbar */
+            ">
+                <!-- Character cards will be added here -->
+            </div>
+        `);
+        // Add styles for Webkit scrollbars (Chrome, Safari, Edge)
+        const styleSheet = document.createElement("style");
+        styleSheet.textContent = `
+            #character-scroll-container::-webkit-scrollbar {
+                height: 8px;
+            }
+            #character-scroll-container::-webkit-scrollbar-track {
+                background: #333;
+                border-radius: 4px;
+            }
+            #character-scroll-container::-webkit-scrollbar-thumb {
+                background-color: #888;
+                border-radius: 4px;
+                border: 2px solid #333;
+            }
+            #character-scroll-container::-webkit-scrollbar-thumb:hover {
+                background-color: #aaa;
+            }
+        `;
+        document.head.appendChild(styleSheet);
+        // ----------------------------------------------------
 
-        // --- Add "Create New Character" Button --- 
-        this.showCreateModalButton = this.add.dom(centerW - 100, bottomAreaY).createFromHTML(`
+        // Status Text
+        this.statusText = this.add.text(centerW, listStartY + listHeight + 35, '', { 
+            fontSize: '16px', 
+            color: '#ffffff', 
+            align: 'center' 
+        }).setOrigin(0.5);
+
+        // --- Buttons --- 
+        const bottomAreaY = listStartY + listHeight + 90;
+        this.showCreateModalButton = this.add.dom(centerW - 120, bottomAreaY).createFromHTML(`
             <button name="showCreate" style="width: 180px; padding: 10px; font-size: 14px;">Create New Character</button>
         `);
         this.showCreateModalButton.addListener('click');
         this.showCreateModalButton.on('click', () => {
             this.showCreateCharacterModal();
         });
-
-        // --- Enter Game Button (moved slightly right) ---
-        this.enterGameButton = this.add.dom(centerW + 100, bottomAreaY).createFromHTML(`
+        this.enterGameButton = this.add.dom(centerW + 120, bottomAreaY).createFromHTML(`
             <button name="enter" style="width: 180px; padding: 10px; font-size: 14px; background-color: #4CAF50; color: white;">Enter Game</button>
         `);
         this.enterGameButton.addListener('click');
         this.enterGameButton.on('click', () => {
             this.handleEnterGame();
         });
-        this.toggleEnterGameButton(false);
+        this.toggleEnterGameButton(false); // Initially disabled
 
-        // --- Add Modal Container (Initially Hidden) ---
-        this.createModalContainer = this.add.dom(centerW, height / 2).createFromHTML(`
+        // --- Modal Container (Simplified & Centered) ---
+        this.createModalContainer = this.add.dom(centerW, centerH).setOrigin(0.5, 0.5).createFromHTML(`
             <div id="create-modal" style="
-                display: none; /* Hidden by default */
-                position: absolute;
-                top: 50%;
-                left: 50%;
-                transform: translate(-50%, -50%);
-                width: 500px;
-                padding: 20px;
-                background-color: #555;
-                border: 2px solid #ccc;
-                border-radius: 8px;
-                z-index: 100; 
-                color: white;
-                box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+                width: 800px; 
+                max-width: 95%;
+                max-height: 85vh; 
+                padding: 25px;
+                background-color: #282c34;
+                border-radius: 10px;
+                box-shadow: 0 5px 15px rgba(0,0,0,0.5);
+                color: #fff;
+                border: 1px solid #555;
+                display: flex; 
+                flex-direction: column;
+                box-sizing: border-box;
+                overflow: hidden; /* Hide overflow for now */
             ">
-                <h3 style="text-align: center; margin-top: 0;">Create New Character</h3>
+                <h2 style="text-align: center; margin-top: 0; margin-bottom: 20px; flex-shrink: 0;">Create New Character</h2>
                 
-                <div style="margin-bottom: 15px;">
-                    <label>Select Class:</label>
-                    <div id="modal-class-select-container" style="display: flex; justify-content: space-around; align-items: stretch; margin-top: 10px; flex-wrap: wrap; gap: 10px;">
-                        <!-- Class options will be loaded here -->
+                <div style="margin-bottom: 15px; flex-shrink: 0;">
+                   <label for="modalCharName" style="display: block; margin-bottom: 5px;">Name:</label>
+                   <input type="text" id="modalCharName" name="charName" required minlength="3" maxlength="50" 
+                           style="width: 95%; padding: 10px; font-size: 16px; border-radius: 5px; border: 1px solid #ccc; background-color: #444; color: #fff;">
+                </div>
+                
+                <!-- Class Selection Container -->
+                <div style="margin-bottom: 20px; flex-shrink: 1; min-height: 0; overflow: hidden;">
+                    <label style="display: block; margin-bottom: 10px; flex-shrink: 0;">Select Class:</label>
+                    <div id="modal-class-select-container" style="
+                        display: flex;
+                        flex-wrap: wrap; 
+                        gap: 15px;
+                        justify-content: center;
+                        padding: 10px;
+                        border: 1px dashed #555;
+                        border-radius: 5px;
+                        height: 400px; /* Fixed height */
+                        max-height: 100%; 
+                        overflow-y: auto;
+                        box-sizing: border-box;
+                        scrollbar-width: thin; 
+                        scrollbar-color: #888 #333;
+                        "> 
+                        <!-- Class cards go here -->
                     </div>
                 </div>
                 
-                <div style="margin-bottom: 20px;">
-                    <label for="modalCharName">Name:</label>
-                    <input type="text" id="modalCharName" name="modalCharName" placeholder="Character Name" style="width: calc(100% - 22px); padding: 10px; font-size: 14px; margin-top: 5px;">
-                </div>
-                
-                <div style="display: flex; justify-content: space-between;">
-                    <button id="modal-cancel-button" style="padding: 10px 20px; font-size: 14px;">Cancel</button>
-                    <button id="modal-create-button" style="padding: 10px 20px; font-size: 14px; background-color: #888; color: #ccc; cursor: not-allowed;" disabled>Create Character</button>
+                <!-- Buttons -->
+                <div style="text-align: center; margin-top: auto; padding-top: 20px; flex-shrink: 0;">
+                     <button id="modal-cancel-button" style="padding: 10px 20px; margin-right: 15px; cursor: pointer;">Cancel</button>
+                     <button id="modal-create-button" style="padding: 10px 20px; cursor: pointer; background-color: #888; color: #ccc; border: none; border-radius: 3px;" disabled>Create</button>
                 </div>
             </div>
-        `);
+          `);
+          
+          // --- Set parent container initially invisible --- 
+          this.createModalContainer.setVisible(false); 
+          // -----------------------------------------------
+          
+          // Add scrollbar styles
+          const modalStyleSheet = document.createElement("style");
+          modalStyleSheet.textContent = `
+            #modal-class-select-container::-webkit-scrollbar {
+                width: 8px;
+            }
+            #modal-class-select-container::-webkit-scrollbar-track {
+                background: #333;
+                border-radius: 4px;
+            }
+            #modal-class-select-container::-webkit-scrollbar-thumb {
+                background-color: #888;
+                border-radius: 4px;
+                border: 2px solid #333;
+            }
+            #modal-class-select-container::-webkit-scrollbar-thumb:hover {
+                background-color: #aaa;
+            }
+        `;
+        document.head.appendChild(modalStyleSheet);
 
-        // Add listeners for modal buttons later when modal is shown
-
-        // --- Fetch Initial Data ---
+        this.resetModalState();
+        
+        // --- Fetch Initial Data --- 
         this.fetchCharacters();
-        this.fetchAndDisplayClasses(); // Fetches classes, will populate modal later
+        this.fetchAndDisplayClasses(); 
     }
 
     setStatus(message: string, isError: boolean = false) {
@@ -152,8 +245,13 @@ export default class CharacterSelectScene extends Phaser.Scene {
             }
 
             this.characters = await response.json() as CharacterData[];
-            this.displayCharacters();
-            this.setStatus(''); // Clear status on success
+            // --- Don't display immediately --- 
+            // this.displayCharacters(); 
+            // -------------------------------
+            this.setStatus(''); 
+            // --- Call helper to check if ready to display --- 
+            this.tryDisplayCharacters();
+            // ----------------------------------------------
 
         } catch (error: any) {
             console.error('Fetch Characters Error:', error);
@@ -166,82 +264,123 @@ export default class CharacterSelectScene extends Phaser.Scene {
         }
     }
 
-    displayCharacters() {
-        // Clear previous list if any
-        this.characterListText.forEach(text => text.destroy());
-        this.characterListText = [];
+    async fetchAndDisplayClasses() {
+        this.setStatus('Loading classes...', false);
+        try {
+            this.availableClasses = await NetworkManager.getInstance().getAvailableClasses();
+            // --- Don't assume characters are ready --- 
+            // this.setStatus(''); 
+            // ---------------------------------------
+            // --- Call helper to check if ready to display --- 
+            this.tryDisplayCharacters();
+            // ----------------------------------------------
+        } catch (error: any) {
+            console.error('Fetch Classes Error:', error);
+            this.setStatus(error.message || 'Failed to load classes.', true);
+            // Handle error appropriately, maybe disable creation
+        }
+    }
 
-        const startY = 100;
-        const spacing = 40;
-        const centerW = Number(this.sys.game.config.width) / 2;
+    // --- NEW Helper Function --- 
+    tryDisplayCharacters() {
+        // Only display if BOTH datasets are loaded
+        if (this.characters.length > 0 && this.availableClasses.length > 0) {
+            console.log("Character and Class data loaded. Displaying character list.");
+            this.displayCharacters();
+            // Clear status ONLY when display happens
+            this.setStatus(''); 
+        } else {
+            // Log status if waiting
+            console.log("Waiting for both characters and classes data...");
+            if(this.characters.length === 0) console.log(" - Characters pending...");
+            if(this.availableClasses.length === 0) console.log(" - Classes pending...");
+            // Keep the loading status message if not ready
+        }
+    }
+    // -------------------------
+
+    displayCharacters() {
+        const scrollContainer = this.characterListContainer.node.querySelector('#character-scroll-container') as HTMLElement;
+        if (!scrollContainer) {
+            console.error("Character scroll container not found!");
+            return;
+        }
+
+        // Clear previous content & components
+        scrollContainer.innerHTML = ''; 
+        this.characterCardComponents.forEach(comp => comp.stopAnimationAndReset()); // Stop anim before removing
+        this.characterCardComponents.clear();
+        // No need to clear animationFrameCounts map here, component doesn't use it directly
 
         if (this.characters.length === 0) {
-             this.add.text(centerW, startY + 50, 'No characters found. Create one below!', { fontSize: '18px', color: '#ccc' }).setOrigin(0.5);
+             scrollContainer.innerHTML = '<div style="color: #ccc; text-align: center; width: 100%; align-self: center;">No characters found. Create one!</div>';
+             this.toggleEnterGameButton(false);
              return;
         }
 
-        // Create a map for class ID to Name for easy lookup
-        const classNameMap = new Map(this.availableClasses.map(c => [c.classId, c.name]));
+        const classDataMap = new Map(this.availableClasses.map(c => [c.classId, c]));
 
-        this.characters.forEach((char, index) => {
-            // +++ Get class name, default to ID if not found +++
-            const className = classNameMap.get(char.class) || char.class || 'Unknown'; 
-            const charText = this.add.text(
-                centerW,
-                startY + index * spacing,
-                // +++ Update display text +++
-                `Lv ${char.level} ${className} - ${char.name}`,
-                { fontSize: '20px', color: '#fff' }
-            ).setOrigin(0.5).setInteractive(); // Make text clickable
-
-            charText.on('pointerdown', () => {
-                this.toggleCharacterSelection(char.id, charText);
-            });
-
-            // Set initial appearance based on selection state
-            this.updateCharacterTextApperance(char.id, charText);
-
-            this.characterListText.push(charText);
-        });
-    }
-
-    toggleCharacterSelection(id: string, textObject: Phaser.GameObjects.Text) {
-        if (this.selectedCharacterIds.has(id)) {
-            this.selectedCharacterIds.delete(id);
-        } else {
-            if (this.selectedCharacterIds.size < this.MAX_SELECTED_CHARACTERS) {
-                this.selectedCharacterIds.add(id);
-            } else {
-                this.setStatus(`You can only select up to ${this.MAX_SELECTED_CHARACTERS} characters.`, true);
-                // Optional: Flash the text or give other feedback
-                this.time.delayedCall(1500, () => this.setStatus('')); // Clear message after delay
-                return; // Do not add if limit reached
+        this.characters.forEach(char => {
+            const charClassData = classDataMap.get(char.class);
+            if (!charClassData) {
+                console.warn(`Class data not found for character ${char.name} with class ${char.class}`);
+                // Optionally display a placeholder or skip
+                return; 
             }
-        }
 
-        // Update visual appearance of the clicked text
-        this.updateCharacterTextApperance(id, textObject);
+            // --- Create Component Data --- 
+            const cardData: CharacterCardData = {
+                id: char.id,
+                name: char.name,
+                levelText: `Lv ${char.level} ${charClassData.name}`,
+                spritePaths: {
+                    idle: `assets/sprites/characters/${charClassData.spriteKeyBase}/idle.png`,
+                    attack: `assets/sprites/characters/${charClassData.spriteKeyBase}/attack.png`,
+                    walk: `assets/sprites/characters/${charClassData.spriteKeyBase}/walk.png`,
+                },
+                initialIsSelected: this.selectedCharacterIds.has(char.id)
+            };
+            // ---------------------------
 
-        // Update all text objects' appearance (in case selection changes indirectly)
-        this.characterListText.forEach((txt, index) => {
-            if (this.characters[index]) { // Ensure character exists for this text
-                 this.updateCharacterTextApperance(this.characters[index].id, txt);
-            }
+            // --- Create and Store Component --- 
+            const component = new CharacterCardComponent(
+                scrollContainer, // Parent element
+                cardData,
+                (characterId: string) => this.handleCharacterSelection(characterId) // Click handler
+            );
+            this.characterCardComponents.set(char.id, component);
+            // ----------------------------------
         });
-
-        // Enable/disable Enter Game button based on selection count
+        
         this.toggleEnterGameButton(this.selectedCharacterIds.size > 0);
     }
 
-    updateCharacterTextApperance(id: string, textObject: Phaser.GameObjects.Text) {
-         if (this.selectedCharacterIds.has(id)) {
-            textObject.setColor('#00ff00'); // Green for selected
-            textObject.setFontStyle('bold');
+    // --- NEW Character Selection Handler --- 
+    handleCharacterSelection(characterId: string) {
+        const wasSelected = this.selectedCharacterIds.has(characterId);
+        
+        if (wasSelected) {
+            this.selectedCharacterIds.delete(characterId);
+            console.log(`Scene: Deselected char ${characterId}`);
         } else {
-            textObject.setColor('#ffffff'); // White for not selected
-            textObject.setFontStyle('normal');
+            if (this.selectedCharacterIds.size < this.MAX_SELECTED_CHARACTERS) {
+                this.selectedCharacterIds.add(characterId);
+                console.log(`Scene: Selected char ${characterId}`);
+            } else {
+                this.setStatus(`You can only select up to ${this.MAX_SELECTED_CHARACTERS} characters.`, true);
+                this.time.delayedCall(1500, () => this.setStatus('')); 
+                return; // Prevent selection state change
+            }
         }
+
+        // Update ALL character components based on the new selection set
+        this.characterCardComponents.forEach((component, id) => {
+            component.setSelected(this.selectedCharacterIds.has(id));
+        });
+
+        this.toggleEnterGameButton(this.selectedCharacterIds.size > 0);
     }
+    // ---------------------------------------
 
     toggleEnterGameButton(enabled: boolean) {
         const buttonElement = (this.enterGameButton.node as HTMLElement).querySelector('button');
@@ -360,48 +499,59 @@ export default class CharacterSelectScene extends Phaser.Scene {
         });
     }
 
-    async fetchAndDisplayClasses() {
-        this.setStatus('Loading classes...', false);
-        try {
-            this.availableClasses = await NetworkManager.getInstance().getAvailableClasses();
-            this.setStatus(''); // Clear status if characters also loaded
-        } catch (error: any) {
-            console.error('Fetch Classes Error:', error);
-            this.setStatus(error.message || 'Failed to load classes.', true);
-            // Handle error appropriately, maybe disable creation
-        }
-    }
-
     // +++ Add Modal Show/Hide Functions +++
     showCreateCharacterModal() {
+        // --- Dim Background using Phaser Graphics --- 
+        if (!this.modalBgGraphics) {
+             const { width, height } = this.scale;
+             this.modalBgGraphics = this.add.graphics({ x: 0, y: 0 });
+             this.modalBgGraphics.fillStyle(0x000000, 0.75); // Black with alpha
+             this.modalBgGraphics.fillRect(0, 0, width, height);
+             this.modalBgGraphics.setInteractive(); // Block clicks behind modal
+             this.modalBgGraphics.setDepth(5); // Ensure it's behind modal DOM but above scene
+        }
+        this.modalBgGraphics.setVisible(true);
+        // -------------------------------------------
+
+        // --- Show the Modal Container --- 
+        this.createModalContainer.setVisible(true);
+        this.createModalContainer.setDepth(6); // Ensure modal DOM is above background
+        // --------------------------------
+        
+        // Reset state, populate UI, add listeners
         const modalElement = this.createModalContainer.node.querySelector('#create-modal') as HTMLElement;
         if (modalElement) {
-            modalElement.style.display = 'block';
-            this.resetModalState(); // Clear previous state
-            this.displayClassSelectionUI(); // Re-populate classes in the modal
-            this.updateModalCreateButtonState(); // Set initial button state
+            this.resetModalState(); 
+            this.displayClassSelectionUI(); 
+            this.updateModalCreateButtonState(); 
 
-            // Add listeners for modal buttons now that it's visible
             const cancelButton = modalElement.querySelector('#modal-cancel-button') as HTMLButtonElement;
             const createButton = modalElement.querySelector('#modal-create-button') as HTMLButtonElement;
             const nameInput = modalElement.querySelector('#modalCharName') as HTMLInputElement;
 
             cancelButton?.removeEventListener('click', this.hideCreateCharacterModal);
-            cancelButton?.addEventListener('click', this.hideCreateCharacterModal.bind(this)); // Use bind or arrow func
+            cancelButton?.addEventListener('click', this.hideCreateCharacterModal.bind(this));
 
             createButton?.removeEventListener('click', this.handleCreateCharacter);
             createButton?.addEventListener('click', this.handleCreateCharacter.bind(this));
             
             nameInput?.removeEventListener('input', this.updateModalCreateButtonState);
             nameInput?.addEventListener('input', this.updateModalCreateButtonState.bind(this));
+        } else {
+            console.error("Could not find #create-modal element for listeners.");
         }
     }
 
     hideCreateCharacterModal() {
-        const modalElement = this.createModalContainer.node.querySelector('#create-modal') as HTMLElement;
-        if (modalElement) {
-            modalElement.style.display = 'none';
+        // --- Hide the Modal Container --- 
+        this.createModalContainer.setVisible(false); 
+        // --------------------------------
+        
+        // --- Hide the Dimming Background --- 
+        if (this.modalBgGraphics) {
+            this.modalBgGraphics.setVisible(false);
         }
+        // -----------------------------------
     }
 
     resetModalState() {
@@ -440,7 +590,6 @@ export default class CharacterSelectScene extends Phaser.Scene {
         }
     }
 
-    // Class UI display logic (now populates the MODAL)
     displayClassSelectionUI() { 
         const container = this.createModalContainer.node.querySelector('#modal-class-select-container') as HTMLElement;
         if (!container) {
@@ -448,244 +597,63 @@ export default class CharacterSelectScene extends Phaser.Scene {
             return;
         }
         container.innerHTML = ''; 
-        this.stopAndResetAllAnimations(container);
-        this.animationFrameCounts.clear(); // Clear old counts when rebuilding UI
+        // --- Reset Class Components --- 
+        this.classCardComponents.forEach(comp => comp.stopAnimationAndReset());
+        this.classCardComponents.clear();
+        // ----------------------------
         console.log(`Displaying ${this.availableClasses.length} classes in modal.`);
 
         this.availableClasses.forEach(charClass => {
-            const card = document.createElement('div');
-            card.className = 'class-card';
-            card.style.width = '110px'; // Adjusted width slightly for padding/border
-            card.style.padding = '10px';
-            card.style.border = '2px solid #ccc';
-            card.style.borderRadius = '8px';
-            card.style.cursor = 'pointer';
-            card.style.textAlign = 'center';
-            card.style.backgroundColor = '#666'; 
-            card.style.color = '#fff';
-            card.style.display = 'flex';
-            card.style.flexDirection = 'column';
-            card.style.alignItems = 'center';
-            card.style.justifyContent = 'space-between'; 
-            card.dataset.classId = charClass.classId;
-
-            const idleSpritePath = `assets/sprites/characters/${charClass.spriteKeyBase}/idle.png`;
-            const attackSpritePath = `assets/sprites/characters/${charClass.spriteKeyBase}/attack.png`;
-            const walkSpritePath = `assets/sprites/characters/${charClass.spriteKeyBase}/walk.png`;
-            card.dataset.idleSprite = idleSpritePath;
-            card.dataset.attackSprite = attackSpritePath;
-            card.dataset.walkSprite = walkSpritePath;
-            
-            // --- Initiate image loading to calculate frame counts --- 
-            this.loadAndStoreFrameCounts(charClass.classId, attackSpritePath, walkSpritePath);
-            // --------------------------------------------------------
-
-            const imgPreview = document.createElement('div');
-            imgPreview.id = `img-preview-${charClass.classId}`;
-            imgPreview.style.width = `${this.FRAME_WIDTH}px`;
-            imgPreview.style.height = `${this.FRAME_WIDTH}px`;
-            imgPreview.style.backgroundImage = `url('${idleSpritePath}')`;
-            imgPreview.style.backgroundPosition = '0px 0px';
-            imgPreview.style.backgroundRepeat = 'no-repeat';
-            imgPreview.style.marginBottom = '5px';
-            imgPreview.style.transformOrigin = 'center'; 
-            imgPreview.style.transform = 'scale(2.0)';
-            imgPreview.style.imageRendering = 'pixelated';
-
-            const name = document.createElement('div');
-            name.textContent = charClass.name;
-            name.style.fontWeight = 'bold';
-            name.style.fontSize = '14px';
-            name.style.marginBottom = '5px';
-
-            const desc = document.createElement('div');
-            desc.textContent = charClass.description;
-            desc.style.fontSize = '11px';
-            desc.style.flexGrow = '1';
-
-            card.appendChild(imgPreview);
-            card.appendChild(name);
-            card.appendChild(desc);
-
-            card.onclick = () => {
-                const previouslySelectedClassId = this.selectedClassId;
-                const newlySelectedClassId = charClass.classId;
-                
-                // Don't re-trigger animation if clicking the already selected card
-                if (previouslySelectedClassId === newlySelectedClassId) {
-                    return; 
-                }
-
-                this.selectedClassId = newlySelectedClassId;
-                console.log(`Selected class: ${this.selectedClassId}`);
-
-                // --- Stop animations and update styles --- 
-                this.stopAndResetAllAnimations(container); // Stop all animations first
-                container.querySelectorAll('div.class-card').forEach(el => {
-                    const htmlEl = el as HTMLElement;
-                    const currentCardClassId = htmlEl.dataset.classId;
-                    const isSelected = currentCardClassId === this.selectedClassId;
-                    
-                    htmlEl.style.borderColor = isSelected ? '#0f0' : '#ccc';
-                    htmlEl.style.backgroundColor = isSelected ? '#383' : '#666';
-
-                    // Reset non-selected card previews to idle (already done by stopAndResetAllAnimations)
-                });
-                // -----------------------------------------
-
-                // --- Start animation for the newly selected card --- 
-                this.playAttackThenWalkAnimation(newlySelectedClassId);
-                // -------------------------------------------------
-
-                this.updateModalCreateButtonState();
+            // --- Create Component Data for Class --- 
+            const cardData: CharacterCardData = {
+                id: charClass.classId, // Use classId as ID
+                name: charClass.name,
+                levelText: undefined, // No level for class selection
+                spritePaths: {
+                    idle: `assets/sprites/characters/${charClass.spriteKeyBase}/idle.png`,
+                    attack: `assets/sprites/characters/${charClass.spriteKeyBase}/attack.png`,
+                    walk: `assets/sprites/characters/${charClass.spriteKeyBase}/walk.png`,
+                },
+                initialIsSelected: this.selectedClassId === charClass.classId
             };
+             // Add description to the card data if needed, or handle separately
+             // cardData.description = charClass.description; 
+            // -------------------------------------
 
-            container.appendChild(card);
+            // --- Create and Store Class Component --- 
+            const component = new CharacterCardComponent(
+                container, 
+                cardData, 
+                (classId: string) => this.handleClassSelection(classId) // Click handler
+            );
+             this.classCardComponents.set(charClass.classId, component);
+             // --- Add description AFTER component element exists --- 
+             // (Component doesn't handle description currently)
+             const descElement = document.createElement('div');
+             descElement.textContent = charClass.description;
+             descElement.style.fontSize = '11px';
+             descElement.style.marginTop = '5px'; // Add some space
+             component.getElement().appendChild(descElement);
+             // --------------------------------------------------
         });
     }
-    
-    // --- Helper to load images and store frame counts --- 
-    loadAndStoreFrameCounts(classId: string, attackSrc: string, walkSrc: string) {
-        const counts = { attack: this.ATTACK_FRAME_COUNT, walk: this.WALK_FRAME_COUNT }; // Initialize with defaults
-        this.animationFrameCounts.set(classId, counts); // Store defaults immediately
 
-        const attackImg = new Image();
-        attackImg.onload = () => {
-            const frameCount = Math.max(1, Math.floor(attackImg.width / this.FRAME_WIDTH)); // Ensure at least 1 frame
-            console.log(`Loaded ${attackSrc}: width=${attackImg.width}, calculated attack frames=${frameCount}`);
-            counts.attack = frameCount;
-            this.animationFrameCounts.set(classId, counts); // Update map with actual count
-            console.log(`Animation frame counts: ${JSON.stringify(this.animationFrameCounts)}`);
-        };
-        attackImg.onerror = () => {
-            console.error(`Failed to load attack image for frame count: ${attackSrc}`);
-        };
-        attackImg.src = attackSrc;
-
-        const walkImg = new Image();
-        walkImg.onload = () => {
-            const frameCount = Math.max(1, Math.floor(walkImg.width / this.FRAME_WIDTH));
-            console.log(`Loaded ${walkSrc}: width=${walkImg.width}, calculated walk frames=${frameCount}`);
-            counts.walk = frameCount;
-            this.animationFrameCounts.set(classId, counts); // Update map with actual count
-        };
-        walkImg.onerror = () => {
-            console.error(`Failed to load walk image for frame count: ${walkSrc}`);
-        };
-        walkImg.src = walkSrc;
-    }
-    // ----------------------------------------------------
-
-    // --- Helper to stop all animations and reset previews ---
-    stopAndResetAllAnimations(container: HTMLElement) {
-        // Clear the active walking interval (if any)
-        const previouslyWalkingClassId = this.activeWalkAnimationClassId; 
-        if (this.activeWalkAnimationIntervalId !== null) {
-            clearInterval(this.activeWalkAnimationIntervalId);
-            this.activeWalkAnimationIntervalId = null;
-            this.activeWalkAnimationClassId = null;
-            console.log(`Cleared walk interval for: ${previouslyWalkingClassId}`); 
+    // --- NEW Class Selection Handler --- 
+    handleClassSelection(classId: string) {
+        if (this.selectedClassId === classId) {
+             // Optionally allow deselecting class? If not, just return.
+             // this.selectedClassId = null;
+             return; 
         }
-        
-        console.log("Resetting all card previews to idle...");
-        container.querySelectorAll('div.class-card').forEach(el => {
-            const card = el as HTMLElement;
-            const classId = card.dataset.classId;
-            const idleSprite = card.dataset.idleSprite;
-            if (classId && idleSprite) {
-                const imgPreview = container.querySelector(`#img-preview-${classId}`) as HTMLElement;
-                if (imgPreview) {
-                    // --- Clear any active ATTACK interval for this preview --- 
-                    const attackIntervalIdStr = imgPreview.dataset.attackIntervalId;
-                    if (attackIntervalIdStr) {
-                        const attackIntervalIdNum = parseInt(attackIntervalIdStr, 10);
-                        if (!isNaN(attackIntervalIdNum)) {
-                            clearInterval(attackIntervalIdNum);
-                            console.log(` > Cleared stray attack interval ${attackIntervalIdNum} for ${classId}`);
-                        }
-                        delete imgPreview.dataset.attackIntervalId; // Remove from dataset
-                    }
-                    // -------------------------------------------------------
+        this.selectedClassId = classId;
+        console.log(`Scene: Selected class ${classId}`);
 
-                    console.log(` > Resetting preview for ${classId}`);
-                    imgPreview.style.backgroundImage = `url('${idleSprite}')`;
-                    imgPreview.style.backgroundPosition = '0px 0px';
-                } else {
-                    console.warn(`Could not find imgPreview element to reset for ${classId}`);
-                }
-            } else {
-                console.warn("Card missing classId or idleSprite dataset", card);
-            }
+        // Update ALL class components
+        this.classCardComponents.forEach((component, id) => {
+            component.setSelected(this.selectedClassId === id);
         });
+        
+        this.updateModalCreateButtonState();
     }
-    // ----------------------------------------------------
-
-    // --- Helper to play Attack -> Walk sequence ---
-    playAttackThenWalkAnimation(classId: string) {
-        const card = this.createModalContainer.node.querySelector(`.class-card[data-class-id="${classId}"]`) as HTMLElement;
-        const imgPreview = this.createModalContainer.node.querySelector(`#img-preview-${classId}`) as HTMLElement;
-        
-        if (!card || !imgPreview) { 
-            console.error(`Cannot find card or imgPreview for animation: ${classId}`);
-            return;
-        }
-        
-        const attackSprite = card.dataset.attackSprite;
-        const walkSprite = card.dataset.walkSprite;
-        const idleSprite = card.dataset.idleSprite;
-
-        if (!attackSprite || !walkSprite || !idleSprite) {
-            console.error(`Missing sprite paths for animation: ${classId}`);
-            return; 
-        }
-
-        // --- Use stored/calculated frame counts (with fallbacks) --- 
-        const counts = this.animationFrameCounts.get(classId) || { attack: this.ATTACK_FRAME_COUNT, walk: this.WALK_FRAME_COUNT };
-        const attackFrameCount = counts.attack;
-        const walkFrameCount = counts.walk;
-        console.log(`Animating ${classId}: Attack Frames=${attackFrameCount}, Walk Frames=${walkFrameCount}`);
-
-        let attackFrame = 0;
-        imgPreview.style.backgroundImage = `url('${attackSprite}')`;
-        
-        const attackIntervalId = setInterval(() => {
-            // --- Store attack interval ID on the element --- 
-            // Note: setInterval returns Timeout in NodeJS, need to handle potential type differences
-            // For simplicity in DOM context, let's assume it behaves like window.setInterval (returns number)
-            imgPreview.dataset.attackIntervalId = String(attackIntervalId as unknown as number); 
-            // -----------------------------------------------
-
-            const currentX = -attackFrame * this.FRAME_WIDTH;
-            imgPreview.style.backgroundPosition = `${currentX}px 0px`;
-            attackFrame++;
-            
-            if (attackFrame >= attackFrameCount) {
-                // Attack finished
-                clearInterval(attackIntervalId);
-                // --- Remove attack interval ID from dataset --- 
-                if (imgPreview.dataset.attackIntervalId) {
-                    delete imgPreview.dataset.attackIntervalId;
-                }
-                // --------------------------------------------
-                console.log(`Attack finished for ${classId}, starting walk.`);
-                
-                // --- Start walking animation (logic remains the same) ---
-                let walkFrame = 0;
-                imgPreview.style.backgroundImage = `url('${walkSprite}')`;
-                imgPreview.style.backgroundPosition = '0px 0px';
-                
-                if (this.activeWalkAnimationIntervalId !== null) {
-                    clearInterval(this.activeWalkAnimationIntervalId);
-                }
-                this.activeWalkAnimationClassId = classId;
-                this.activeWalkAnimationIntervalId = setInterval(() => { 
-                    const currentWalkX = -walkFrame * this.FRAME_WIDTH;
-                    imgPreview.style.backgroundPosition = `${currentWalkX}px 0px`;
-                    walkFrame = (walkFrame + 1) % walkFrameCount;
-                }, this.ANIM_INTERVAL_MS);
-                // ----------------------------------------------------
-            }
-        }, this.ANIM_INTERVAL_MS);
-    }
-    // -------------------------------------------
+    // ---------------------------------
 }
