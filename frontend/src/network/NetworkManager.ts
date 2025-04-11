@@ -61,6 +61,11 @@ export interface CharacterClassTemplateData {
     spriteKeyBase: string;
 }
 
+// Define the payload interface if not already present
+interface CharacterStateUpdatePayload {
+    updates: Array<{ entityId: string; state: string }>;
+}
+
 export class NetworkManager {
     private socket: Socket | null = null;
     private static instance: NetworkManager;
@@ -238,6 +243,21 @@ export class NetworkManager {
             }
         });
         // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+        // ---> ADD Character State Updates Listener <---
+        this.socket.on('characterStateUpdates', (payload: CharacterStateUpdatePayload) => {
+            // This event bundles multiple state changes from the server
+            // console.log(`Received character state updates for ${payload.updates.length} entities.`);
+
+            // Validate payload structure before emitting
+            if (payload && Array.isArray(payload.updates)) {
+                // Use the imported EventBus singleton directly
+                EventBus.emit('character-state-update', payload); // Emit locally
+            } else {
+                console.warn('Received invalid characterStateUpdates payload:', payload);
+            }
+        });
+        // ---> END ADD <---
 
         // Existing listeners (keep if needed)
         // this.socket.on('chatMessage', (data) => { /* ... */ });

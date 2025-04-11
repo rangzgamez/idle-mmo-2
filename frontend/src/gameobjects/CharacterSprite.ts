@@ -2,20 +2,8 @@
 import Phaser from 'phaser';
 import { HealthBar } from './HealthBar'; // Import HealthBar
 import { PhaserSpriteAnimator, StateTextureKeys } from '../graphics/PhaserSpriteAnimator'; // <<< Import Phaser Animator
-
-// Add the interface definition if you don't have it shared elsewhere
-interface ZoneCharacterState {
-    id: string;
-    ownerId: string;
-    ownerName: string;
-    name: string;
-    className: string; // <<<--- ADD CLASS NAME (Ensure backend sends this!)
-    level: number;
-    x: number | null;
-    y: number | null;
-    baseHealth?: number; // <-- Made optional
-    currentHealth?: number; // Also add currentHealth if needed by constructor/logic
-}
+import { ZoneCharacterState } from '../types/zone.types';
+import FloatingCombatText from './FloatingCombatText';
 
 export class CharacterSprite extends Phaser.GameObjects.Sprite {
     characterId: string;
@@ -32,6 +20,8 @@ export class CharacterSprite extends Phaser.GameObjects.Sprite {
     private healthBar: HealthBar; // Add health bar property
     private animator?: PhaserSpriteAnimator; // <<<--- ADD ANIMATOR (optional for safety)
     private isFacingRight: boolean = true; // <<<--- ADD FACING DIRECTION
+    private isDead = false;
+    private currentState: string = 'idle';
 
     private readonly BUBBLE_MAX_WIDTH = 150; // Max width before wrapping
     private readonly BUBBLE_OFFSET_Y = 20;  // Initial offset above sprite center/top
@@ -47,6 +37,8 @@ export class CharacterSprite extends Phaser.GameObjects.Sprite {
         wordWrap: { width: this.BUBBLE_MAX_WIDTH }
     };
     private nameLabel: Phaser.GameObjects.Text;
+    private chatBubble: Phaser.GameObjects.Container | null = null;
+    private chatBubbleTimer: Phaser.Time.TimerEvent | null = null;
 
     constructor(scene: Phaser.Scene, x: number, y: number, texture: string, data: ZoneCharacterState, isPlayer: boolean) {
         // Use placeholder texture initially if idle texture isn't guaranteed yet
@@ -87,6 +79,9 @@ export class CharacterSprite extends Phaser.GameObjects.Sprite {
         // <<<--- SETUP ANIMATOR ---
         this.setupAnimator(scene);
         // <<<---------------------
+
+        this.currentState = data.state || 'idle';
+        this.updateAnimation();
     }
 
     // <<<--- NEW METHOD TO SETUP ANIMATOR ---
@@ -220,6 +215,9 @@ export class CharacterSprite extends Phaser.GameObjects.Sprite {
             bubble.x = this.x;
             bubble.y = this.calculateBubbleY(index);
         });
+
+        this.updateChatBubblePosition();
+        this.updateAnimation();
     }
 
     setHealth(currentHealth: number, maxHealth?: number): void {
@@ -297,6 +295,94 @@ export class CharacterSprite extends Phaser.GameObjects.Sprite {
         this.activeBubbles = [];
         this.healthBar.destroy();
         this.animator?.destroy(); // <<<--- DESTROY ANIMATOR
+        this.clearChatBubble(true);
         super.destroy(fromScene);
+    }
+
+    public setCharacterState(newState: string): void {
+        console.log(`[CharacterSprite ${this.characterId}] Setting character state to: ${newState}`);
+        if (this.currentState !== newState && !this.isDead) {
+            this.currentState = newState;
+            this.updateAnimation();
+        } else if (newState === 'dead' && !this.isDead) {
+            this.handleDeath();
+        }
+    }
+
+    private updateAnimation(): void {
+        if (this.isDead) {
+            this.stop();
+            return;
+        }
+
+        const dx = this.targetX - this.x;
+        const dy = this.targetY - this.y;
+        const isMoving = Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5;
+
+        let animKey: string | null = null;
+
+        switch (this.currentState) {
+            case 'attacking':
+                animKey = `${this.className}_attack`;
+                break;
+            case 'moving_to_loot':
+            case 'moving':
+                animKey = isMoving ? `${this.className}_walk` : `${this.className}_idle`;
+                break;
+            case 'looting_area':
+            case 'idle':
+            default:
+                animKey = `${this.className}_idle`;
+                break;
+        }
+
+        if (animKey) {
+            if (this.scene.anims.exists(animKey)) {
+                if (this.anims.currentAnim?.key !== animKey) {
+                    this.play(animKey);
+                }
+            } else {
+                const idleKey = `${this.className}_idle`;
+                if (animKey !== idleKey && this.scene.anims.exists(idleKey)) {
+                    if (this.anims.currentAnim?.key !== idleKey) {
+                        this.play(idleKey);
+                    }
+                } else {
+                    this.stop();
+                }
+            }
+        }
+
+        if (Math.abs(dx) > 0.5) {
+            this.setFlipX(dx < 0);
+        }
+    }
+
+    public handleDeath(): void {
+        if (this.isDead) return;
+        console.log(`[CharacterSprite ${this.characterId}] Handling death visuals.`);
+        this.isDead = true;
+        this.currentState = 'dead';
+        this.setAlpha(0.5);
+        this.stop();
+        this.clearChatBubble(true);
+    }
+
+
+    private updateChatBubblePosition(): void {
+        if (this.chatBubble) {
+            this.chatBubble.setPosition(this.x, this.y + this.BUBBLE_OFFSET_Y);
+        }
+    }
+
+    public clearChatBubble(force: boolean = false): void {
+        if (this.chatBubbleTimer && !force) {
+            this.chatBubbleTimer.remove();
+            this.chatBubbleTimer = null;
+        }
+        if (this.chatBubble) {
+            this.chatBubble.destroy();
+            this.chatBubble = null;
+        }
     }
 }

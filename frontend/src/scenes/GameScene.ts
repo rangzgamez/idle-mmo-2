@@ -5,9 +5,10 @@ import { CharacterSprite } from '../gameobjects/CharacterSprite'; // Import the 
 import { EventBus } from '../EventBus';
 import UIScene from './UIScene';
 import { EnemySprite } from '../gameobjects/EnemySprite';
-import { DroppedItemSprite, DroppedItemData } from '../gameobjects/DroppedItemSprite'; // <-- Import DroppedItemSprite
+import { DroppedItemSprite, DroppedItemData } from '../gameobjects/DroppedItemSprite';
+import { ZoneCharacterState } from '../types/zone.types';
+
 // Add the interface definitions if not shared
-interface ZoneCharacterState { id: string; ownerId: string; ownerName: string; name: string; level: number; x: number | null; y: number | null; currentHealth?: number; baseHealth?: number; className: string; }
 interface EntityUpdateData { id: string; x?: number | null; y?: number | null; health?: number | null; state?: string; }
 // --- Add Entity Death Interface ---
 interface EntityDeathData { entityId: string; type: 'character' | 'enemy'; }
@@ -59,6 +60,11 @@ interface XpUpdatePayload {
     xpToNextLevel: number; // Total XP needed for next level
 }
 // ---
+
+// Define interface if not already present
+interface CharacterStateUpdatePayload {
+    updates: Array<{ entityId: string; state: string }>;
+}
 
 export default class GameScene extends Phaser.Scene {
     networkManager!: NetworkManager;
@@ -193,6 +199,9 @@ export default class GameScene extends Phaser.Scene {
         // --- ADD Listeners for XP/Level Events ---
         EventBus.on('levelUpNotification', this.handleLevelUpNotification, this);
         EventBus.on('xpUpdate', this.handleXpUpdate, this);
+        // ---> ADD Listener for local state updates
+        EventBus.on('character-state-update', this.handleCharacterStateUpdates, this);
+        // <--- END ADD
         // -----------------------------------------
 
         // --- Launch UI Scene ---
@@ -668,6 +677,9 @@ export default class GameScene extends Phaser.Scene {
         // --- Remove XP/Level Listeners ---
         EventBus.off('levelUpNotification', this.handleLevelUpNotification, this);
         EventBus.off('xpUpdate', this.handleXpUpdate, this);
+        // ---> REMOVE Listener on shutdown
+        EventBus.off('character-state-update', this.handleCharacterStateUpdates, this);
+        // <--- END REMOVE
         // -------------------------------
         // Clear character maps
         this.playerCharacters.forEach(sprite => sprite.destroy());
@@ -703,6 +715,9 @@ export default class GameScene extends Phaser.Scene {
         // --- Remove XP/Level Listeners ---
         EventBus.off('levelUpNotification', this.handleLevelUpNotification, this);
         EventBus.off('xpUpdate', this.handleXpUpdate, this);
+        // ---> REMOVE Listener on shutdown
+        EventBus.off('character-state-update', this.handleCharacterStateUpdates, this);
+        // <--- END REMOVE
         // -------------------------------
         // Clear character maps
         this.playerCharacters.forEach(sprite => sprite.destroy());
@@ -972,4 +987,26 @@ export default class GameScene extends Phaser.Scene {
             onComplete: () => { text.destroy(); }
         });
     }
+
+    // ---> ADD Handler function
+    private handleCharacterStateUpdates(payload: CharacterStateUpdatePayload) {
+        console.log('[GameScene] Handling character state update batch', payload);
+        // console.log('GameScene handling character state update batch', payload);
+        payload.updates.forEach(update => {
+            const { entityId, state } = update;
+            // Find the sprite in either player or other characters map
+            const characterSprite = this.playerCharacters.get(entityId) || this.otherCharacters.get(entityId);
+
+            if (characterSprite) {
+                // Call the method on CharacterSprite to handle the state change
+                // Ensure CharacterSprite has this method!
+                characterSprite.setCharacterState(state);
+                // console.log(`Updated state for character ${entityId} to ${state}`);
+            } else {
+                // Ignore if sprite not found (might happen if entity left zone just before update)
+                // console.warn(`GameScene: Received state update for unknown character ID: ${entityId}`);
+            }
+        });
+    }
+    // <--- END ADD
 }
