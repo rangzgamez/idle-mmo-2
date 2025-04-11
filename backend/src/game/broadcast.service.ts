@@ -36,6 +36,13 @@ interface DroppedItemPayload {
     quantity: number;
 }
 
+// ---> ADD Interface for State Change Data
+interface CharacterStateChangeData {
+    entityId: string;
+    state: string;
+}
+// <--- END ADD
+
 type SpawnData = EnemyInstance; // The full enemy instance data for a new spawn
 
 @Injectable()
@@ -50,6 +57,9 @@ export class BroadcastService {
     private itemDroppedQueue: Map<string, DroppedItemPayload[]> = new Map();
     private itemPickedUpQueue: Map<string, { itemId: string }[]> = new Map();
     private itemDespawnedQueue: Map<string, { itemId: string }[]> = new Map(); // Add queue for despawns
+    // ---> ADD State Change Queue
+    private characterStateChangeQueue: Map<string, CharacterStateChangeData[]> = new Map();
+    // <--- END ADD
 
     // Inject Logger through the constructor
     constructor(private readonly logger: Logger) {
@@ -144,7 +154,13 @@ export class BroadcastService {
             queue.push({ itemId });
         }
     }
-    // ---------------------------------------------
+
+    // ---> ADD Method to queue character state changes
+    queueCharacterStateChange(zoneId: string, stateChangeData: CharacterStateChangeData): void {
+        this.getQueue(this.characterStateChangeQueue, zoneId).push(stateChangeData);
+        this.logger.verbose(`[Broadcast] Queued state change for entity ${stateChangeData.entityId} to ${stateChangeData.state} in zone ${zoneId}`);
+    }
+    // <--- END ADD
 
     // --- Broadcasting Method ---
 
@@ -165,6 +181,10 @@ export class BroadcastService {
         const spawns = this.spawnQueue.get(zoneId);
         const itemsDropped = this.itemDroppedQueue.get(zoneId); // Get dropped items
         const itemsPickedUp = this.itemPickedUpQueue.get(zoneId); // Get picked up items
+        const itemsDespawned = this.itemDespawnedQueue.get(zoneId);
+        // ---> ADD Flushing for State Changes
+        const stateChanges = this.characterStateChangeQueue.get(zoneId);
+        // <--- END ADD
 
         // Emit events only if there's data for them
         if (updates && updates.length > 0) {
@@ -203,7 +223,6 @@ export class BroadcastService {
             this.itemDroppedQueue.delete(zoneId); // Clear queue
         }
 
-        // --- NEW: Emit itemPickedUp events ---
         if (itemsPickedUp && itemsPickedUp.length > 0) {
             this.logger.verbose(`[Broadcast] Emitting itemPickedUp for zone ${zoneId} with ${itemsPickedUp.length} item(s).`);
             // Client expects individual 'itemPickedUp' events { itemId: string }
@@ -213,8 +232,6 @@ export class BroadcastService {
             this.itemPickedUpQueue.delete(zoneId); // Clear queue
         }
 
-        // --- NEW: Emit itemDespawned events ---
-        const itemsDespawned = this.itemDespawnedQueue.get(zoneId);
         if (itemsDespawned && itemsDespawned.length > 0) {
             this.logger.verbose(`[Broadcast] Emitting itemDespawned for zone ${zoneId} with ${itemsDespawned.length} item(s).`);
             // Client expects individual 'itemDespawned' events { itemId: string }
@@ -223,8 +240,26 @@ export class BroadcastService {
             });
             this.itemDespawnedQueue.delete(zoneId); // Clear queue
         }
-        // -------------------------------------
+
+        // ---> ADD Emit logic for State Changes
+        if (stateChanges && stateChanges.length > 0) {
+            this.logger.verbose(`[Broadcast] Emitting ${stateChanges.length} character state changes for zone ${zoneId}.`);
+            // Emit as a single batch event 'characterStateUpdates' containing an array
+            // Or emit individually? Let's emit as a batch for potential efficiency.
+            this.server.to(zoneId).emit('characterStateUpdates', { updates: stateChanges });
+            this.characterStateChangeQueue.delete(zoneId); // Clear queue
+        }
+        // <--- END ADD
     }
+
+    // ---> ADD Helper function getQueue if it doesn't exist
+    private getQueue<T>(map: Map<string, T[]>, key: string): T[] {
+        if (!map.has(key)) {
+            map.set(key, []);
+        }
+        return map.get(key)!;
+    }
+    // <--- END ADD
 
     // --- NEW: Method to send an event directly to a specific user ---
     /**

@@ -207,9 +207,11 @@ export class CharacterStateService {
         // --- 2. State Logic Delegation ---
         // Find the handler for the *current* state (which might have been forced to 'moving' by leashing)
         const currentStateHandler = this.stateHandlers.get(character.state);
+        const initialState = character.state; // Store state *before* delegation
 
         if (currentStateHandler) {
-            this.logger.verbose(`Character ${character.id} processing state: ${character.state} (Leashing: ${isLeashing})`);
+            // Log using initialState captured above
+            this.logger.verbose(`Character ${character.id} processing state: ${initialState} (Leashing: ${isLeashing})`);
             // Delegate the actual state logic processing to the handler
             const stateResult: StateProcessResult = await currentStateHandler.processTick(
                 character, // Pass the character data (handler can mutate it)
@@ -220,31 +222,60 @@ export class CharacterStateService {
                 now,
                 deltaTime
             );
+
+            const finalState = character.state; // Capture state *after* handler runs
+
             // --- 3. Aggregate Results from State Handler ---
-            // Merge results like combat actions, health updates etc. from the state handler into the overall tick result
             if (stateResult) {
                 tickResult.combatActions.push(...stateResult.combatActions);
                 tickResult.enemyHealthUpdates.push(...stateResult.enemyHealthUpdates);
-                // Use || to ensure flags are true if they were set by the state handler
                 tickResult.targetDied = tickResult.targetDied || stateResult.targetDied;
                 tickResult.pickedUpItemId = tickResult.pickedUpItemId || stateResult.pickedUpItemId;
+            }
 
-                 // The state handler should have directly mutated character.state for transitions.
-                 // We log the state *after* the handler has run to see if a transition occurred.
-                 this.logger.verbose(`Character ${character.id} finished processing state. New state: ${character.state}`);
+            // --->> Check for State Change and Queue Broadcast <<---
+            if (initialState !== finalState) {
+                this.logger.verbose(`Character ${character.id} state changed: ${initialState} -> ${finalState}`);
+                if (character.ownerId) {
+                    // --->> Queue the state change event <<---
+                    this.broadcastService.queueCharacterStateChange(zoneId, {
+                        entityId: character.id,
+                        state: finalState,
+                    });
+                 } else {
+                     this.logger.error(`Character ${character.id} changed state but ownerId is missing! Cannot broadcast state change.`);
+                 }
+            } else {
+                 // Log using finalState here as initialState === finalState
+                 this.logger.verbose(`Character ${character.id} finished processing state. State remained: ${finalState}`);
             }
 
         } else {
             // This should not happen if all states are mapped
+            // Use initialState captured before the if/else block
             this.logger.error(
-                `Character ${character.id} has unknown or unhandled state: '${character.state}'. Setting to idle to recover.`,
+                `Character ${character.id} has unknown or unhandled state: '${initialState}'. Setting to idle to recover.`,
             );
-            character.state = 'idle';
+            character.state = 'idle'; // Force state change
             character.targetX = null;
             character.targetY = null;
             character.attackTargetId = null;
             character.targetItemId = null;
             character.commandState = null;
+
+            // --->> Queue Broadcast for Forced Idle State <<---
+            // We know the state changed from initialState to 'idle'
+            const finalState = character.state; // This is 'idle'
+            this.logger.verbose(`Character ${character.id} state changed due to unknown state recovery: ${initialState} -> ${finalState}`);
+            if (character.ownerId) {
+                 // --->> Queue the state change event <<---
+                 this.broadcastService.queueCharacterStateChange(zoneId, {
+                     entityId: character.id,
+                     state: finalState, // 'idle'
+                 });
+             } else {
+                 this.logger.error(`Character ${character.id} changed state (unknown recovery) but ownerId is missing!`);
+             }
         }
 
         // --- Final Result ---
