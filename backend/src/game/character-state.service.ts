@@ -100,6 +100,9 @@ export class CharacterStateService {
         deltaTime: number,
     ): Promise<CharacterTickResult> {
 
+        // ---> Log Entry State
+        this.logger.verbose(`[Tick ${character.id}] --- START --- State: ${character.state}, Target: (${character.targetX}, ${character.targetY}), Command: ${character.commandState}`);
+
         // --- Initial Position Check ---
         // Moved to start to ensure position exists before any logic
         if (character.positionX === null || character.positionY === null) {
@@ -136,7 +139,7 @@ export class CharacterStateService {
             if (now >= character.timeOfDeath + this.RESPAWN_TIME_MS) {
                 this.logger.log(`Character ${character.id} [${character.name}] respawning.`);
                 character.currentHealth = character.baseHealth; // Full health
-                character.state = 'idle'; // Back to idle
+                this.dependencies.zoneService.setCharacterState(zoneId, character.id, 'idle');
                 character.timeOfDeath = null;
                 // Respawn at anchor or default (use nullish coalescing)
                 character.positionX = character.anchorX ?? 100;
@@ -157,7 +160,7 @@ export class CharacterStateService {
         if (character.currentHealth <= 0) {
             this.logger.log(`Character ${character.id} [${character.name}] has died.`);
             character.timeOfDeath = now;
-            character.state = 'dead';
+            this.dependencies.zoneService.setCharacterState(zoneId, character.id, 'dead');
             character.attackTargetId = null; // Clear targets/state
             character.targetX = null;
             character.targetY = null;
@@ -180,7 +183,6 @@ export class CharacterStateService {
         }
 
         // --- 1. Leashing Check ---
-        // Leashing overrides other states and forces a return to anchor.
         let isLeashing = false;
         if (character.anchorX !== null && character.anchorY !== null && character.leashDistance > 0) {
             const distToAnchorSq = (character.positionX - character.anchorX)**2 + (character.positionY - character.anchorY)**2;
@@ -189,12 +191,7 @@ export class CharacterStateService {
                 // Check if we aren't *already* correctly moving back to the anchor
                 if (character.state !== 'moving' || character.targetX !== character.anchorX || character.targetY !== character.anchorY) {
                     this.logger.debug(`Character ${character.id} [${character.name}] is beyond leash range (${Math.sqrt(distToAnchorSq).toFixed(1)} > ${character.leashDistance}). Forcing move to anchor (${character.anchorX}, ${character.anchorY}).`);
-                    character.state = 'moving'; // Force moving state
-                    character.targetX = character.anchorX; // Set target to anchor
-                    character.targetY = character.anchorY;
-                    character.attackTargetId = null; // Stop attacking
-                    character.targetItemId = null; // Stop looting
-                    character.commandState = null; // Cancel commands
+                    this.dependencies.zoneService.setMovementTarget(zoneId, character.id, character.anchorX, character.anchorY);
                 } else {
                     // Already moving back to anchor, let the MovingState handle it.
                     this.logger.verbose(`Character ${character.id} is leashing but already moving correctly towards anchor.`);
@@ -203,84 +200,57 @@ export class CharacterStateService {
         }
         // Note: If isLeashing is true, the character.state is now guaranteed to be 'moving'
         // and targetX/Y point to the anchor.
+        if (isLeashing) {
+            this.logger.verbose(`[Tick ${character.id}] State changed to 'moving' by Leashing.`);
+        }
+        // ---> Log State After Leashing Check
+        this.logger.verbose(`[Tick ${character.id}] State after leashing: ${character.state}`);
 
         // --- 2. State Logic Delegation ---
-        // Find the handler for the *current* state (which might have been forced to 'moving' by leashing)
         const currentStateHandler = this.stateHandlers.get(character.state);
-        const initialState = character.state; // Store state *before* delegation
+        let stateResult: StateProcessResult | null = null;
 
         if (currentStateHandler) {
-            // Log using initialState captured above
-            this.logger.verbose(`Character ${character.id} processing state: ${initialState} (Leashing: ${isLeashing})`);
+            this.logger.verbose(`[Tick ${character.id}] Delegating to handler for state: ${character.state}`);
             // Delegate the actual state logic processing to the handler
-            const stateResult: StateProcessResult = await currentStateHandler.processTick(
-                character, // Pass the character data (handler can mutate it)
-                this.dependencies, // Pass shared dependencies
+            stateResult = await currentStateHandler.processTick(
+                character, // Pass the character data (handler can mutate it, but should ideally call zoneService.set... methods)
+                this.dependencies,
                 zoneId,
                 enemiesInZone,
                 siblingCharacters,
                 now,
                 deltaTime
             );
-
-            const finalState = character.state; // Capture state *after* handler runs
-
-            // --- 3. Aggregate Results from State Handler ---
-            if (stateResult) {
-                tickResult.combatActions.push(...stateResult.combatActions);
-                tickResult.enemyHealthUpdates.push(...stateResult.enemyHealthUpdates);
-                tickResult.targetDied = tickResult.targetDied || stateResult.targetDied;
-                tickResult.pickedUpItemId = tickResult.pickedUpItemId || stateResult.pickedUpItemId;
-            }
-
-            // --->> Check for State Change and Queue Broadcast <<---
-            if (initialState !== finalState) {
-                this.logger.verbose(`Character ${character.id} state changed: ${initialState} -> ${finalState}`);
-                if (character.ownerId) {
-                    // --->> Queue the state change event <<---
-                    this.broadcastService.queueCharacterStateChange(zoneId, {
-                        entityId: character.id,
-                        state: finalState,
-                    });
-                 } else {
-                     this.logger.error(`Character ${character.id} changed state but ownerId is missing! Cannot broadcast state change.`);
-                 }
-            } else {
-                 // Log using finalState here as initialState === finalState
-                 this.logger.verbose(`Character ${character.id} finished processing state. State remained: ${finalState}`);
-            }
+            // ---> Log State After Handler Execution
+             // Note: Handler might have changed state via zoneService.set... methods
+            this.logger.verbose(`[Tick ${character.id}] State after handler execution: ${character.state}`);
 
         } else {
-            // This should not happen if all states are mapped
-            // Use initialState captured before the if/else block
-            this.logger.error(
-                `Character ${character.id} has unknown or unhandled state: '${initialState}'. Setting to idle to recover.`,
-            );
-            character.state = 'idle'; // Force state change
+            // Handle unknown state
+            this.logger.error(`[Tick ${character.id}] Unknown state: '${character.state}'. Setting to idle.`);
+            // Use the zone service method to ensure broadcast
+            this.dependencies.zoneService.setCharacterState(zoneId, character.id, 'idle');
+            // Reset targets etc. (This might be better handled by an 'enterIdle' method later)
+            character.attackTargetId = null;
             character.targetX = null;
             character.targetY = null;
-            character.attackTargetId = null;
             character.targetItemId = null;
             character.commandState = null;
+        }
 
-            // --->> Queue Broadcast for Forced Idle State <<---
-            // We know the state changed from initialState to 'idle'
-            const finalState = character.state; // This is 'idle'
-            this.logger.verbose(`Character ${character.id} state changed due to unknown state recovery: ${initialState} -> ${finalState}`);
-            if (character.ownerId) {
-                 // --->> Queue the state change event <<---
-                 this.broadcastService.queueCharacterStateChange(zoneId, {
-                     entityId: character.id,
-                     state: finalState, // 'idle'
-                 });
-             } else {
-                 this.logger.error(`Character ${character.id} changed state (unknown recovery) but ownerId is missing!`);
-             }
+        // --- 3. Aggregate Results --- (Remains the same)
+        if (stateResult) {
+            tickResult.combatActions.push(...stateResult.combatActions);
+            tickResult.enemyHealthUpdates.push(...stateResult.enemyHealthUpdates);
+            tickResult.targetDied = tickResult.targetDied || stateResult.targetDied;
+            tickResult.pickedUpItemId = tickResult.pickedUpItemId || stateResult.pickedUpItemId;
         }
 
         // --- Final Result ---
         // Ensure the characterData in the result reflects all mutations
         tickResult.characterData = character;
+        this.logger.verbose(`[Tick ${character.id}] --- END --- Final State: ${character.state}`);
         return tickResult;
     }
 

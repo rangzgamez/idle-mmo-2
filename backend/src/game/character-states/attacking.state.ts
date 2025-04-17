@@ -30,7 +30,7 @@ export class AttackingState implements ICharacterState {
 
         if (!character.attackTargetId) {
             this.logger.warn(`Character ${character.id} in attacking state but has no attackTargetId. Transitioning to idle.`);
-            character.state = 'idle';
+            zoneService.setCharacterState(zoneId, character.id, 'idle');
             character.targetX = null;
             character.targetY = null;
             return results;
@@ -41,10 +41,9 @@ export class AttackingState implements ICharacterState {
         if (!targetEnemy || targetEnemy.currentHealth <= 0) {
             this.logger.debug(`Character ${character.id}'s target ${character.attackTargetId} is dead or gone. Transitioning to idle.`);
             character.attackTargetId = null;
-            character.state = 'idle';
+            zoneService.setCharacterState(zoneId, character.id, 'idle');
             character.targetX = null;
             character.targetY = null;
-            // Keep commandState as returning to idle might trigger return to anchor
             return results;
         }
 
@@ -85,8 +84,7 @@ export class AttackingState implements ICharacterState {
                     // --- End Grant XP ---
 
                     character.attackTargetId = null;
-                    character.state = 'idle';
-                    // Keep commandState, idle state will handle return/next action
+                    zoneService.setCharacterState(zoneId, character.id, 'idle');
                 }
                 // else: Target still alive, continue attacking next tick if ready
             } else {
@@ -96,11 +94,33 @@ export class AttackingState implements ICharacterState {
         } else {
             // Out of range - Need to move towards target
             this.logger.debug(`Character ${character.id} is out of attack range for ${targetEnemy.id}. Setting target and transitioning to moving.`);
-            // Update target position even if already moving towards it, in case it moved
-            character.targetX = targetEnemy.position.x;
-            character.targetY = targetEnemy.position.y;
-            character.state = 'moving'; // Transition to moving state to handle the approach
-            // commandState persists
+            // --- USE CENTRALIZED METHOD --- 
+            // Use setMovementTarget which handles state change and broadcast
+            // Ensure targetEnemy position is valid before setting
+            if (typeof targetEnemy.position.x === 'number' && typeof targetEnemy.position.y === 'number') {
+                 zoneService.setMovementTarget(zoneId, character.id, targetEnemy.position.x, targetEnemy.position.y);
+                 // Update character.attackTargetId here as setMovementTarget clears it
+                 // We want to keep attacking this target once we reach it
+                 // Since setMovementTarget modified the same character object, just re-assign.
+                 character.attackTargetId = targetEnemy.id;
+                 /* --- REMOVED RE-FETCH LOGIC --- 
+                 const movingChar = zoneService.getCharacterById(zoneId, character.id); // Re-fetch needed after setMovementTarget
+                 if (movingChar) {
+                     movingChar.attackTargetId = targetEnemy.id;
+                 } else {
+                     this.logger.error(`[AttackingState] Failed to re-fetch character ${character.id} after setting move target!`);
+                 }
+                 */
+             } else {
+                 this.logger.error(`[AttackingState] Target enemy ${targetEnemy.id} has invalid position data. Cannot set movement target.`);
+                 // Transition to idle if we can't move to the target
+                 zoneService.setCharacterState(zoneId, character.id, 'idle');
+                 character.attackTargetId = null;
+             }
+            // character.targetX = targetEnemy.position.x; <-- Handled by setMovementTarget
+            // character.targetY = targetEnemy.position.y; <-- Handled by setMovementTarget
+            // character.state = 'moving'; <-- Handled by setMovementTarget
+            // ----------------------------
         }
 
         return results;

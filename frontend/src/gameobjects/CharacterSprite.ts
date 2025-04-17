@@ -114,7 +114,7 @@ export class CharacterSprite extends Phaser.GameObjects.Sprite {
                 frameWidth,
                 frameHeight,
                 animIntervalMs,
-                this.characterId // Pass characterId as unique prefix
+                this.className // Pass characterId as unique prefix
             );
              console.log(`[CharacterSprite ${this.characterId}] Animator created successfully.`);
              // Animator should set the initial idle animation via its constructor

@@ -28,8 +28,8 @@ export class MovingToLootState implements ICharacterState {
         };
 
         if (character.targetItemId === null || character.targetX === null || character.targetY === null) {
-            this.logger.warn(`Character ${character.id} in moving_to_loot state but missing target info (itemId, X, or Y). Transitioning to idle.`);
-            character.state = 'idle';
+            this.logger.warn(`Character ${character.id} in moving_to_loot state but missing target info. Transitioning to idle.`);
+            zoneService.setCharacterState(zoneId, character.id, 'idle');
             character.targetItemId = null;
             character.targetX = null;
             character.targetY = null;
@@ -93,14 +93,11 @@ export class MovingToLootState implements ICharacterState {
             character.targetY = null;
 
             if (wasLootAreaCommand) {
-                // If part of a loot area command, transition back to looting_area to find the *next* item
                 this.logger.debug(`Character ${character.id} finished move_to_loot attempt (success=${pickupSuccess}) during loot_area command. Transitioning back to looting_area.`);
-                character.state = 'looting_area';
-                // commandState remains 'loot_area'
+                zoneService.setCharacterState(zoneId, character.id, 'looting_area');
             } else {
-                // If it was a single item pickup command, transition to idle
                 this.logger.debug(`Character ${character.id} finished move_to_loot attempt (success=${pickupSuccess}) for single item. Transitioning to idle.`);
-                character.state = 'idle';
+                zoneService.setCharacterState(zoneId, character.id, 'idle');
                 character.commandState = null; // Clear command state after single pickup attempt
             }
 

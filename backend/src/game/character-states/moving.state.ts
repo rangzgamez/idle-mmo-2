@@ -26,6 +26,8 @@ export class MovingState implements ICharacterState {
             pickedUpItemId: null,
         };
 
+        const { zoneService } = dependencies;
+
         if (character.targetX !== null && character.targetY !== null) {
             const dx = character.targetX - character.positionX!;
             const dy = character.targetY - character.positionY!;
@@ -35,7 +37,7 @@ export class MovingState implements ICharacterState {
 
             if (distSq <= closeEnoughThresholdSq) {
                 this.logger.debug(`Character ${character.id} reached target (${character.targetX}, ${character.targetY}). Transitioning to idle.`);
-                character.state = 'idle';
+                zoneService.setCharacterState(zoneId, character.id, 'idle');
                 // Snap to target position precisely
                 character.positionX = character.targetX;
                 character.positionY = character.targetY;
@@ -69,7 +71,7 @@ export class MovingState implements ICharacterState {
         } else {
              // This case should ideally not happen if state transitions are correct
              this.logger.warn(`Character ${character.id} in 'moving' state but has no target (targetX/Y are null). Setting idle.`);
-             character.state = 'idle';
+             zoneService.setCharacterState(zoneId, character.id, 'idle');
              character.targetX = null;
              character.targetY = null;
              character.commandState = null; // Clear command state if move was invalid/aborted

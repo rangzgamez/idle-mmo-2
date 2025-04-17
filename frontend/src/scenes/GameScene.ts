@@ -404,7 +404,6 @@ export default class GameScene extends Phaser.Scene {
             const arrivalThreshold = 15; // Maybe slightly larger threshold for average
 
             if (distanceToTarget < arrivalThreshold) {
-                console.log('Formation center arrived, stopping marker tween.'); // Debug log
                 this.markerFadeTween.stop(); // Stop the tween
                 this.markerFadeTween = null;    // Clear reference
                 this.lastMarkerTarget = null; // Clear target
@@ -427,12 +426,10 @@ export default class GameScene extends Phaser.Scene {
     }
 
     handlePlayerLeft(data: { ownerId: string }) {
-        console.log('Player left event received:', data);
         this.otherCharacters.forEach((sprite, charId) => {
             if (sprite.ownerId === data.ownerId) {
                 sprite.destroy();
                 this.otherCharacters.delete(charId);
-                console.log(`Removed character ${charId} for leaving owner ${data.ownerId}`);
             }
         });
     }
@@ -522,17 +519,14 @@ export default class GameScene extends Phaser.Scene {
     }
 
     handleEntityDied(data: EntityDeathData) {
-        console.log('Entity died event received:', data);
         const sprite = this.findSpriteById(data.entityId);
         if (sprite) {
             if (sprite instanceof EnemySprite) {
                 // Remove enemy sprite immediately
-                console.log(`Destroying enemy sprite: ${data.entityId}`);
                 this.enemySprites.delete(data.entityId);
                 sprite.destroy();
             } else if (sprite instanceof CharacterSprite) {
                 // Handle character death visually (e.g., fade out, play death animation)
-                console.log(`Character died: ${data.entityId}. Applying visual effect.`);
                 sprite.setAlpha(0.4); // Example: Fade slightly
                 // Optionally stop animations using the public method if needed
                  if (typeof sprite.setAnimation === 'function') {
@@ -552,7 +546,6 @@ export default class GameScene extends Phaser.Scene {
 
     // +++ ADDED: Handler for enemy spawns +++
     handleEnemySpawned(enemyData: EnemySpawnData) {
-        console.log('Handling enemy spawned:', enemyData);
         this.createEnemySprite(enemyData);
     }
     // ++++++++++++++++++++++++++++++++++++++++
@@ -580,12 +573,6 @@ export default class GameScene extends Phaser.Scene {
         // Attempt to get className for the player from the map if missing from charData
         if (isPlayer && !determinedClassName) {
              determinedClassName = this.playerClassMap.get(charData.id);
-             if (determinedClassName) {
-                 console.log(`[GameScene] Using className '${determinedClassName}' from playerClassMap for player character ${charData.id}`);
-             } else {
-                 console.error(`[GameScene] Cannot find className for player character ${charData.id} in playerClassMap! Assigning placeholder.`);
-                 determinedClassName = 'fighter'; // Assign placeholder
-             }
         } 
         // Assign placeholder if still missing (covers other players missing data, or player lookup failure)
         if (!determinedClassName) {
@@ -608,7 +595,6 @@ export default class GameScene extends Phaser.Scene {
 
         if (existingSprite) {
             // Update existing sprite
-            console.log(`[GameScene] Updating existing character sprite: ${charData.id}`);
             existingSprite.updateTargetPosition(posX, posY);
             // Optionally snap position for existing sprites on zone join/major update?
             // existingSprite.setPosition(posX, posY);
@@ -841,7 +827,6 @@ export default class GameScene extends Phaser.Scene {
                     }
                  });
                 this.droppedItemSprites.set(itemData.id, itemSprite);
-                console.log(`Created sprite for dropped item: ${itemData.itemName} (${itemData.id})`);
             } catch (error) {
                 console.error(`Failed to create sprite for item ${itemData.id} with key ${itemData.spriteKey}:`, error);
             }
@@ -853,7 +838,6 @@ export default class GameScene extends Phaser.Scene {
             console.warn('Received invalid itemPickedUp data:', data);
             return;
         }
-        console.log(`Item picked up (removing sprite): ${data.itemId}`);
         const sprite = this.droppedItemSprites.get(data.itemId);
         if (sprite) {
             sprite.destroy();
@@ -869,7 +853,6 @@ export default class GameScene extends Phaser.Scene {
             console.warn('Dropped item clicked event received invalid item ID.');
             return;
         }
-        console.log(`[GameScene] Detected click on dropped item: ${itemId}. Sending pickup command...`);
         this.networkManager.sendMessage('pickup_item', { itemId });
     }
     // -------------------------------------------
@@ -896,7 +879,6 @@ export default class GameScene extends Phaser.Scene {
 
     // --- NEW: Handle Level Up Notification ---
     private handleLevelUpNotification(payload: LevelUpPayload) {
-        console.log('[GameScene] Received level up notification:', payload);
         const charSprite = this.playerCharacters.get(payload.characterId);
         if (charSprite) {
             // Update Sprite (Check if methods exist)
@@ -927,19 +909,16 @@ export default class GameScene extends Phaser.Scene {
     // --- NEW: Handle XP Update ---
     private handleXpUpdate(payload: XpUpdatePayload) {
         // 1. Check if this log appears
-        console.log('[GameScene] Received XP update:', payload); 
 
         // We only need to forward this to the UI if it's for one of our characters
         if (this.playerCharacters.has(payload.characterId)) {
              // 2. Check if this log appears
-             console.log(`[GameScene] Character ${payload.characterId} is a party member. Preparing UI update.`); 
 
              // Calculate relative XP values for UI
             const xpInCurrentLevel = this._getXpForCurrentLevel(payload.xp, payload.level);
             const xpNeededBetweenLevels = this._getXpNeededForLevelSpan(payload.level);
 
             // 3. Check if this log appears
-            console.log(`[GameScene] Emitting update-party-xp for ${payload.characterId}`); 
 
             EventBus.emit('update-party-xp', {
                 characterId: payload.characterId,
@@ -949,18 +928,15 @@ export default class GameScene extends Phaser.Scene {
             });
         } else {
              // 4. OR Check if this log appears
-             console.log(`[GameScene] XP update for ${payload.characterId} is NOT a party member, skipping UI event.`); 
         }
     }
      // --- END NEW ---
 
     private handleItemDespawned(data: { itemId: string }) {
-        console.log(`[GameScene] Handling item despawn for item ${data.itemId}`);
         const itemSprite = this.droppedItemSprites.get(data.itemId);
         if (itemSprite) {
             itemSprite.destroy(); // This will remove the sprite and any associated elements (tooltip, etc.)
             this.droppedItemSprites.delete(data.itemId);
-            console.log(`[GameScene] Successfully removed despawned item sprite ${data.itemId}`);
         } else {
             console.warn(`[GameScene] Could not find sprite for despawned item ${data.itemId}`);
         }
@@ -990,7 +966,6 @@ export default class GameScene extends Phaser.Scene {
 
     // ---> ADD Handler function
     private handleCharacterStateUpdates(payload: CharacterStateUpdatePayload) {
-        console.log('[GameScene] Handling character state update batch', payload);
         // console.log('GameScene handling character state update batch', payload);
         payload.updates.forEach(update => {
             const { entityId, state } = update;

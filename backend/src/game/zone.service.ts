@@ -10,6 +10,7 @@ import { SpawnNest } from './interfaces/spawn-nest.interface'; // Import SpawnNe
 import { Enemy } from 'src/enemy/enemy.entity'; // Import Enemy entity
 import { DroppedItem } from './interfaces/dropped-item.interface'; // Import DroppedItem
 import { CharacterService } from '../character/character.service'; // <-- Import CharacterService
+import { BroadcastService } from './broadcast.service'; // <<<--- ADDED IMPORT
 
 // Interface for player data within a zone
 interface PlayerInZone {
@@ -85,6 +86,7 @@ export class ZoneService implements OnModuleInit {
         // --- NEW: Inject CharacterService using forwardRef ---
         @Inject(forwardRef(() => CharacterService))
         private readonly characterService: CharacterService,
+        private broadcastService: BroadcastService, // <<<--- INJECTED SERVICE
     ) {
         // Initialize default zone(s) structure first
         this.zones.set('startZone', {
@@ -859,4 +861,148 @@ export class ZoneService implements OnModuleInit {
         return false;
     }
     // --- End NEW Method ---
+
+    /**
+     * Finds a character's runtime data within a specific zone by iterating through players.
+     * Helper function for methods that only have characterId.
+     */
+    private findCharacterInZoneById(zone: ZoneState, characterId: string): RuntimeCharacterData | null {
+        for (const player of zone.players.values()) {
+            const character = player.characters.find(c => c.id === characterId);
+            if (character) {
+                return character;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Sets the state for a specific character within a zone and queues a broadcast event.
+     *
+     * @param zoneId The ID of the zone.
+     * @param characterId The ID of the character.
+     * @param newState The new state to set.
+     * @returns True if the state was successfully changed, false otherwise.
+     */
+    setCharacterState(zoneId: string, characterId: string, newState: RuntimeCharacterData['state']): boolean {
+        const zone = this.zones.get(zoneId);
+        if (!zone) {
+            this.logger.warn(`[setCharacterState] Zone not found: ${zoneId}`);
+            return false;
+        }
+
+        // --- CORRECTED LOOKUP --- 
+        const character = this.findCharacterInZoneById(zone, characterId);
+        // const character = zone.players.get(characterId)?.characters.find(c => c.id === characterId); // <-- INCORRECT
+        // ----------------------
+
+        if (!character) {
+            // Logged slightly differently to distinguish from the old potential bug source
+            this.logger.warn(`[setCharacterState] Character ${characterId} could not be located in zone ${zoneId}`); 
+            return false;
+        }
+
+        const oldState = character.state;
+        if (oldState !== newState) {
+            this.logger.verbose(`[ZoneService] Setting state for ${characterId} from ${oldState} to ${newState} in zone ${zoneId}`);
+            character.state = newState;
+
+            // Queue the broadcast only if the state actually changed
+            this.broadcastService.queueCharacterStateChange(zoneId, {
+                entityId: characterId,
+                state: newState,
+            });
+            return true;
+        } else {
+             this.logger.verbose(`[ZoneService] State for ${characterId} already ${newState}. No change.`);
+             return true; 
+        }
+    }
+
+     /**
+     * Sets the movement target for a specific character within a zone.
+     * Also updates the anchor point to the movement target.
+     *
+     * @param zoneId The ID of the zone.
+     * @param characterId The ID of the character.
+     * @param targetX The target X coordinate.
+     * @param targetY The target Y coordinate.
+     * @returns True if the target was successfully set, false otherwise.
+     */
+     setMovementTarget(zoneId: string, characterId: string, targetX: number, targetY: number): boolean {
+        const zone = this.zones.get(zoneId);
+        if (!zone) {
+            this.logger.warn(`[setMovementTarget] Zone not found: ${zoneId}`);
+            return false;
+        }
+        // --- CORRECTED LOOKUP --- 
+        const character = this.findCharacterInZoneById(zone, characterId);
+        // const character = zone.players.get(characterId)?.characters.find(c => c.id === characterId); // <-- INCORRECT
+        // ----------------------
+
+        if (!character) {
+            this.logger.warn(`[setMovementTarget] Character ${characterId} could not be located in zone ${zoneId}`);
+            return false;
+        }
+
+        character.targetX = targetX;
+        character.targetY = targetY;
+        // Setting a move command also sets the anchor point
+        character.anchorX = targetX;
+        character.anchorY = targetY;
+        character.attackTargetId = null; // Moving cancels attacking
+        character.targetItemId = null;   // Moving cancels specific item looting
+        character.commandState = null;   // Clear generic commands like loot_area
+
+        // Set state to moving using the centralized method
+        this.setCharacterState(zoneId, characterId, 'moving');
+
+        this.logger.debug(`[ZoneService] Set movement target/anchor for ${characterId} to (${targetX}, ${targetY}) and state to 'moving'`);
+        return true;
+    }
+
+    /**
+     * Sets the attack target for a specific character within a zone.
+     *
+     * @param zoneId The ID of the zone.
+     * @param characterId The ID of the character.
+     * @param targetEnemyId The ID of the enemy to target.
+     * @returns True if the target was successfully set, false otherwise.
+     */
+     setAttackTarget(zoneId: string, characterId: string, targetEnemyId: string): boolean {
+        const zone = this.zones.get(zoneId);
+        if (!zone) {
+            this.logger.warn(`[setAttackTarget] Zone not found: ${zoneId}`);
+            return false;
+        }
+        // --- CORRECTED LOOKUP --- 
+        const character = this.findCharacterInZoneById(zone, characterId);
+        // const character = zone.players.get(characterId)?.characters.find(c => c.id === characterId); // <-- INCORRECT
+        // ----------------------
+        
+        if (!character) {
+            this.logger.warn(`[setAttackTarget] Character ${characterId} could not be located in zone ${zoneId}`);
+            return false;
+        }
+         // Validate the target enemy exists in the current zone
+         const targetEnemy = this.getEnemyInstanceById(zoneId, targetEnemyId);
+         if (!targetEnemy) {
+             this.logger.warn(`[setAttackTarget] Target enemy ${targetEnemyId} not found in zone ${zoneId}.`);
+             // If the target is gone, maybe set the character back to idle?
+             this.setCharacterState(zoneId, characterId, 'idle'); 
+             return false;
+         }
+
+        character.attackTargetId = targetEnemyId;
+        character.targetX = null; // Attacking cancels moving
+        character.targetY = null;
+        character.targetItemId = null; // Attacking cancels specific item looting
+        character.commandState = null; // Clear generic commands
+
+         // Set state to attacking using the centralized method
+         this.setCharacterState(zoneId, characterId, 'attacking');
+
+        this.logger.debug(`[ZoneService] Set attack target for ${characterId} to ${targetEnemyId} and state to 'attacking'`);
+        return true;
+    }
 }
