@@ -10,6 +10,7 @@ export class CharacterSprite extends Phaser.GameObjects.Sprite {
     ownerId: string; // ID of the controlling player
     isPlayerCharacter: boolean; // Is this one of the client's own characters?
     className: string; // <<<--- ADD CLASS NAME PROPERTY
+    attackSpeedMs: number; // <<<--- DECLARE PROPERTY
     // --- Interpolation properties ---
     targetX: number;
     targetY: number;
@@ -22,6 +23,7 @@ export class CharacterSprite extends Phaser.GameObjects.Sprite {
     private isFacingRight: boolean = true; // <<<--- ADD FACING DIRECTION
     private isDead = false;
     private currentState: string = 'idle';
+    private isPlayingAttack: boolean = false; // Flag to prevent state updates during attack anim
 
     private readonly BUBBLE_MAX_WIDTH = 150; // Max width before wrapping
     private readonly BUBBLE_OFFSET_Y = 20;  // Initial offset above sprite center/top
@@ -52,6 +54,7 @@ export class CharacterSprite extends Phaser.GameObjects.Sprite {
         this.ownerId = data.ownerId;
         this.isPlayerCharacter = isPlayer;
         this.className = data.className; // <<<--- STORE CLASS NAME
+        this.attackSpeedMs = data.attackSpeed ?? 1500; // Store value
         this.setName(this.characterId); // <<<--- SET UNIQUE NAME FOR ANIMATOR PREFIX
         this.targetX = x;
         this.targetY = y;
@@ -309,54 +312,99 @@ export class CharacterSprite extends Phaser.GameObjects.Sprite {
         }
     }
 
-    private updateAnimation(): void {
-        if (this.isDead) {
-            this.stop();
+    private updateAnimation(oldState?: string): void { 
+        // --- ADDED: Don't change animation if a one-shot attack is playing --- 
+        if (this.isPlayingAttack) {
+            return;
+        }
+        // ---------------------------------------------------------------------
+
+        if (this.isDead || !this.scene || !this.active || !this.animator) { 
+            if (this.anims) this.anims.stop();
             return;
         }
 
         const dx = this.targetX - this.x;
         const dy = this.targetY - this.y;
-        const isMoving = Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5;
+        const isMoving = Math.abs(dx) > 1 || Math.abs(dy) > 1; 
 
-        let animKey: string | null = null;
+        let baseStateKey: string | null = null;
 
+        // --- Removed 'attacking' case - Rely on playAttackAnimationOnce --- 
         switch (this.currentState) {
-            case 'attacking':
-                animKey = `${this.className}_attack`;
-                break;
             case 'moving_to_loot':
             case 'moving':
-                animKey = isMoving ? `${this.className}_walk` : `${this.className}_idle`;
+                baseStateKey = isMoving ? 'walk' : 'idle'; 
                 break;
-            case 'looting_area':
+            case 'looting_area': 
             case 'idle':
             default:
-                animKey = `${this.className}_idle`;
+                baseStateKey = 'idle';
                 break;
         }
 
-        if (animKey) {
-            if (this.scene.anims.exists(animKey)) {
-                if (this.anims.currentAnim?.key !== animKey) {
-                    this.play(animKey);
-                }
-            } else {
-                const idleKey = `${this.className}_idle`;
-                if (animKey !== idleKey && this.scene.anims.exists(idleKey)) {
-                    if (this.anims.currentAnim?.key !== idleKey) {
-                        this.play(idleKey);
-                    }
-                } else {
-                    this.stop();
-                }
+        // --- Use the Animator --- 
+        if (baseStateKey) {
+            try {
+                 this.animator.playAnimation(baseStateKey, false, true, undefined);
+            } catch (e) {
+                console.error(`[CharacterSprite ${this.characterId}] Error calling animator.playAnimation('${baseStateKey}'):`, e);
             }
+        } else {
+             console.warn(`[CharacterSprite ${this.characterId}] No valid baseStateKey determined for state: ${this.currentState}. Stopping animation.`);
+             this.animator.stopAnimation(); 
         }
-
-        if (Math.abs(dx) > 0.5) {
-            this.setFlipX(dx < 0);
+       
+        // Update facing direction based on movement
+        if (isMoving) {
+            this.facePosition(this.targetX);
         }
     }
+
+    // --- NEW METHOD TO PLAY ATTACK ANIMATION ONCE --- 
+    public playAttackAnimationOnce(): void {
+        // <<<--- DEBUG LOG ENTRY ---
+        console.log(`[CharacterSprite ${this.characterId}] playAttackAnimationOnce called. Current isPlayingAttack: ${this.isPlayingAttack}`);
+        // -------------------------
+
+        if (this.isDead || !this.scene || !this.active || !this.animator) {
+            return; // Cannot play if dead or destroyed
+        }
+
+        const attackStateKey = 'attack';
+        const fullAnimKey = `${this.className}_${attackStateKey}`;
+
+        // Check if the animation exists
+        if (!this.scene.anims.exists(fullAnimKey)) {
+             console.warn(`[CharacterSprite ${this.characterId}] Attack animation key does not exist: ${fullAnimKey}`);
+             return;
+        }
+        
+        console.log(`[CharacterSprite ${this.characterId}] Playing attack animation: ${fullAnimKey}`);
+        this.isPlayingAttack = true; 
+
+        this.animator.playAnimation(attackStateKey, true, false, undefined);
+
+        // --- Listen for completion --- 
+        // Use the sprite's event emitter
+        this.once(Phaser.Animations.Events.ANIMATION_COMPLETE_KEY + fullAnimKey, () => {
+             console.log(`[CharacterSprite ${this.characterId}] Attack animation complete: ${fullAnimKey}`);
+             this.isPlayingAttack = false; 
+             this.updateAnimation(); 
+        });
+
+         // Safety timeout 
+         this.scene.time.delayedCall(this.attackSpeedMs * 1.5, () => { // Now uses declared property
+             if (this.isPlayingAttack) {
+                 console.warn(`[CharacterSprite ${this.characterId}] Attack animation timeout reached. Forcing state update.`);
+                 this.isPlayingAttack = false;
+                 if (this.active) { // Check if sprite still active
+                    this.updateAnimation();
+                 }
+             }
+         });
+    }
+    // ------------------------------------------------
 
     public handleDeath(): void {
         if (this.isDead) return;

@@ -34,7 +34,7 @@ export class PhaserSpriteAnimator {
         textureKeys: StateTextureKeys,
         frameWidth: number,
         frameHeight: number,
-        animIntervalMs: number = 150,
+        animIntervalMs: number = 200,
         statePrefix?: string // Optional prefix if sprite name/id isn't unique enough
     ) {
         this.scene = scene;
@@ -42,7 +42,7 @@ export class PhaserSpriteAnimator {
         this.textureKeys = textureKeys;
         this.frameWidth = frameWidth;
         this.frameHeight = frameHeight;
-        this.baseFrameRate = 1000 / animIntervalMs;
+        this.baseFrameRate = animIntervalMs > 0 ? 1000 / animIntervalMs : 10;
 
         // Use sprite name or a provided prefix for unique animation keys
         this.statePrefix = statePrefix || sprite.name || `sprite_${sprite.texture?.key}_${Date.now()}`;
@@ -101,7 +101,6 @@ export class PhaserSpriteAnimator {
             }
 
             const animKey = this.getAnimationKey(state);
-            const frameRate = this.baseFrameRate;
 
             // Determine loop based on state convention
             const repeat = (state === 'attack' || state === 'cast' || state === 'hurt' || state === 'death') ? 0 : -1;
@@ -110,9 +109,8 @@ export class PhaserSpriteAnimator {
             if (!this.scene.anims.exists(animKey)) {
                 const config: Phaser.Types.Animations.Animation = {
                     key: animKey,
-                    // Use generateFrameNumbers for simple spritesheets
                     frames: this.scene.anims.generateFrameNumbers(textureKey, { start: 0, end: frameCount - 1 }),
-                    frameRate: frameRate,
+                    frameRate: this.baseFrameRate,
                     repeat: repeat
                 };
                  try {
@@ -153,8 +151,14 @@ export class PhaserSpriteAnimator {
      * @param state The state to play (e.g., 'walk', 'attack').
      * @param forceRestart If true, restarts the animation even if it's already playing.
      * @param ignoreIfPlaying If true and the requested animation is already playing, do nothing. (Default: true)
+     * @param frameRate Optional frame rate to override the animation's default.
      */
-    playAnimation(state: string, forceRestart: boolean = false, ignoreIfPlaying: boolean = true): void {
+    playAnimation(
+        state: string, 
+        forceRestart: boolean = false, 
+        ignoreIfPlaying: boolean = true, 
+        frameRate?: number
+    ): void {
         const animKey = this.getAnimationKey(state);
 
         if (!this.animConfigs[state] && !this.scene.anims.exists(animKey)) {
@@ -168,13 +172,19 @@ export class PhaserSpriteAnimator {
         // Prevent flickering or unnecessary restarts if the same animation is already playing
         const currentAnimKey = this.sprite.anims.currentAnim?.key;
         if (!forceRestart && ignoreIfPlaying && currentAnimKey === animKey) {
-            return; // Already playing the requested animation
+            if (frameRate !== undefined && this.sprite.anims.currentAnim && this.sprite.anims.currentAnim.frameRate !== frameRate) {
+                console.warn(`[PhaserSpriteAnimator ${this.statePrefix}] Frame rate needs update for ${animKey}. Re-playing.`);
+            } else {
+                 return; // Already playing the requested animation with correct rate (or no rate override)
+            }
         }
 
         try {
-            // Use ignoreIfPlaying parameter (Phaser 3.17+)
-            this.sprite.play(animKey, ignoreIfPlaying);
-            // For older Phaser: this.sprite.play(animKey); handle ignore logic manually if needed
+            if (frameRate !== undefined) {
+                 this.sprite.play({ key: animKey, frameRate: frameRate }, ignoreIfPlaying);
+             } else {
+                 this.sprite.play(animKey, ignoreIfPlaying);
+             }
         } catch (error) {
             console.error(`[PhaserSpriteAnimator ${this.statePrefix}] Error playing animation '${animKey}':`, error);
         }

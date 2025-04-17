@@ -7,10 +7,11 @@ import { EnemyInstance } from './interfaces/enemy-instance.interface';
 import { v4 as uuidv4 } from 'uuid';
 import { EnemyService } from '../enemy/enemy.service'; // Import EnemyService
 import { SpawnNest } from './interfaces/spawn-nest.interface'; // Import SpawnNest
-import { Enemy } from 'src/enemy/enemy.entity'; // Import Enemy entity
+import { Enemy } from '../enemy/enemy.entity'; // Corrected path
 import { DroppedItem } from './interfaces/dropped-item.interface'; // Import DroppedItem
 import { CharacterService } from '../character/character.service'; // <-- Import CharacterService
 import { BroadcastService } from './broadcast.service'; // <<<--- ADDED IMPORT
+import { CharacterClass } from '../common/enums/character-class.enum'; // <<<--- CORRECTED IMPORT PATH
 
 // Interface for player data within a zone
 interface PlayerInZone {
@@ -26,9 +27,14 @@ export interface ZoneCharacterState {
     ownerName: string; // Username
     name: string;
     level: number;
+    className: string;
     x: number | null;
     y: number | null;
-    // Add appearance/class info later
+    state: string;
+    currentHealth?: number;
+    baseHealth?: number;
+    attackSpeed?: number; // <<<--- ADDED
+    // Add other necessary display fields? Max Health?
 }
 
 // Interface for the overall zone state
@@ -46,6 +52,7 @@ export interface RuntimeCharacterData extends Character {
     targetY: number | null;
     currentHealth: number;
     ownerId: string; // Should always be present after addPlayerToZone
+    ownerName: string; // Added for convenience
     baseAttack: number; // Base stat from Character entity
     baseDefense: number; // Base stat from Character entity
     // --- NEW: Effective Stats (including equipment) ---
@@ -66,6 +73,8 @@ export interface RuntimeCharacterData extends Character {
     lastAttackTime: number; // Timestamp of the last attack (Date.now())
     // --- Death State ---
     timeOfDeath: number | null; // Timestamp when health reached 0
+    // --- Add Class Explicitly (should be inherited, but helps type checker) ---
+    class: CharacterClass;
 }
 @Injectable()
 export class ZoneService implements OnModuleInit {
@@ -191,6 +200,11 @@ export class ZoneService implements OnModuleInit {
                 // Use base stats as fallback if calculation fails
             }
 
+            // Ensure the char object passed has the class property (it should from the DB)
+             if (!char.class) {
+                 this.logger.error(`Character ${char.id} fetched from DB is missing the 'class' property! Defaulting.`);
+             }
+
             const runtimeChar: RuntimeCharacterData = {
                 ...char,
                 positionX: char.positionX ?? (100 + Math.random() * 50),
@@ -199,6 +213,7 @@ export class ZoneService implements OnModuleInit {
                 targetY: char.positionY ?? (100 + Math.random() * 50),
                 currentZoneId: zoneId,
                 ownerId: user.id,
+                ownerName: user.username, // Add username
                 currentHealth: char.baseHealth,
                 baseAttack: char.baseAttack, // Keep base stats
                 baseDefense: char.baseDefense,
@@ -220,6 +235,8 @@ export class ZoneService implements OnModuleInit {
                 lastAttackTime: 0,
                 // --- Initialize Death State ---
                 timeOfDeath: null,
+                // --- Add Class Explicitly (should be inherited, but helps type checker) ---
+                class: char.class || CharacterClass.FIGHTER, // Use default if somehow missing 
             };
             runtimeCharacters.push(runtimeChar);
         } // End for loop
@@ -230,6 +247,33 @@ export class ZoneService implements OnModuleInit {
         // Add socket to the Socket.IO room for this zone
         playerSocket.join(zoneId);
         this.logger.log(`Socket ${playerSocket.id} joined room ${zoneId}`);
+
+        // Prepare state data for the joining player (excluding self)
+        // Also prepare data about self for others
+        const selfCharacterStates: ZoneCharacterState[] = [];
+
+        for (const char of runtimeCharacters) {
+            // Prepare state for broadcasting about self to others
+            selfCharacterStates.push({
+                id: char.id,
+                ownerId: char.ownerId,
+                ownerName: char.ownerName, // Use ownerName from runtimeChar
+                name: char.name,
+                level: char.level,
+                className: char.class, // Use the 'class' property here for the broadcast
+                x: char.positionX,
+                y: char.positionY,
+                state: char.state,
+                currentHealth: char.currentHealth,
+                baseHealth: char.baseHealth,
+                attackSpeed: char.attackSpeed,
+            });
+        }
+
+        // Notify others in the zone about the new player
+        if (selfCharacterStates.length > 0) {
+            playerSocket.to(zoneId).emit('playerJoined', { characters: selfCharacterStates });
+        }
     }
 
     removePlayerFromZone(playerSocket: Socket): { zoneId: string, userId: string } | null {
@@ -384,8 +428,13 @@ export class ZoneService implements OnModuleInit {
                      ownerName: player.user.username,
                      name: char.name,
                      level: char.level,
+                     className: char.class, // Use the 'class' property here too
                      x: char.positionX,
                      y: char.positionY,
+                     state: char.state,
+                     currentHealth: char.currentHealth,
+                     baseHealth: char.baseHealth,
+                     attackSpeed: char.attackSpeed,
                  });
             }
         }

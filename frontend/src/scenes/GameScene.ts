@@ -764,34 +764,42 @@ export default class GameScene extends Phaser.Scene {
 
     // +++ ADDED: Handler for Combat Action Visuals +++
     private handleCombatAction(data: CombatActionData) {
-        const attackerSprite = this.findSpriteById(data.attackerId);
-        const targetSprite = this.findSpriteById(data.targetId);
+        // <<<--- DEBUG LOG ENTRY ---
+        console.log(`[GameScene] handleCombatAction called for attacker ${data.attackerId}, target ${data.targetId}, damage ${data.damage}`);
+        // -------------------------
 
-        // <<<--- Face Target Before Attacking (If Character) ---
-        if (attackerSprite instanceof CharacterSprite && targetSprite) {
-             attackerSprite.facePosition(targetSprite.x);
+        // Find the attacker sprite (could be player or other character)
+        const attackerSprite = this.playerCharacters.get(data.attackerId) || this.otherCharacters.get(data.attackerId);
+        // Find the target sprite (could be enemy or character)
+        const targetSprite = this.findSpriteById(data.targetId); // Use helper
+
+        // --- ADDED: Play attacker's animation --- 
+        if (attackerSprite instanceof CharacterSprite) { // Ensure it's a character
+            attackerSprite.playAttackAnimationOnce();
         }
-        // <<<---------------------------------------------------
+        // ----------------------------------------
 
-        // Play Attacker Animation
-        if (attackerSprite instanceof CharacterSprite) {
-             // console.log(`[GameScene] Playing attack animation for ${data.attackerId}`);
-             attackerSprite.setAnimation('attack', true); // Force restart attack animation
-         } else if (attackerSprite instanceof EnemySprite) {
-            // TODO: Trigger enemy attack animation if implemented
-            // attackerSprite.playAttackAnimation();
-         }
-
+        // Visual feedback for the target (e.g., brief tint)
         if (targetSprite) {
-            // Restore or implement floating damage text / visual effects here if needed
-            if (data.damage > 0 && targetSprite.scene) {
-                this.showFloatingText(targetSprite.x, targetSprite.y, `${Math.round(data.damage)}`, '#ffffff');
-                // Maybe add a brief tint or shake effect to the target?
-                // this.tweens.add({ targets: targetSprite, alpha: 0.5, duration: 50, yoyo: true });
-            }
-         } else {
-             // console.warn(`[GameScene] Combat action target not found: ${data.targetId}`);
-         }
+            // ... (existing tint logic) ...
+        }
+
+        // Show floating combat text
+        if (targetSprite && data.damage) { // Checks if targetSprite exists AND data.damage is truthy (>0)
+             // <<<--- DEBUG LOG ---
+             console.log(`[GameScene] Showing floating text for target ${data.targetId}: damage=${data.damage}`);
+             // ------------------
+             this.showFloatingText(targetSprite.x, targetSprite.y - targetSprite.displayHeight * 0.6, `-${data.damage}`, '#ff0000'); // Uses RED color
+        } else {
+             // <<<--- DEBUG LOG ---
+             if (!targetSprite) {
+                 console.log(`[GameScene] No floating text: Target sprite not found for ID ${data.targetId}.`);
+             }
+             if (!data.damage) {
+                 console.log(`[GameScene] No floating text: Damage is 0 or missing for target ${data.targetId}. Damage value:`, data.damage);
+             }
+             // ------------------
+        }
     }
 
     // --- New Event Handlers for Items ---
