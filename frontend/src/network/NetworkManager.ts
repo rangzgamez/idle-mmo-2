@@ -70,8 +70,8 @@ export class NetworkManager {
     private socket: Socket | null = null;
     private static instance: NetworkManager;
     // +++ Add Backend API Base URL (Adjust if needed) +++
-    private apiBaseUrl = 'http://localhost:3000'; // REMOVED /api prefix
-
+    //private apiBaseUrl = 'http://141.155.171.22:3000'; // REMOVED /api prefix
+    private apiBaseUrl = 'http://localhost:3000';
     private constructor() {}
 
     public static getInstance(): NetworkManager {
@@ -90,6 +90,7 @@ export class NetworkManager {
         }
 
         console.log('Attempting to connect to WebSocket server...');
+        //this.socket = io('ws://141.155.171.22:3000', { auth: { token: token } });
         this.socket = io('ws://localhost:3000', { auth: { token: token } });
 
         this.socket.on('connect', () => {

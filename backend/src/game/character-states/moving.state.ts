@@ -66,7 +66,7 @@ export class MovingState implements ICharacterState {
             } else {
                 // Still moving towards target. Position update is handled by MovementService later.
                 // No state change needed here. commandState persists.
-                this.logger.verbose(`Character ${character.id} still moving towards (${character.targetX}, ${character.targetY})`);
+                // Character still moving towards target
             }
         } else {
              // This case should ideally not happen if state transitions are correct

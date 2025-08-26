@@ -158,7 +158,7 @@ export class BroadcastService {
     // ---> ADD Method to queue character state changes
     queueCharacterStateChange(zoneId: string, stateChangeData: CharacterStateChangeData): void {
         this.getQueue(this.characterStateChangeQueue, zoneId).push(stateChangeData);
-        this.logger.verbose(`[Broadcast] Queued state change for entity ${stateChangeData.entityId} to ${stateChangeData.state} in zone ${zoneId}`);
+        // Queued character state change
     }
     // <--- END ADD
 
@@ -217,14 +217,14 @@ export class BroadcastService {
         }
 
         if (itemsDropped && itemsDropped.length > 0) {
-            this.logger.verbose(`[Broadcast] Emitting itemsDropped for zone ${zoneId} with ${itemsDropped.length} item(s). First item ID: ${itemsDropped[0].id}`);
+            // Emitting items dropped event
             // Client expects { items: [...] }
             this.server.to(zoneId).emit('itemsDropped', { items: itemsDropped });
             this.itemDroppedQueue.delete(zoneId); // Clear queue
         }
 
         if (itemsPickedUp && itemsPickedUp.length > 0) {
-            this.logger.verbose(`[Broadcast] Emitting itemPickedUp for zone ${zoneId} with ${itemsPickedUp.length} item(s).`);
+            // Emitting item pickup events
             // Client expects individual 'itemPickedUp' events { itemId: string }
             itemsPickedUp.forEach(pickup => {
                 this.server?.to(zoneId).emit('itemPickedUp', pickup);
@@ -233,7 +233,7 @@ export class BroadcastService {
         }
 
         if (itemsDespawned && itemsDespawned.length > 0) {
-            this.logger.verbose(`[Broadcast] Emitting itemDespawned for zone ${zoneId} with ${itemsDespawned.length} item(s).`);
+            // Emitting item despawn events
             // Client expects individual 'itemDespawned' events { itemId: string }
             itemsDespawned.forEach(despawn => {
                 this.server?.to(zoneId).emit('itemDespawned', despawn);
@@ -243,7 +243,7 @@ export class BroadcastService {
 
         // ---> ADD Emit logic for State Changes
         if (stateChanges && stateChanges.length > 0) {
-            this.logger.verbose(`[Broadcast] Emitting ${stateChanges.length} character state changes for zone ${zoneId}.`);
+            // Emitting character state changes
             // Emit as a single batch event 'characterStateUpdates' containing an array
             // Or emit individually? Let's emit as a batch for potential efficiency.
             this.server.to(zoneId).emit('characterStateUpdates', { updates: stateChanges });
@@ -297,7 +297,7 @@ export class BroadcastService {
                 this.logger.debug(`[BroadcastService] Found matching socket ${socket.id} for user ${userId}. Emitting '${eventName}'.`);
                 // ++++++++++++++++++++++++
                 socket.emit(eventName, payload);
-                this.logger.verbose(`Sent event '${eventName}' directly to user ${userId} (Socket ID: ${socket.id})`);
+                // Sent event directly to user
                 foundSocket = true;
                 // If a user can have multiple connections/sockets, don't break here.
                 // If only one connection per user is expected, we could break.

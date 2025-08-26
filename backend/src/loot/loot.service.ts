@@ -65,10 +65,11 @@ export class LootService {
                 this.logger.error(`LootTableEntry ${entry.id} is missing its ItemTemplate!`);
             }
         } else {
-             this.logger.verbose(`Rolled ${randomChance.toFixed(2)}%, failed to drop ${entry.itemTemplate?.name} (chance: ${entry.dropChance}%)`);
+             this.logger.debug(`[LOOT CALC] FAILED: ${entry.itemTemplate?.name} (rolled ${randomChance.toFixed(2)}% vs ${entry.dropChance}%)`);
         }
     }
 
+    this.logger.debug(`[LOOT CALC] Final result: ${droppedItems.length} items dropped`);
     return droppedItems;
   }
 

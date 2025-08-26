@@ -131,7 +131,7 @@ export class ZoneService implements OnModuleInit {
             return;
         }
 
-        this.logger.log(`Found ${enemyTemplates.length} enemy templates. Generating ${this.NESTS_PER_TEMPLATE} nests per template for zone ${zoneId}...`);
+        // Generating enemy nests for zone
 
         const nests = new Map<string, SpawnNest>();
         enemyTemplates.forEach(template => {
@@ -165,7 +165,7 @@ export class ZoneService implements OnModuleInit {
         });
 
         zone.nests = nests;
-        this.logger.log(`Initialized ${nests.size} dynamic enemy nests for zone ${zoneId}.`);
+        // Initialized dynamic enemy nests
     }
 
     // --- Player Management ---
@@ -173,7 +173,7 @@ export class ZoneService implements OnModuleInit {
     // Modify addPlayerToZone to calculate initial effective stats
     async addPlayerToZone(zoneId: string, playerSocket: Socket, user: User, characters: Character[]): Promise<void> { // <-- Make async
         if (!this.zones.has(zoneId)) {
-            this.logger.log(`Creating new zone: ${zoneId}`);
+            // Creating new zone
             // If creating a new zone, decide how/if to initialize nests
             // For now, only 'startZone' has predefined nests.
             // TODO: Maybe call initializeDynamicNests here if a new zone is created?
@@ -194,7 +194,7 @@ export class ZoneService implements OnModuleInit {
             try {
                 // Calculate stats including equipment for the initial add
                 effectiveStats = await this.characterService.calculateEffectiveStats(char.id);
-                this.logger.verbose(`Initial effective stats for ${char.id}: Attack=${effectiveStats.effectiveAttack}, Defense=${effectiveStats.effectiveDefense}`);
+                // Calculated initial effective stats for character
             } catch (error) {
                 this.logger.error(`Failed to calculate initial effective stats for character ${char.id}: ${error.message}`, error.stack);
                 // Use base stats as fallback if calculation fails
@@ -246,7 +246,7 @@ export class ZoneService implements OnModuleInit {
 
         // Add socket to the Socket.IO room for this zone
         playerSocket.join(zoneId);
-        this.logger.log(`Socket ${playerSocket.id} joined room ${zoneId}`);
+        // Socket joined zone room
 
         // Prepare state data for the joining player (excluding self)
         // Also prepare data about self for others
@@ -293,11 +293,11 @@ export class ZoneService implements OnModuleInit {
 
                 // Remove socket from the Socket.IO room
                 playerSocket.leave(zoneId);
-                this.logger.log(`Socket ${playerSocket.id} left room ${zoneId}`);
+                // Socket left zone room
 
                 // If zone becomes empty of PLAYERS, stop spawning checks for it (enemies remain)
                 if (zone.players.size === 0) {
-                    this.logger.log(`Zone ${zoneId} is now empty of players.`);
+                    // Zone is now empty of players
                     // Decide if we want to clear enemies or keep them. For now, keep them.
                     // Optionally stop nest checks if no players are present
                 }
@@ -340,7 +340,7 @@ export class ZoneService implements OnModuleInit {
           baseSpeed: enemyTemplate.baseSpeed,
           lootTableId: enemyTemplate.lootTableId,
         };
-        this.logger.verbose(`Creating enemy instance ${id} from template ${templateId}. Name: ${newEnemy.name}, LootTableID: ${newEnemy.lootTableId}`);
+        // Creating enemy instance from template
         zone.enemies.set(id, newEnemy);
         console.log(`Added enemy ${enemyTemplate.name} at ${position.x}, ${position.y} (${id}) to zone ${zoneId}`);
         return newEnemy;
@@ -607,7 +607,7 @@ export class ZoneService implements OnModuleInit {
 
              // Handle potential death state transition
              if (foundCharacter.currentHealth <= 0 && foundCharacter.state !== 'dead') {
-                 this.logger.log(`Character ${characterId} died.`);
+                 // Character marked as dead
                  foundCharacter.state = 'dead';
                  foundCharacter.timeOfDeath = Date.now();
                  // Stop actions
@@ -616,11 +616,11 @@ export class ZoneService implements OnModuleInit {
                  foundCharacter.targetY = null;
              } else if (foundCharacter.currentHealth > 0 && foundCharacter.state === 'dead') {
                  // This handles respawn health setting
-                  this.logger.log(`Character ${characterId} health updated above 0 while dead (likely respawn).`);
+                  // Character health updated above 0 while dead
                  // State transition back to idle happens elsewhere (e.g., GameGateway respawn logic)
              }
 
-             this.logger.verbose(`Updated health for character ${characterId} in zone ${foundZoneId}. New health: ${foundCharacter.currentHealth}/${foundCharacter.baseHealth}`);
+             // Updated character health
         }
 
         return foundCharacter.currentHealth; // Return the new health value
@@ -663,13 +663,13 @@ export class ZoneService implements OnModuleInit {
              foundCharacter.currentHealth = clampedHealth;
             // Reset death state if health is now positive (might happen if set during respawn window?)
             if (foundCharacter.currentHealth > 0 && foundCharacter.state === 'dead') {
-                this.logger.log(`Character ${characterId} health set above 0 while dead. Resetting state requires separate logic (respawn).`);
+                // Character health set above 0 while dead
                 // We probably don't want to change the 'dead' state here directly,
                 // just update the health value. Respawn logic handles state changes.
             }
-             this.logger.verbose(`Set health for character ${characterId} in zone ${foundZoneId}. New health: ${foundCharacter.currentHealth}/${foundCharacter.baseHealth}`);
+             // Set character health
         } else {
-            this.logger.verbose(`Set health for character ${characterId}: Health already at target value (${clampedHealth}).`);
+            // Character health already at target value
         }
 
         return true; // Health was set (or was already at the target value)
@@ -746,10 +746,10 @@ export class ZoneService implements OnModuleInit {
             anchorY: nest.center.y,
             wanderRadius: nest.radius,
         };
-        this.logger.verbose(`Spawning enemy instance ${id} from nest ${nest.id}. Name: ${newEnemy.name}, LootTableID: ${newEnemy.lootTableId}`);
+        // Spawning enemy instance from nest
         zone.enemies.set(id, newEnemy);
         nest.currentEnemyIds.add(id); // Track the enemy in its nest
-        this.logger.log(`Spawned enemy ${template.name} (${id}) from nest ${nest.id} in zone ${nest.zoneId}`);
+        // Enemy spawned from nest
         return newEnemy;
     }
 
@@ -774,7 +774,7 @@ export class ZoneService implements OnModuleInit {
             return false;
         }
         zone.droppedItems.set(item.id, item);
-        this.logger.verbose(`Added dropped item ${item.itemName} (${item.id}) to zone ${zoneId}`);
+        // Added dropped item to zone
         return true;
     }
 
@@ -797,7 +797,7 @@ export class ZoneService implements OnModuleInit {
             return null;
         }
         zone.droppedItems.delete(itemId);
-        this.logger.verbose(`Removed dropped item ${item.itemName} (${item.id}) from zone ${zoneId}`);
+        // Removed dropped item from zone
         return item;
     }
 
@@ -823,7 +823,7 @@ export class ZoneService implements OnModuleInit {
                 if (characterIndex !== -1) {
                     player.characters[characterIndex].effectiveAttack = stats.effectiveAttack;
                     player.characters[characterIndex].effectiveDefense = stats.effectiveDefense;
-                    this.logger.log(`Updated effective stats for character ${characterId} in zone ${zoneId}: Attack=${stats.effectiveAttack}, Defense=${stats.effectiveDefense}`);
+                    // Updated effective stats for character
                     found = true;
                     // Potentially emit an update event here if the client needs to know about stat changes?
                     // this.broadcastService.queueEntityUpdate(...)
@@ -866,7 +866,7 @@ export class ZoneService implements OnModuleInit {
                     character.targetX = itemX;
                     character.targetY = itemY;
                     character.attackTargetId = null; // Clear attack target
-                    this.logger.verbose(`[ZoneService] Set character ${characterId} state to moving_to_loot, target item ${itemId}`);
+                    // Set character state to moving_to_loot
                     return true;
                 }
             }
@@ -892,13 +892,13 @@ export class ZoneService implements OnModuleInit {
                         character.targetX = null;      // Clear movement target
                         character.targetY = null;
                         character.attackTargetId = null; // Clear attack target
-                        this.logger.verbose(`[ZoneService] Set character ${characterId} state to looting_area and commandState to loot_area`);
+                        // Set character state to looting_area
                         return true;
                     } else if (character.state === 'moving_to_loot') {
                         // If already moving to loot, ensure the command state is set
                         // This handles the case where a click-to-loot interrupted a loot-all
                         character.commandState = 'loot_area';
-                        this.logger.verbose(`[ZoneService] Character ${characterId} was moving_to_loot, set commandState to loot_area`);
+                        // Character was moving_to_loot, set commandState
                         return true;
                     }
                      // Already looting_area, no state change needed, commandState should already be set
@@ -953,7 +953,7 @@ export class ZoneService implements OnModuleInit {
 
         const oldState = character.state;
         if (oldState !== newState) {
-            this.logger.verbose(`[ZoneService] Setting state for ${characterId} from ${oldState} to ${newState} in zone ${zoneId}`);
+            // Setting character state
             character.state = newState;
 
             // Queue the broadcast only if the state actually changed
@@ -963,7 +963,7 @@ export class ZoneService implements OnModuleInit {
             });
             return true;
         } else {
-             this.logger.verbose(`[ZoneService] State for ${characterId} already ${newState}. No change.`);
+             // Character state unchanged
              return true; 
         }
     }

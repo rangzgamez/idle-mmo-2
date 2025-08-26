@@ -151,7 +151,7 @@ export class GameLoopService implements OnApplicationShutdown {
 
                         // --- ADD: Handle item pickup this tick ---
                         if (tickResult.pickedUpItemId) {
-                            this.logger.debug(`Handling pickup for item ${tickResult.pickedUpItemId} by character ${character.id}`);
+                            // Handling item pickup
                             // 1. Queue broadcast for others to remove sprite
                             this.broadcastService.queueItemPickedUp(zoneId, tickResult.pickedUpItemId);
 
@@ -162,7 +162,7 @@ export class GameLoopService implements OnApplicationShutdown {
                                     // Fetch the latest full inventory
                                     const updatedInventory = await this.inventoryService.getUserInventory(player.user.id);
                                     playerSocket.emit('inventoryUpdate', { inventory: updatedInventory });
-                                    this.logger.verbose(`Sent inventoryUpdate to ${player.user.username} (${playerSocket.id}) after pickup.`);
+                                    // Sent inventory update after pickup
                                 } catch (error) {
                                     this.logger.error(`Failed to send inventoryUpdate to ${player.user.username} after pickup: ${error.message}`, error.stack);
                                 }
@@ -176,23 +176,23 @@ export class GameLoopService implements OnApplicationShutdown {
                         if (tickResult.targetDied) {
                             const deadEnemyId = tickResult.enemyHealthUpdates.find(upd => upd.health <= 0)?.id;
                             if(deadEnemyId) {
-                                this.logger.log(`Target died event for enemy ID: ${deadEnemyId}`);
+                                this.logger.debug(`[ITEM DROP] Enemy died: ${deadEnemyId}`);
                                 const deadEnemyInstance = this.zoneService.getEnemyInstanceById(zoneId, deadEnemyId);
                                 
                                 // --- Log instance data before loot check ---
                                 if (deadEnemyInstance) {
-                                    this.logger.log(`Found dead enemy instance: ID=${deadEnemyInstance.id}, Name=${deadEnemyInstance.name}, LootTableID=${deadEnemyInstance.lootTableId}`);
+                                        this.logger.debug(`[ITEM DROP] Found dead enemy: ${deadEnemyInstance.name} (${deadEnemyInstance.id}), LootTableID: ${deadEnemyInstance.lootTableId}`);
                                 } else {
-                                    this.logger.warn(`Could not find instance for dead enemy ID: ${deadEnemyId} in zone ${zoneId}`);
+                                    this.logger.debug(`[ITEM DROP] Could not find enemy instance for ${deadEnemyId} in zone ${zoneId}`);
                                 }
                                 // -----------------------------------------
 
                                 // --- Loot Drop Calculation ---
                                 if (deadEnemyInstance && deadEnemyInstance.lootTableId) {
-                                    this.logger.log(`Enemy ${deadEnemyInstance.name} (${deadEnemyId}) died, checking loot table ${deadEnemyInstance.lootTableId}...`);
+                                    this.logger.debug(`[ITEM DROP] Enemy has loot table ${deadEnemyInstance.lootTableId}, calculating drops...`);
                                     const droppedLoot = await this.lootService.calculateLootDrops(deadEnemyInstance.lootTableId);
                                     if (droppedLoot.length > 0) {
-                                        this.logger.log(`Calculated drops for ${deadEnemyId}: ${JSON.stringify(droppedLoot.map(d => ({ item: d.itemTemplate.name, qty: d.quantity })))}`);
+                                        this.logger.debug(`[ITEM DROP] Loot calculated: ${droppedLoot.length} items dropped`);
                                         // Create and add dropped items to the zone
                                         const dropTime = now;
                                         const despawnTime = dropTime + this.ITEM_DESPAWN_TIME_MS;
@@ -209,7 +209,7 @@ export class GameLoopService implements OnApplicationShutdown {
                                             };
                                             const added = this.zoneService.addDroppedItem(zoneId, droppedItem);
                                             if (added) {
-                                                this.logger.verbose(`Added dropped item ${droppedItem.itemName} (${droppedItem.id}) at ${droppedItem.position.x},${droppedItem.position.y}`);
+                                                this.logger.debug(`[ITEM DROP] Added item ${droppedItem.itemName} (${droppedItem.id}) at (${droppedItem.position.x}, ${droppedItem.position.y})`);
                                                 // Queue the broadcast event
                                                 const itemPayload = {
                                                     id: droppedItem.id,
@@ -220,18 +220,18 @@ export class GameLoopService implements OnApplicationShutdown {
                                                     position: droppedItem.position,
                                                     quantity: droppedItem.quantity,
                                                 };
-                                                this.logger.verbose(`[GameLoop] PRE-QUEUE ItemDropped: ${itemPayload.id}`);
+                                                this.logger.debug(`[ITEM DROP] Queueing broadcast for item ${itemPayload.itemName} (${itemPayload.id})`);
                                                 this.broadcastService.queueItemDropped(zoneId, itemPayload);
-                                                this.logger.verbose(`[GameLoop] POST-QUEUE ItemDropped: ${itemPayload.id}`);
+                                                // Item drop event queued
                                             } else {
                                                  this.logger.error(`Failed to add dropped item ${droppedItem.itemName} (${droppedItem.id}) to zone ${zoneId}`);
                                             }
                                         }
                                     } else {
-                                        this.logger.log(`No loot dropped for ${deadEnemyId} from table ${deadEnemyInstance.lootTableId}.`);
+                                        this.logger.debug(`[ITEM DROP] No loot calculated for enemy ${deadEnemyInstance.name} from table ${deadEnemyInstance.lootTableId}`);
                                     }
                                 } else if (deadEnemyInstance) {
-                                     this.logger.verbose(`Enemy ${deadEnemyInstance.name} (${deadEnemyId}) died but has no loot table.`);
+                                     this.logger.debug(`[ITEM DROP] Enemy ${deadEnemyInstance.name} died but has no loot table`);
                                 } else {
                                     this.logger.warn(`Could not find dead enemy instance ${deadEnemyId} in zone ${zoneId} for loot calculation.`);
                                 }
@@ -406,7 +406,7 @@ export class GameLoopService implements OnApplicationShutdown {
                     if (now >= droppedItem.despawnTime) {
                         const removed = this.zoneService.removeDroppedItem(zoneId, droppedItem.id);
                         if (removed) {
-                            this.logger.verbose(`Despawned item ${removed.itemName} (${removed.id})`);
+                            // Item despawned due to timeout
                             // Queue the despawn event for broadcast
                             this.broadcastService.queueItemDespawned(zoneId, removed.id);
                         }

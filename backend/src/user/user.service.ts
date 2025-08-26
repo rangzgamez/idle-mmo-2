@@ -5,6 +5,7 @@ import { Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import { User } from './user.entity';
 import { CreateUserDto } from './dto/create-user.dto'; // We'll create this DTO
+import { GameConfig } from '../common/config/game.config';
 
 @Injectable()
 export class UserService {
@@ -23,7 +24,7 @@ export class UserService {
     }
 
     // Hash the password
-    const saltOrRounds = 10; // Recommended salt rounds for bcrypt
+    const saltOrRounds = GameConfig.SECURITY.BCRYPT_SALT_ROUNDS;
     const passwordHash = await bcrypt.hash(password, saltOrRounds);
 
     // Create and save the new user

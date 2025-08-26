@@ -8,6 +8,7 @@ import { DroppedItem } from './interfaces/dropped-item.interface';
 import { CombatResult } from './interfaces/combat.interface';
 import { EnemyService } from '../enemy/enemy.service';
 import { CharacterService } from '../character/character.service';
+import { GameConfig } from '../common/config/game.config';
 
 // Import State Pattern files
 import {
@@ -37,10 +38,10 @@ export interface CharacterTickResult {
 @Injectable()
 export class CharacterStateService {
     private readonly logger = new Logger(CharacterStateService.name);
-     // Constants potentially needed (could be moved to a config service later)
-     private readonly RESPAWN_TIME_MS = 5000;
-     private readonly CHARACTER_HEALTH_REGEN_PERCENT_PER_SEC = 1.0;
-     private readonly ITEM_PICKUP_RANGE_SQ = 5*5; // Squared distance threshold for picking up items (e.g., 5 pixels)
+     // Game configuration constants
+     private readonly RESPAWN_TIME_MS = GameConfig.CHARACTER.RESPAWN_TIME_MS;
+     private readonly CHARACTER_HEALTH_REGEN_PERCENT_PER_SEC = GameConfig.CHARACTER.HEALTH_REGEN_PERCENT_PER_SEC;
+     private readonly ITEM_PICKUP_RANGE_SQ = GameConfig.INVENTORY.ITEM_PICKUP_RANGE * GameConfig.INVENTORY.ITEM_PICKUP_RANGE;
 
     // Map state names to state handler instances
     private stateHandlers: Map<string, ICharacterState>;
@@ -100,15 +101,14 @@ export class CharacterStateService {
         deltaTime: number,
     ): Promise<CharacterTickResult> {
 
-        // ---> Log Entry State
-        this.logger.verbose(`[Tick ${character.id}] --- START --- State: ${character.state}, Target: (${character.targetX}, ${character.targetY}), Command: ${character.commandState}`);
+        // Removed verbose tick start logging
 
         // --- Initial Position Check ---
         // Moved to start to ensure position exists before any logic
         if (character.positionX === null || character.positionY === null) {
-            this.logger.warn(`Character ${character.id} has null position. Setting to default spawn (100, 100) and anchor.`);
-            character.positionX = 100; // TODO: Get default spawn from zone config?
-            character.positionY = 100;
+            this.logger.warn(`Character ${character.id} has null position. Setting to default spawn and anchor.`);
+            character.positionX = GameConfig.CHARACTER.DEFAULT_SPAWN_X;
+            character.positionY = GameConfig.CHARACTER.DEFAULT_SPAWN_Y;
             // Set anchor if null, otherwise character won't leash or return properly
             if (character.anchorX === null || character.anchorY === null) {
                 character.anchorX = character.positionX;
@@ -137,13 +137,13 @@ export class CharacterStateService {
                 return tickResult;
             }
             if (now >= character.timeOfDeath + this.RESPAWN_TIME_MS) {
-                this.logger.log(`Character ${character.id} [${character.name}] respawning.`);
+                // Character respawning
                 character.currentHealth = character.baseHealth; // Full health
                 this.dependencies.zoneService.setCharacterState(zoneId, character.id, 'idle');
                 character.timeOfDeath = null;
                 // Respawn at anchor or default (use nullish coalescing)
-                character.positionX = character.anchorX ?? 100;
-                character.positionY = character.anchorY ?? 100;
+                character.positionX = character.anchorX ?? GameConfig.CHARACTER.DEFAULT_SPAWN_X;
+                character.positionY = character.anchorY ?? GameConfig.CHARACTER.DEFAULT_SPAWN_Y;
                 character.attackTargetId = null; // Clear targets
                 character.targetX = null;
                 character.targetY = null;
@@ -158,7 +158,7 @@ export class CharacterStateService {
 
         // --- 0. Death Check (if not already dead) ---
         if (character.currentHealth <= 0) {
-            this.logger.log(`Character ${character.id} [${character.name}] has died.`);
+            // Character has died
             character.timeOfDeath = now;
             this.dependencies.zoneService.setCharacterState(zoneId, character.id, 'dead');
             character.attackTargetId = null; // Clear targets/state
@@ -190,28 +190,27 @@ export class CharacterStateService {
                 isLeashing = true;
                 // Check if we aren't *already* correctly moving back to the anchor
                 if (character.state !== 'moving' || character.targetX !== character.anchorX || character.targetY !== character.anchorY) {
-                    this.logger.debug(`Character ${character.id} [${character.name}] is beyond leash range (${Math.sqrt(distToAnchorSq).toFixed(1)} > ${character.leashDistance}). Forcing move to anchor (${character.anchorX}, ${character.anchorY}).`);
+                    // Character beyond leash range, forcing return to anchor
                     this.dependencies.zoneService.setMovementTarget(zoneId, character.id, character.anchorX, character.anchorY);
                 } else {
                     // Already moving back to anchor, let the MovingState handle it.
-                    this.logger.verbose(`Character ${character.id} is leashing but already moving correctly towards anchor.`);
+                    // Already moving back to anchor
                 }
             }
         }
         // Note: If isLeashing is true, the character.state is now guaranteed to be 'moving'
         // and targetX/Y point to the anchor.
         if (isLeashing) {
-            this.logger.verbose(`[Tick ${character.id}] State changed to 'moving' by Leashing.`);
+            // State changed to 'moving' by leashing
         }
-        // ---> Log State After Leashing Check
-        this.logger.verbose(`[Tick ${character.id}] State after leashing: ${character.state}`);
+        // State after leashing check complete
 
         // --- 2. State Logic Delegation ---
         const currentStateHandler = this.stateHandlers.get(character.state);
         let stateResult: StateProcessResult | null = null;
 
         if (currentStateHandler) {
-            this.logger.verbose(`[Tick ${character.id}] Delegating to handler for state: ${character.state}`);
+            // Delegating to state handler
             // Delegate the actual state logic processing to the handler
             stateResult = await currentStateHandler.processTick(
                 character, // Pass the character data (handler can mutate it, but should ideally call zoneService.set... methods)
@@ -222,9 +221,7 @@ export class CharacterStateService {
                 now,
                 deltaTime
             );
-            // ---> Log State After Handler Execution
-             // Note: Handler might have changed state via zoneService.set... methods
-            this.logger.verbose(`[Tick ${character.id}] State after handler execution: ${character.state}`);
+            // State handler execution complete
 
         } else {
             // Handle unknown state
@@ -250,7 +247,7 @@ export class CharacterStateService {
         // --- Final Result ---
         // Ensure the characterData in the result reflects all mutations
         tickResult.characterData = character;
-        this.logger.verbose(`[Tick ${character.id}] --- END --- Final State: ${character.state}`);
+        // Tick processing complete
         return tickResult;
     }
 

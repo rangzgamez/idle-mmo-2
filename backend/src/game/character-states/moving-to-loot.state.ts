@@ -103,7 +103,7 @@ export class MovingToLootState implements ICharacterState {
 
         } else {
             // Still moving towards the item. Position update handled by MovementService.
-            this.logger.verbose(`Character ${character.id} still moving towards item ${character.targetItemId} at (${character.targetX}, ${character.targetY})`);
+            // Character still moving towards target item
             // State remains 'moving_to_loot', commandState persists.
         }
 

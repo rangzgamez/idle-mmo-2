@@ -48,12 +48,12 @@ export class LootingAreaState implements ICharacterState {
 
 
         const allDroppedItems = zoneService.getDroppedItems(zoneId);
-        this.logger.verbose(`Character ${character.id} scanning ${allDroppedItems.length} items. Siblings target: [${Array.from(targetedItemIds).join(', ')}]`);
+        // Character scanning for available items to loot
 
         for (const item of allDroppedItems) {
             // Skip if targeted by another looting sibling (or self)
             if (targetedItemIds.has(item.id)) {
-                this.logger.verbose(`Skipping item ${item.id} as it's already targeted.`);
+                // Skipping item as it's already targeted by another character
                 continue;
             }
 

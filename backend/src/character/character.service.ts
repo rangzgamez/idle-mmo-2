@@ -13,11 +13,12 @@ import { ZoneService } from '../game/zone.service'; // <-- Import ZoneService
 import { BroadcastService } from '../game/broadcast.service'; // + ADDED
 import { CharacterClassService } from '../character-class/character-class.service'; // +++ IMPORT CLASS SERVICE
 import { CharacterClassTemplate } from '../character-class/character-class-template.entity'; // +++ IMPORT CLASS TEMPLATE
+import { GameConfig } from '../common/config/game.config';
 
 @Injectable()
 export class CharacterService {
   // Define character limit per user
-  private readonly MAX_CHARACTERS_PER_USER = 10; // Or whatever limit you want
+  private readonly MAX_CHARACTERS_PER_USER = GameConfig.CHARACTER.MAX_CHARACTERS_PER_USER;
 
   constructor(
     @InjectRepository(Character)
@@ -65,8 +66,8 @@ export class CharacterService {
       name,
       userId: user.id,
       class: classId, // Assign the chosen class
-      level: 1,
-      xp: 0,
+      level: GameConfig.CHARACTER.STARTING_LEVEL,
+      xp: GameConfig.CHARACTER.STARTING_XP,
       // Assign stats from the template
       baseHealth: classTemplate.baseHealth,
       baseAttack: classTemplate.baseAttack,
@@ -129,26 +130,48 @@ export class CharacterService {
   // --- Equipment Logic ---
 
   async equipItem(userId: string, characterId: string, inventoryItemId: string): Promise<{ success: boolean; message?: string }> {
+    this.logger.debug(`[EQUIP] CharacterService.equipItem called - userId: ${userId}, characterId: ${characterId}, inventoryItemId: ${inventoryItemId}`);
+    
     const character = await this.findCharacterByIdAndUserId(characterId, userId);
-    if (!character) { throw new NotFoundException('Character not found or does not belong to user.'); }
+    if (!character) { 
+      this.logger.debug(`[EQUIP] Character not found for characterId: ${characterId}, userId: ${userId}`);
+      throw new NotFoundException('Character not found or does not belong to user.'); 
+    }
+    this.logger.debug(`[EQUIP] Found character: ${character.name} (id: ${character.id})`);
+    
     const itemToEquip = await this.inventoryService.findInventoryItemById(inventoryItemId);
-    if (!itemToEquip || itemToEquip.userId !== userId) { throw new NotFoundException('Inventory item not found or does not belong to user.'); }
-    if (itemToEquip.equippedByCharacterId) { throw new BadRequestException('This item instance is already equipped.'); }
+    if (!itemToEquip || itemToEquip.userId !== userId) { 
+      this.logger.debug(`[EQUIP] Inventory item not found or ownership mismatch - itemToEquip: ${itemToEquip ? 'exists' : 'null'}, itemUserId: ${itemToEquip?.userId}, requestUserId: ${userId}`);
+      throw new NotFoundException('Inventory item not found or does not belong to user.'); 
+    }
+    this.logger.debug(`[EQUIP] Found inventory item: ${itemToEquip.itemTemplate?.name} (id: ${itemToEquip.id})`);
+    
+    if (itemToEquip.equippedByCharacterId) { 
+      this.logger.debug(`[EQUIP] Item already equipped by character: ${itemToEquip.equippedByCharacterId}`);
+      throw new BadRequestException('This item instance is already equipped.'); 
+    }
 
     const template = itemToEquip.itemTemplate;
-    if (!template || !template.equipSlot) { throw new BadRequestException('Item is not equippable or template data missing.'); }
+    if (!template || !template.equipSlot) { 
+      this.logger.debug(`[EQUIP] Item template issue - template: ${template ? 'exists' : 'null'}, equipSlot: ${template?.equipSlot}`);
+      throw new BadRequestException('Item is not equippable or template data missing.'); 
+    }
+    this.logger.debug(`[EQUIP] Item template valid - name: ${template.name}, equipSlot: ${template.equipSlot}`);
     
     const possibleTargetSlots = this.getPossibleSpecificSlots(template.equipSlot);
+    this.logger.debug(`[EQUIP] Getting possible slots for equipSlot: ${template.equipSlot}, found: [${possibleTargetSlots.join(', ')}]`);
     if (!possibleTargetSlots.length) {
-        this.logger.error(`No specific slots defined for base slot type: ${template.equipSlot}`);
+        this.logger.error(`[EQUIP] No specific slots defined for base slot type: ${template.equipSlot}`);
         throw new Error(`Configuration error: Cannot determine specific slots for ${template.equipSlot}.`);
     }
     
     let targetSpecificSlot: EquipmentSlot | null = null;
     const currentlyEquippedItems = await this.inventoryService.findEquippedItemsByCharacterId(characterId);
+    this.logger.debug(`[EQUIP] Found ${currentlyEquippedItems.length} currently equipped items for character ${characterId}`);
     
     for (const slot of possibleTargetSlots) {
         const isSlotFilled = currentlyEquippedItems.some(item => item.equippedSlotId === slot);
+        this.logger.debug(`[EQUIP] Checking slot ${slot}: ${isSlotFilled ? 'filled' : 'available'}`);
         if (!isSlotFilled) {
             targetSpecificSlot = slot;
             break;
@@ -156,36 +179,45 @@ export class CharacterService {
     }
 
     if (!targetSpecificSlot) {
+        this.logger.debug(`[EQUIP] All slots full for item type. Possible slots: [${possibleTargetSlots.join(', ')}]`);
         throw new BadRequestException(`All available slots (${possibleTargetSlots.join(', ')}) for this item type are already full.`);
     }
-    this.logger.log(`Determined target slot for item ${itemToEquip.id} is ${targetSpecificSlot}`);
+    this.logger.debug(`[EQUIP] Determined target slot for item ${itemToEquip.id} is ${targetSpecificSlot}`);
 
     if (!this.isItemValidForSlot(template, targetSpecificSlot)) {
+        this.logger.debug(`[EQUIP] Item validation failed - ${template.name} (${template.itemType}) cannot be equipped in slot ${targetSpecificSlot}`);
         throw new BadRequestException(`Item '${template.name}' (${template.itemType}) cannot be equipped in calculated slot ${targetSpecificSlot}.`);
     }
+    this.logger.debug(`[EQUIP] Item validation passed - ${template.name} can be equipped in slot ${targetSpecificSlot}`);
 
     // --- Assign item to character/slot --- 
+    this.logger.debug(`[EQUIP] Assigning item to character/slot - characterId: ${characterId}, slot: ${targetSpecificSlot}`);
     itemToEquip.equippedByCharacterId = characterId; 
     itemToEquip.equippedSlotId = targetSpecificSlot;
     // --- Clear inventory slot --- 
     const originalInventorySlot = itemToEquip.inventorySlot; // For logging
+    this.logger.debug(`[EQUIP] Clearing inventory slot ${originalInventorySlot} for equipped item`);
     itemToEquip.inventorySlot = null; 
     // --------------------------
 
+    this.logger.debug(`[EQUIP] Saving inventory item changes...`);
     await this.inventoryService.saveInventoryItem(itemToEquip); 
-    this.logger.log(`Item ${itemToEquip.id} (from inv slot ${originalInventorySlot}) equipped by Character ${characterId} in Slot ${targetSpecificSlot}.`);
+    this.logger.debug(`[EQUIP] Successfully saved item ${itemToEquip.id} (from inv slot ${originalInventorySlot}) equipped by Character ${characterId} in Slot ${targetSpecificSlot}`);
 
     // --- NEW: Recalculate stats and update ZoneService ---
+    this.logger.debug(`[EQUIP] Recalculating effective stats after equip...`);
     try {
         const newStats = await this.calculateEffectiveStats(characterId);
+        this.logger.debug(`[EQUIP] Calculated new stats - Attack: ${newStats.effectiveAttack}, Defense: ${newStats.effectiveDefense}`);
         await this.zoneService.updateCharacterEffectiveStats(characterId, newStats);
-        this.logger.log(`Updated effective stats in ZoneService for character ${characterId} after equip.`);
+        this.logger.debug(`[EQUIP] Updated effective stats in ZoneService for character ${characterId} after equip`);
     } catch (error) {
-        this.logger.error(`Failed to update effective stats in ZoneService for ${characterId} after equip: ${error.message}`, error.stack);
+        this.logger.error(`[EQUIP] Failed to update effective stats in ZoneService for ${characterId} after equip: ${error.message}`, error.stack);
         // Decide how critical this is. Should the equip fail? For now, just log.
     }
     // --- End NEW ---
 
+    this.logger.debug(`[EQUIP] Equipment process completed successfully`);
     return { success: true };
   }
 
@@ -263,11 +295,17 @@ export class CharacterService {
 
     switch (baseSlot.toUpperCase()) { // Use uppercase for case-insensitivity
         case 'RING': 
-            return [EquipmentSlot.RING1, EquipmentSlot.RING2]; 
+            return [EquipmentSlot.RING1, EquipmentSlot.RING2];
+        case 'RING1':
+            return [EquipmentSlot.RING1];
+        case 'RING2':
+            return [EquipmentSlot.RING2];
         case 'WEAPON':
             // Depending on game rules, a weapon might go in MAINHAND or OFFHAND?
             // For now, assume primarily MAINHAND, OFFHAND is separate type?
              return [EquipmentSlot.MAINHAND]; // Or [EquipmentSlot.MAINHAND, EquipmentSlot.OFFHAND]?
+        case 'MAINHAND': // Direct specific slot mapping
+            return [EquipmentSlot.MAINHAND];
         case 'OFFHAND': // If templates explicitly define OFFHAND type
             return [EquipmentSlot.OFFHAND];
         case 'HELM': 
@@ -313,8 +351,8 @@ export class CharacterService {
    * @returns The total XP required to reach that level.
    */
   private calculateXpForLevel(level: number): number {
-    const baseXP = 100;
-    const exponent = 1.5;
+    const baseXP = GameConfig.EXPERIENCE.BASE_XP;
+    const exponent = GameConfig.EXPERIENCE.LEVEL_EXPONENT;
 
     if (level <= 1) {
       return 0; // Level 1 requires 0 XP

@@ -7,6 +7,7 @@ import { ItemService } from '../item/item.service';
 import { EquipmentSlot } from '../item/item.types';
 import { User } from '../user/user.entity';
 import { BroadcastService } from '../game/broadcast.service';
+import { GameConfig } from '../common/config/game.config';
 
 @Injectable()
 export class InventoryService {
@@ -430,8 +431,8 @@ export class InventoryService {
         relations: ['itemTemplate'], // Ensure template data is loaded
     });
 
-    // Determine the total size of the inventory (e.g., 6 pages * 36 slots/page)
-    const INVENTORY_SIZE = 216; // TODO: Make this configurable?
+    // Determine the total size of the inventory from config
+    const INVENTORY_SIZE = GameConfig.INVENTORY.SIZE;
     const sparseInventory: (InventoryItem | null)[] = Array(INVENTORY_SIZE).fill(null);
 
     // Populate the sparse array based on inventorySlot

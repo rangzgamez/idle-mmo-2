@@ -53,14 +53,14 @@ export class AttackingState implements ICharacterState {
         if (distToTargetSq <= attackRangeSq) {
             // In range - Stop moving if we were approaching
             if (character.targetX !== null || character.targetY !== null) {
-                this.logger.verbose(`Character ${character.id} reached attack range for ${targetEnemy.id}. Clearing movement target.`);
+                // Character reached attack range, clearing movement target
                 character.targetX = null;
                 character.targetY = null;
             }
 
             // Check attack cooldown
             if (now >= character.lastAttackTime + character.attackSpeed) {
-                this.logger.verbose(`Character ${character.id} attacking ${targetEnemy.id}.`);
+                // Character executing attack
                 const combatResult: CombatResult = await combatService.handleAttack(character, targetEnemy, zoneId);
                 character.lastAttackTime = now;
 
@@ -88,7 +88,7 @@ export class AttackingState implements ICharacterState {
                 }
                 // else: Target still alive, continue attacking next tick if ready
             } else {
-                 this.logger.verbose(`Character ${character.id} waiting for attack cooldown against ${targetEnemy.id}.`);
+                 // Character waiting for attack cooldown
             }
 
         } else {

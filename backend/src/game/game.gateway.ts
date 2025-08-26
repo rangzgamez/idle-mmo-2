@@ -174,7 +174,7 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     // 1. Find the dropped item in the current zone
     const droppedItem = this.zoneService.getDroppedItemById(zoneId, itemIdToPickup); // Assuming getDroppedItemById exists
     if (!droppedItem) {
-      this.logger.verbose(`[Pickup Command] Dropped item ${itemIdToPickup} not found in zone ${zoneId} for user ${user.id}.`);
+      // Dropped item not found in zone
       return { success: false, message: 'Item not found or already picked up.' };
     }
 
@@ -258,9 +258,10 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
      }
 
     try {
-        console.log(`User ${user.username} trying to equip item ${inventoryItemId} on char ${characterId}`);
+        this.logger.debug(`[EQUIP] User ${user.username} trying to equip item ${inventoryItemId} on char ${characterId}`);
         // *** Call CharacterService ***
         const result = await this.characterService.equipItem(user.id, characterId, inventoryItemId);
+        this.logger.debug(`[EQUIP] CharacterService.equipItem returned: ${JSON.stringify(result)}`);
         // No need to check result.success, service throws on error
         
         // TEMP Removed
@@ -269,16 +270,19 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
 
         // *** Broadcast equipmentUpdate ***
         const updatedEquipment = await this.characterService.getCharacterEquipment(characterId);
+        this.logger.debug(`[EQUIP] Updated equipment: ${JSON.stringify(updatedEquipment)}`);
         client.emit('equipmentUpdate', { characterId: characterId, equipment: updatedEquipment });
         // Also update inventory since an item was removed
         // --- Use new slots method ---
         const updatedInventorySlotsEquip = await this.inventoryService.getUserInventorySlots(user.id);
+        this.logger.debug(`[EQUIP] Sending inventory update and equipment update to client`);
         client.emit('inventoryUpdate', { inventory: updatedInventorySlotsEquip }); 
         // -------------------------
 
         return { success: true };
 
     } catch (error: any) {
+        this.logger.debug(`[EQUIP] Error equipping item ${inventoryItemId} for user ${user.username}: ${error.message}`);
         this.logger.error(`Error equipping item ${inventoryItemId} for user ${user.username}: ${error.message}`, error.stack);
         return { success: false, message: error.message || 'Failed to equip item.' };
     }
@@ -636,10 +640,10 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
        }
 
       try {
-          this.logger.verbose(`User ${user.username} requested equipment for char ${characterId}.`);
+          // User requested equipment data
           const currentEquipment = await this.characterService.getCharacterEquipment(characterId);
           client.emit('equipmentUpdate', { characterId: characterId, equipment: currentEquipment });
-          this.logger.verbose(`Sent equipmentUpdate to ${user.username} after request.`);
+          // Sent equipment update to user
       } catch (error) {
           this.logger.error(`Error fetching equipment for char ${characterId}: ${error.message}`, error.stack);
            // client.emit('equipmentError', { message: 'Failed to load equipment.' });
