@@ -116,6 +116,7 @@ export default class UIScene extends Phaser.Scene {
     // *** Add init method ***
     init(data: { selectedParty?: any[] }) {
         this.receivedPartyData = data.selectedParty || []; // Store the passed data
+        console.log(`[FRONTEND DEBUG] UIScene init - received party data: ${JSON.stringify(this.receivedPartyData)}`);
     }
 
     create() {
@@ -339,13 +340,16 @@ export default class UIScene extends Phaser.Scene {
                     if (newVisibility) {
 
                         // *** Use receivedPartyData ***
+                        console.log(`[FRONTEND DEBUG] Equipment window opened - using party data: ${JSON.stringify(this.receivedPartyData)}`);
                         this.currentParty = this.receivedPartyData; // Use data passed via init
+                        console.log(`[FRONTEND DEBUG] Set currentParty to: ${JSON.stringify(this.currentParty)}`);
 
                         this.currentEquipCharacterIndex = 0;
                         this.renderCurrentCharacterEquipment(); // Render initial character
 
                         if (this.currentParty.length > 0) {
                             const firstCharId = this.currentParty[0].id;
+                            console.log(`[FRONTEND DEBUG] Requesting equipment for character: ${firstCharId}`);
                             this.networkManager.sendMessage('requestEquipment', { characterId: firstCharId });
                         } else {
                             console.warn("UIScene: Cannot request equipment, no party data received via init.");
@@ -835,24 +839,32 @@ export default class UIScene extends Phaser.Scene {
 
                  // Right-Click Equip
                  const isEquippable = item.itemTemplate && item.itemTemplate.equipSlot;
+                 console.log(`[FRONTEND DEBUG] Item ${item.itemTemplate?.name} - isEquippable: ${isEquippable}, equipSlot: ${item.itemTemplate?.equipSlot}`);
+                 
                  if (isEquippable) {
+                      console.log(`[FRONTEND DEBUG] Attaching right-click handler to ${item.itemTemplate?.name}`);
                       slotElement.oncontextmenu = (event) => {
+                         console.log(`[FRONTEND DEBUG] Right-click detected on ${item.itemTemplate?.name}`);
                          event.preventDefault(); // Prevent default browser menu
 
                          // --- Restore Equip Logic ---
                          // 1. Check if equipment window is open and party is selected
+                         console.log(`[FRONTEND DEBUG] Equipment window visible: ${this.equipWindowGameObject?.visible}, party size: ${this.currentParty.length}`);
                          if (!this.equipWindowGameObject?.visible || this.currentParty.length === 0) {
                               console.warn("Cannot equip item: Equipment window closed or no party selected.");
                               this.showTemporaryMessage("Open Equipment window and select character first.");
                               return;
                          }
                          // 2. Get target character
+                         console.log(`[FRONTEND DEBUG] Current equip character index: ${this.currentEquipCharacterIndex}, party: ${JSON.stringify(this.currentParty.map(c => ({id: c.id, name: c.name})))}`);
                          const targetCharacter = this.currentParty[this.currentEquipCharacterIndex];
                          if (!targetCharacter || !targetCharacter.id) {
                               console.error("Cannot equip item: Could not determine target character ID.");
+                              console.error(`[FRONTEND DEBUG] targetCharacter: ${JSON.stringify(targetCharacter)}`);
                               return;
                          }
                          const targetCharacterId = targetCharacter.id;
+                         console.log(`[FRONTEND DEBUG] Target character: ${targetCharacter.name} (${targetCharacterId})`);
                          // 3. Get inventory item ID (from the item variable in the loop scope)
                          const inventoryItemId = item.id;
                          if (!inventoryItemId) {
@@ -860,14 +872,20 @@ export default class UIScene extends Phaser.Scene {
                               return;
                          }
                          // 4. Send command to server
+                         console.log(`[FRONTEND EQUIP] Attempting to equip item ${inventoryItemId} on character ${targetCharacterId}`);
                          this.networkManager.sendMessage('equipItemCommand', {
                               inventoryItemId: inventoryItemId,
                               characterId: targetCharacterId
                          });
+                         console.log(`[FRONTEND EQUIP] Sent equipItemCommand to server`);
                          // --- End Restore Equip Logic ---
                       };
                  } else {
-                      slotElement.oncontextmenu = (e) => e.preventDefault();
+                      console.log(`[FRONTEND DEBUG] Item ${item.itemTemplate?.name} - not equippable, adding basic context menu handler`);
+                      slotElement.oncontextmenu = (e) => {
+                        console.log(`[FRONTEND DEBUG] Right-click on non-equippable item ${item.itemTemplate?.name}`);
+                        e.preventDefault();
+                      };
                  }
             } else {
                 // Render empty slot content
@@ -1124,6 +1142,11 @@ export default class UIScene extends Phaser.Scene {
             slotElement.oncontextmenu = null;
             slotElement.onmouseenter = null; // Clear hover listener
             slotElement.onmouseleave = null; // Clear hover listener
+            
+            // Clear existing drag-and-drop listeners
+            slotElement.ondragover = null;
+            slotElement.ondragleave = null;
+            slotElement.ondrop = null;
 
             if (item && item.itemTemplate) {
                 const template = item.itemTemplate;
@@ -1163,6 +1186,51 @@ export default class UIScene extends Phaser.Scene {
                 slotElement.onmouseleave = null;
                 slotElement.style.cursor = 'default';
             }
+            
+            // --- ADD DRAG-AND-DROP FUNCTIONALITY TO ALL EQUIPMENT SLOTS ---
+            // Allow dropping items onto equipment slots
+            slotElement.ondragover = (event) => {
+                event.preventDefault(); // Allow drop
+                console.log(`[FRONTEND DEBUG] Drag over equipment slot: ${slot}`);
+                slotElement.style.backgroundColor = 'rgba(0, 255, 0, 0.2)'; // Green highlight
+            };
+            
+            slotElement.ondragleave = (event) => {
+                console.log(`[FRONTEND DEBUG] Drag leave equipment slot: ${slot}`);
+                slotElement.style.backgroundColor = ''; // Remove highlight
+            };
+            
+            slotElement.ondrop = (event) => {
+                event.preventDefault();
+                console.log(`[FRONTEND DEBUG] Drop on equipment slot: ${slot}`);
+                slotElement.style.backgroundColor = ''; // Remove highlight
+                
+                if (!this.draggedItemData) {
+                    console.log(`[FRONTEND DEBUG] No dragged item data available`);
+                    return;
+                }
+                
+                // Get the current character
+                const targetCharacter = this.currentParty[this.currentEquipCharacterIndex];
+                if (!targetCharacter || !targetCharacter.id) {
+                    console.error("Cannot equip item: Could not determine target character ID.");
+                    return;
+                }
+                
+                // Get the dragged item info
+                const inventoryItemId = this.draggedItemData.item.id;
+                const targetCharacterId = targetCharacter.id;
+                
+                console.log(`[FRONTEND DEBUG] Drag-drop equip - item: ${inventoryItemId} (${this.draggedItemData.item.itemTemplate?.name}), character: ${targetCharacterId}, slot: ${slot}`);
+                
+                // Send equip command to server
+                this.networkManager.sendMessage('equipItemCommand', {
+                    inventoryItemId: inventoryItemId,
+                    characterId: targetCharacterId
+                });
+                
+                console.log(`[FRONTEND DEBUG] Sent equipItemCommand via drag-drop`);
+            };
         });
 
         // Update pagination button states (REMOVED)
@@ -1185,6 +1253,7 @@ export default class UIScene extends Phaser.Scene {
 
             if (item && item.id === itemId) {
                 this.draggedItemData = { item: item, originalSlot: inventorySlot }; // Store original slot
+                console.log(`[FRONTEND DEBUG] Drag started - item: ${item.itemTemplate?.name} (${itemId}), slot: ${inventorySlot}`);
                 event.dataTransfer?.setData('text/plain', itemId);
                 event.dataTransfer!.effectAllowed = 'move';
                 target.style.opacity = '0.5';

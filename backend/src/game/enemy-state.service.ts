@@ -72,7 +72,7 @@ export class EnemyStateService {
                     results.characterHealthUpdates.push({ id: action.targetEntityId, health: combatResult.targetCurrentHealth });
 
                     if (combatResult.targetDied) {
-                        this.logger.log(`Character ${action.targetEntityId} died from attack by Enemy ${enemy.id}`);
+                        // Character died from enemy attack
                         results.targetDied = true; // Signal target death
                         // The GameLoopService will handle marking the character as dead and adding to the 'deaths' array based on this flag.
                         // AI service should ideally clear the enemy's target or choose a new one next tick.

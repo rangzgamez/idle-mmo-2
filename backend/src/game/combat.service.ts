@@ -25,11 +25,11 @@ export class CombatService {
      * Calculates damage based on effective/base stats.
      */
     calculateDamage(attackerEffectiveAttack: number, defenderEffectiveDefense: number): number {
-        this.logger.debug(`Calculating damage: Attacker Effective Attack = ${attackerEffectiveAttack}, Defender Effective Defense = ${defenderEffectiveDefense}`);
+        // Calculating damage from stats
         const rawDamage = attackerEffectiveAttack - defenderEffectiveDefense;
-        this.logger.debug(`Raw damage (Effective Attack - Effective Defense) = ${rawDamage}`);
+        // Raw damage calculated
         const finalDamage = Math.max(0, rawDamage); // Damage cannot be negative
-        this.logger.debug(`Final damage (Clamped to >= 0) = ${finalDamage}`);
+        // Final damage calculated
         return finalDamage;
     }
 
@@ -45,7 +45,7 @@ export class CombatService {
         zoneId: string,
     ): Promise<CombatResult> {
         try {
-            this.logger.debug(`Handling attack: Attacker ID=${attacker.id}, Defender ID=${defender.id}`);
+            // Processing combat between entities
 
             // --- 1. Get Effective/Base Stats ---
             // Check if attacker is Character (has ownerId/effectiveAttack) or Enemy
@@ -55,8 +55,8 @@ export class CombatService {
 
             const defenderInitialHealth = defender.currentHealth ?? 0;
 
-            this.logger.debug(`Attacker Stat Used: ${ 'effectiveAttack' in attacker ? 'Effective' : 'Base' } Attack = ${attackerStat}`);
-            this.logger.debug(`Defender Stat Used: ${ 'effectiveDefense' in defender ? 'Effective' : 'Base' } Defense = ${defenderStat}, Current Health=${defenderInitialHealth}`);
+            // Using attacker stats
+            // Using defender stats
 
             // --- 2. Calculate Damage (using appropriate stats) ---
             const damageDealt = this.calculateDamage(attackerStat, defenderStat);
@@ -66,9 +66,9 @@ export class CombatService {
             let targetCurrentHealth = defenderInitialHealth;
 
             if (damageDealt > 0) {
-                this.logger.debug(`Applying ${damageDealt} damage to defender ${defender.id}`);
+                // Applying damage to defender
                 if ('ownerId' in defender && defender.ownerId) { // Defender is Character
-                    this.logger.debug(`Defender identified as Character (ID: ${defender.id}, Owner: ${defender.ownerId})`);
+                    // Defender is a character
                     const newHealth = await this.zoneService.updateCharacterHealth(defender.ownerId, defender.id, -damageDealt);
                     if (newHealth !== null) {
                         targetCurrentHealth = newHealth;
@@ -77,7 +77,7 @@ export class CombatService {
                         throw new Error(`Failed to update health for character ${defender.id}`);
                     }
                 } else if ('id' in defender) { // Assume defender is Enemy
-                    this.logger.debug(`Defender identified as Enemy (ID: ${defender.id})`);
+                    // Defender is an enemy
                     const newHealth = await this.zoneService.updateEnemyHealth(zoneId, defender.id, -damageDealt);
                     if (newHealth !== null) {
                         targetCurrentHealth = newHealth;
@@ -90,13 +90,13 @@ export class CombatService {
                     throw new Error('Defender type could not be determined');
                 }
             } else {
-                this.logger.debug(`Damage dealt is ${damageDealt}, no health update needed for ${defender.id}`);
+                // No damage dealt, no health update needed
                 targetCurrentHealth = defenderInitialHealth;
                 targetDied = defenderInitialHealth <= 0;
             }
 
             // --- 4. Return Result (Existing logic) ---
-            this.logger.log(`Attack resolved: ${attacker.id} -> ${defender.id}. Damage: ${damageDealt}, Target Died: ${targetDied}, Target Health: ${targetCurrentHealth}`);
+            // Attack resolved
             return {
                 damageDealt,
                 targetDied,

@@ -5,9 +5,10 @@ import { CharacterSprite } from '../gameobjects/CharacterSprite'; // Import the 
 import { EventBus } from '../EventBus';
 import UIScene from './UIScene';
 import { EnemySprite } from '../gameobjects/EnemySprite';
-import { DroppedItemSprite, DroppedItemData } from '../gameobjects/DroppedItemSprite'; // <-- Import DroppedItemSprite
+import { DroppedItemSprite, DroppedItemData } from '../gameobjects/DroppedItemSprite';
+import { ZoneCharacterState } from '../types/zone.types';
+
 // Add the interface definitions if not shared
-interface ZoneCharacterState { id: string; ownerId: string; ownerName: string; name: string; level: number; x: number | null; y: number | null; currentHealth?: number; baseHealth?: number; className: string; }
 interface EntityUpdateData { id: string; x?: number | null; y?: number | null; health?: number | null; state?: string; }
 // --- Add Entity Death Interface ---
 interface EntityDeathData { entityId: string; type: 'character' | 'enemy'; }
@@ -59,6 +60,11 @@ interface XpUpdatePayload {
     xpToNextLevel: number; // Total XP needed for next level
 }
 // ---
+
+// Define interface if not already present
+interface CharacterStateUpdatePayload {
+    updates: Array<{ entityId: string; state: string }>;
+}
 
 export default class GameScene extends Phaser.Scene {
     networkManager!: NetworkManager;
@@ -193,6 +199,9 @@ export default class GameScene extends Phaser.Scene {
         // --- ADD Listeners for XP/Level Events ---
         EventBus.on('levelUpNotification', this.handleLevelUpNotification, this);
         EventBus.on('xpUpdate', this.handleXpUpdate, this);
+        // ---> ADD Listener for local state updates
+        EventBus.on('character-state-update', this.handleCharacterStateUpdates, this);
+        // <--- END ADD
         // -----------------------------------------
 
         // --- Launch UI Scene ---
@@ -395,7 +404,6 @@ export default class GameScene extends Phaser.Scene {
             const arrivalThreshold = 15; // Maybe slightly larger threshold for average
 
             if (distanceToTarget < arrivalThreshold) {
-                console.log('Formation center arrived, stopping marker tween.'); // Debug log
                 this.markerFadeTween.stop(); // Stop the tween
                 this.markerFadeTween = null;    // Clear reference
                 this.lastMarkerTarget = null; // Clear target
@@ -418,12 +426,10 @@ export default class GameScene extends Phaser.Scene {
     }
 
     handlePlayerLeft(data: { ownerId: string }) {
-        console.log('Player left event received:', data);
         this.otherCharacters.forEach((sprite, charId) => {
             if (sprite.ownerId === data.ownerId) {
                 sprite.destroy();
                 this.otherCharacters.delete(charId);
-                console.log(`Removed character ${charId} for leaving owner ${data.ownerId}`);
             }
         });
     }
@@ -513,17 +519,14 @@ export default class GameScene extends Phaser.Scene {
     }
 
     handleEntityDied(data: EntityDeathData) {
-        console.log('Entity died event received:', data);
         const sprite = this.findSpriteById(data.entityId);
         if (sprite) {
             if (sprite instanceof EnemySprite) {
                 // Remove enemy sprite immediately
-                console.log(`Destroying enemy sprite: ${data.entityId}`);
                 this.enemySprites.delete(data.entityId);
                 sprite.destroy();
             } else if (sprite instanceof CharacterSprite) {
                 // Handle character death visually (e.g., fade out, play death animation)
-                console.log(`Character died: ${data.entityId}. Applying visual effect.`);
                 sprite.setAlpha(0.4); // Example: Fade slightly
                 // Optionally stop animations using the public method if needed
                  if (typeof sprite.setAnimation === 'function') {
@@ -543,7 +546,6 @@ export default class GameScene extends Phaser.Scene {
 
     // +++ ADDED: Handler for enemy spawns +++
     handleEnemySpawned(enemyData: EnemySpawnData) {
-        console.log('Handling enemy spawned:', enemyData);
         this.createEnemySprite(enemyData);
     }
     // ++++++++++++++++++++++++++++++++++++++++
@@ -571,12 +573,6 @@ export default class GameScene extends Phaser.Scene {
         // Attempt to get className for the player from the map if missing from charData
         if (isPlayer && !determinedClassName) {
              determinedClassName = this.playerClassMap.get(charData.id);
-             if (determinedClassName) {
-                 console.log(`[GameScene] Using className '${determinedClassName}' from playerClassMap for player character ${charData.id}`);
-             } else {
-                 console.error(`[GameScene] Cannot find className for player character ${charData.id} in playerClassMap! Assigning placeholder.`);
-                 determinedClassName = 'fighter'; // Assign placeholder
-             }
         } 
         // Assign placeholder if still missing (covers other players missing data, or player lookup failure)
         if (!determinedClassName) {
@@ -599,7 +595,6 @@ export default class GameScene extends Phaser.Scene {
 
         if (existingSprite) {
             // Update existing sprite
-            console.log(`[GameScene] Updating existing character sprite: ${charData.id}`);
             existingSprite.updateTargetPosition(posX, posY);
             // Optionally snap position for existing sprites on zone join/major update?
             // existingSprite.setPosition(posX, posY);
@@ -668,6 +663,9 @@ export default class GameScene extends Phaser.Scene {
         // --- Remove XP/Level Listeners ---
         EventBus.off('levelUpNotification', this.handleLevelUpNotification, this);
         EventBus.off('xpUpdate', this.handleXpUpdate, this);
+        // ---> REMOVE Listener on shutdown
+        EventBus.off('character-state-update', this.handleCharacterStateUpdates, this);
+        // <--- END REMOVE
         // -------------------------------
         // Clear character maps
         this.playerCharacters.forEach(sprite => sprite.destroy());
@@ -703,6 +701,9 @@ export default class GameScene extends Phaser.Scene {
         // --- Remove XP/Level Listeners ---
         EventBus.off('levelUpNotification', this.handleLevelUpNotification, this);
         EventBus.off('xpUpdate', this.handleXpUpdate, this);
+        // ---> REMOVE Listener on shutdown
+        EventBus.off('character-state-update', this.handleCharacterStateUpdates, this);
+        // <--- END REMOVE
         // -------------------------------
         // Clear character maps
         this.playerCharacters.forEach(sprite => sprite.destroy());
@@ -763,34 +764,42 @@ export default class GameScene extends Phaser.Scene {
 
     // +++ ADDED: Handler for Combat Action Visuals +++
     private handleCombatAction(data: CombatActionData) {
-        const attackerSprite = this.findSpriteById(data.attackerId);
-        const targetSprite = this.findSpriteById(data.targetId);
+        // <<<--- DEBUG LOG ENTRY ---
+        console.log(`[GameScene] handleCombatAction called for attacker ${data.attackerId}, target ${data.targetId}, damage ${data.damage}`);
+        // -------------------------
 
-        // <<<--- Face Target Before Attacking (If Character) ---
-        if (attackerSprite instanceof CharacterSprite && targetSprite) {
-             attackerSprite.facePosition(targetSprite.x);
+        // Find the attacker sprite (could be player or other character)
+        const attackerSprite = this.playerCharacters.get(data.attackerId) || this.otherCharacters.get(data.attackerId);
+        // Find the target sprite (could be enemy or character)
+        const targetSprite = this.findSpriteById(data.targetId); // Use helper
+
+        // --- ADDED: Play attacker's animation --- 
+        if (attackerSprite instanceof CharacterSprite) { // Ensure it's a character
+            attackerSprite.playAttackAnimationOnce();
         }
-        // <<<---------------------------------------------------
+        // ----------------------------------------
 
-        // Play Attacker Animation
-        if (attackerSprite instanceof CharacterSprite) {
-             // console.log(`[GameScene] Playing attack animation for ${data.attackerId}`);
-             attackerSprite.setAnimation('attack', true); // Force restart attack animation
-         } else if (attackerSprite instanceof EnemySprite) {
-            // TODO: Trigger enemy attack animation if implemented
-            // attackerSprite.playAttackAnimation();
-         }
-
+        // Visual feedback for the target (e.g., brief tint)
         if (targetSprite) {
-            // Restore or implement floating damage text / visual effects here if needed
-            if (data.damage > 0 && targetSprite.scene) {
-                this.showFloatingText(targetSprite.x, targetSprite.y, `${Math.round(data.damage)}`, '#ffffff');
-                // Maybe add a brief tint or shake effect to the target?
-                // this.tweens.add({ targets: targetSprite, alpha: 0.5, duration: 50, yoyo: true });
-            }
-         } else {
-             // console.warn(`[GameScene] Combat action target not found: ${data.targetId}`);
-         }
+            // ... (existing tint logic) ...
+        }
+
+        // Show floating combat text
+        if (targetSprite && data.damage) { // Checks if targetSprite exists AND data.damage is truthy (>0)
+             // <<<--- DEBUG LOG ---
+             console.log(`[GameScene] Showing floating text for target ${data.targetId}: damage=${data.damage}`);
+             // ------------------
+             this.showFloatingText(targetSprite.x, targetSprite.y - targetSprite.displayHeight * 0.6, `-${data.damage}`, '#ff0000'); // Uses RED color
+        } else {
+             // <<<--- DEBUG LOG ---
+             if (!targetSprite) {
+                 console.log(`[GameScene] No floating text: Target sprite not found for ID ${data.targetId}.`);
+             }
+             if (!data.damage) {
+                 console.log(`[GameScene] No floating text: Damage is 0 or missing for target ${data.targetId}. Damage value:`, data.damage);
+             }
+             // ------------------
+        }
     }
 
     // --- New Event Handlers for Items ---
@@ -826,7 +835,6 @@ export default class GameScene extends Phaser.Scene {
                     }
                  });
                 this.droppedItemSprites.set(itemData.id, itemSprite);
-                console.log(`Created sprite for dropped item: ${itemData.itemName} (${itemData.id})`);
             } catch (error) {
                 console.error(`Failed to create sprite for item ${itemData.id} with key ${itemData.spriteKey}:`, error);
             }
@@ -838,7 +846,6 @@ export default class GameScene extends Phaser.Scene {
             console.warn('Received invalid itemPickedUp data:', data);
             return;
         }
-        console.log(`Item picked up (removing sprite): ${data.itemId}`);
         const sprite = this.droppedItemSprites.get(data.itemId);
         if (sprite) {
             sprite.destroy();
@@ -854,7 +861,6 @@ export default class GameScene extends Phaser.Scene {
             console.warn('Dropped item clicked event received invalid item ID.');
             return;
         }
-        console.log(`[GameScene] Detected click on dropped item: ${itemId}. Sending pickup command...`);
         this.networkManager.sendMessage('pickup_item', { itemId });
     }
     // -------------------------------------------
@@ -881,7 +887,6 @@ export default class GameScene extends Phaser.Scene {
 
     // --- NEW: Handle Level Up Notification ---
     private handleLevelUpNotification(payload: LevelUpPayload) {
-        console.log('[GameScene] Received level up notification:', payload);
         const charSprite = this.playerCharacters.get(payload.characterId);
         if (charSprite) {
             // Update Sprite (Check if methods exist)
@@ -912,19 +917,16 @@ export default class GameScene extends Phaser.Scene {
     // --- NEW: Handle XP Update ---
     private handleXpUpdate(payload: XpUpdatePayload) {
         // 1. Check if this log appears
-        console.log('[GameScene] Received XP update:', payload); 
 
         // We only need to forward this to the UI if it's for one of our characters
         if (this.playerCharacters.has(payload.characterId)) {
              // 2. Check if this log appears
-             console.log(`[GameScene] Character ${payload.characterId} is a party member. Preparing UI update.`); 
 
              // Calculate relative XP values for UI
             const xpInCurrentLevel = this._getXpForCurrentLevel(payload.xp, payload.level);
             const xpNeededBetweenLevels = this._getXpNeededForLevelSpan(payload.level);
 
             // 3. Check if this log appears
-            console.log(`[GameScene] Emitting update-party-xp for ${payload.characterId}`); 
 
             EventBus.emit('update-party-xp', {
                 characterId: payload.characterId,
@@ -934,18 +936,15 @@ export default class GameScene extends Phaser.Scene {
             });
         } else {
              // 4. OR Check if this log appears
-             console.log(`[GameScene] XP update for ${payload.characterId} is NOT a party member, skipping UI event.`); 
         }
     }
      // --- END NEW ---
 
     private handleItemDespawned(data: { itemId: string }) {
-        console.log(`[GameScene] Handling item despawn for item ${data.itemId}`);
         const itemSprite = this.droppedItemSprites.get(data.itemId);
         if (itemSprite) {
             itemSprite.destroy(); // This will remove the sprite and any associated elements (tooltip, etc.)
             this.droppedItemSprites.delete(data.itemId);
-            console.log(`[GameScene] Successfully removed despawned item sprite ${data.itemId}`);
         } else {
             console.warn(`[GameScene] Could not find sprite for despawned item ${data.itemId}`);
         }
@@ -972,4 +971,25 @@ export default class GameScene extends Phaser.Scene {
             onComplete: () => { text.destroy(); }
         });
     }
+
+    // ---> ADD Handler function
+    private handleCharacterStateUpdates(payload: CharacterStateUpdatePayload) {
+        // console.log('GameScene handling character state update batch', payload);
+        payload.updates.forEach(update => {
+            const { entityId, state } = update;
+            // Find the sprite in either player or other characters map
+            const characterSprite = this.playerCharacters.get(entityId) || this.otherCharacters.get(entityId);
+
+            if (characterSprite) {
+                // Call the method on CharacterSprite to handle the state change
+                // Ensure CharacterSprite has this method!
+                characterSprite.setCharacterState(state);
+                // console.log(`Updated state for character ${entityId} to ${state}`);
+            } else {
+                // Ignore if sprite not found (might happen if entity left zone just before update)
+                // console.warn(`GameScene: Received state update for unknown character ID: ${entityId}`);
+            }
+        });
+    }
+    // <--- END ADD
 }

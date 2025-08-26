@@ -36,6 +36,13 @@ interface DroppedItemPayload {
     quantity: number;
 }
 
+// ---> ADD Interface for State Change Data
+interface CharacterStateChangeData {
+    entityId: string;
+    state: string;
+}
+// <--- END ADD
+
 type SpawnData = EnemyInstance; // The full enemy instance data for a new spawn
 
 @Injectable()
@@ -50,6 +57,9 @@ export class BroadcastService {
     private itemDroppedQueue: Map<string, DroppedItemPayload[]> = new Map();
     private itemPickedUpQueue: Map<string, { itemId: string }[]> = new Map();
     private itemDespawnedQueue: Map<string, { itemId: string }[]> = new Map(); // Add queue for despawns
+    // ---> ADD State Change Queue
+    private characterStateChangeQueue: Map<string, CharacterStateChangeData[]> = new Map();
+    // <--- END ADD
 
     // Inject Logger through the constructor
     constructor(private readonly logger: Logger) {
@@ -144,7 +154,13 @@ export class BroadcastService {
             queue.push({ itemId });
         }
     }
-    // ---------------------------------------------
+
+    // ---> ADD Method to queue character state changes
+    queueCharacterStateChange(zoneId: string, stateChangeData: CharacterStateChangeData): void {
+        this.getQueue(this.characterStateChangeQueue, zoneId).push(stateChangeData);
+        // Queued character state change
+    }
+    // <--- END ADD
 
     // --- Broadcasting Method ---
 
@@ -165,6 +181,10 @@ export class BroadcastService {
         const spawns = this.spawnQueue.get(zoneId);
         const itemsDropped = this.itemDroppedQueue.get(zoneId); // Get dropped items
         const itemsPickedUp = this.itemPickedUpQueue.get(zoneId); // Get picked up items
+        const itemsDespawned = this.itemDespawnedQueue.get(zoneId);
+        // ---> ADD Flushing for State Changes
+        const stateChanges = this.characterStateChangeQueue.get(zoneId);
+        // <--- END ADD
 
         // Emit events only if there's data for them
         if (updates && updates.length > 0) {
@@ -197,15 +217,14 @@ export class BroadcastService {
         }
 
         if (itemsDropped && itemsDropped.length > 0) {
-            this.logger.verbose(`[Broadcast] Emitting itemsDropped for zone ${zoneId} with ${itemsDropped.length} item(s). First item ID: ${itemsDropped[0].id}`);
+            // Emitting items dropped event
             // Client expects { items: [...] }
             this.server.to(zoneId).emit('itemsDropped', { items: itemsDropped });
             this.itemDroppedQueue.delete(zoneId); // Clear queue
         }
 
-        // --- NEW: Emit itemPickedUp events ---
         if (itemsPickedUp && itemsPickedUp.length > 0) {
-            this.logger.verbose(`[Broadcast] Emitting itemPickedUp for zone ${zoneId} with ${itemsPickedUp.length} item(s).`);
+            // Emitting item pickup events
             // Client expects individual 'itemPickedUp' events { itemId: string }
             itemsPickedUp.forEach(pickup => {
                 this.server?.to(zoneId).emit('itemPickedUp', pickup);
@@ -213,18 +232,34 @@ export class BroadcastService {
             this.itemPickedUpQueue.delete(zoneId); // Clear queue
         }
 
-        // --- NEW: Emit itemDespawned events ---
-        const itemsDespawned = this.itemDespawnedQueue.get(zoneId);
         if (itemsDespawned && itemsDespawned.length > 0) {
-            this.logger.verbose(`[Broadcast] Emitting itemDespawned for zone ${zoneId} with ${itemsDespawned.length} item(s).`);
+            // Emitting item despawn events
             // Client expects individual 'itemDespawned' events { itemId: string }
             itemsDespawned.forEach(despawn => {
                 this.server?.to(zoneId).emit('itemDespawned', despawn);
             });
             this.itemDespawnedQueue.delete(zoneId); // Clear queue
         }
-        // -------------------------------------
+
+        // ---> ADD Emit logic for State Changes
+        if (stateChanges && stateChanges.length > 0) {
+            // Emitting character state changes
+            // Emit as a single batch event 'characterStateUpdates' containing an array
+            // Or emit individually? Let's emit as a batch for potential efficiency.
+            this.server.to(zoneId).emit('characterStateUpdates', { updates: stateChanges });
+            this.characterStateChangeQueue.delete(zoneId); // Clear queue
+        }
+        // <--- END ADD
     }
+
+    // ---> ADD Helper function getQueue if it doesn't exist
+    private getQueue<T>(map: Map<string, T[]>, key: string): T[] {
+        if (!map.has(key)) {
+            map.set(key, []);
+        }
+        return map.get(key)!;
+    }
+    // <--- END ADD
 
     // --- NEW: Method to send an event directly to a specific user ---
     /**
@@ -262,7 +297,7 @@ export class BroadcastService {
                 this.logger.debug(`[BroadcastService] Found matching socket ${socket.id} for user ${userId}. Emitting '${eventName}'.`);
                 // ++++++++++++++++++++++++
                 socket.emit(eventName, payload);
-                this.logger.verbose(`Sent event '${eventName}' directly to user ${userId} (Socket ID: ${socket.id})`);
+                // Sent event directly to user
                 foundSocket = true;
                 // If a user can have multiple connections/sockets, don't break here.
                 // If only one connection per user is expected, we could break.

@@ -61,12 +61,17 @@ export interface CharacterClassTemplateData {
     spriteKeyBase: string;
 }
 
+// Define the payload interface if not already present
+interface CharacterStateUpdatePayload {
+    updates: Array<{ entityId: string; state: string }>;
+}
+
 export class NetworkManager {
     private socket: Socket | null = null;
     private static instance: NetworkManager;
     // +++ Add Backend API Base URL (Adjust if needed) +++
-    private apiBaseUrl = 'http://localhost:3000'; // REMOVED /api prefix
-
+    //private apiBaseUrl = 'http://141.155.171.22:3000'; // REMOVED /api prefix
+    private apiBaseUrl = 'http://localhost:3000';
     private constructor() {}
 
     public static getInstance(): NetworkManager {
@@ -85,6 +90,7 @@ export class NetworkManager {
         }
 
         console.log('Attempting to connect to WebSocket server...');
+        //this.socket = io('ws://141.155.171.22:3000', { auth: { token: token } });
         this.socket = io('ws://localhost:3000', { auth: { token: token } });
 
         this.socket.on('connect', () => {
@@ -238,6 +244,21 @@ export class NetworkManager {
             }
         });
         // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+        // ---> ADD Character State Updates Listener <---
+        this.socket.on('characterStateUpdates', (payload: CharacterStateUpdatePayload) => {
+            // This event bundles multiple state changes from the server
+            // console.log(`Received character state updates for ${payload.updates.length} entities.`);
+
+            // Validate payload structure before emitting
+            if (payload && Array.isArray(payload.updates)) {
+                // Use the imported EventBus singleton directly
+                EventBus.emit('character-state-update', payload); // Emit locally
+            } else {
+                console.warn('Received invalid characterStateUpdates payload:', payload);
+            }
+        });
+        // ---> END ADD <---
 
         // Existing listeners (keep if needed)
         // this.socket.on('chatMessage', (data) => { /* ... */ });

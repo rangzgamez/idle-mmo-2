@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { GameConfig } from '../common/config/game.config';
 
 // Ensure these interfaces are exported
 export interface Point {
@@ -67,7 +68,7 @@ export class MovementService {
         const distance = Math.sqrt(dx * dx + dy * dy); // Direct distance calculation
 
         // Avoid division by zero or negligible movement
-        if (distance <= 0.1) { // Consider a small epsilon for floating point comparisons
+        if (distance <= GameConfig.COMBAT.MOVEMENT_EPSILON) { // Consider a small epsilon for floating point comparisons
             return { newPosition: targetPosition, reachedTarget: true }; // Already at or very close to target
         }
 

@@ -174,7 +174,7 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     // 1. Find the dropped item in the current zone
     const droppedItem = this.zoneService.getDroppedItemById(zoneId, itemIdToPickup); // Assuming getDroppedItemById exists
     if (!droppedItem) {
-      this.logger.verbose(`[Pickup Command] Dropped item ${itemIdToPickup} not found in zone ${zoneId} for user ${user.id}.`);
+      // Dropped item not found in zone
       return { success: false, message: 'Item not found or already picked up.' };
     }
 
@@ -258,9 +258,10 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
      }
 
     try {
-        console.log(`User ${user.username} trying to equip item ${inventoryItemId} on char ${characterId}`);
+        this.logger.debug(`[EQUIP] User ${user.username} trying to equip item ${inventoryItemId} on char ${characterId}`);
         // *** Call CharacterService ***
         const result = await this.characterService.equipItem(user.id, characterId, inventoryItemId);
+        this.logger.debug(`[EQUIP] CharacterService.equipItem returned: ${JSON.stringify(result)}`);
         // No need to check result.success, service throws on error
         
         // TEMP Removed
@@ -269,16 +270,19 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
 
         // *** Broadcast equipmentUpdate ***
         const updatedEquipment = await this.characterService.getCharacterEquipment(characterId);
+        this.logger.debug(`[EQUIP] Updated equipment: ${JSON.stringify(updatedEquipment)}`);
         client.emit('equipmentUpdate', { characterId: characterId, equipment: updatedEquipment });
         // Also update inventory since an item was removed
         // --- Use new slots method ---
         const updatedInventorySlotsEquip = await this.inventoryService.getUserInventorySlots(user.id);
+        this.logger.debug(`[EQUIP] Sending inventory update and equipment update to client`);
         client.emit('inventoryUpdate', { inventory: updatedInventorySlotsEquip }); 
         // -------------------------
 
         return { success: true };
 
     } catch (error: any) {
+        this.logger.debug(`[EQUIP] Error equipping item ${inventoryItemId} for user ${user.username}: ${error.message}`);
         this.logger.error(`Error equipping item ${inventoryItemId} for user ${user.username}: ${error.message}`, error.stack);
         return { success: false, message: error.message || 'Failed to equip item.' };
     }
@@ -525,9 +529,10 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
           ownerName: user.username,
           name: char.name,
           level: char.level,
+          className: char.class,
           x: char.positionX,
           y: char.positionY,
-          className: char.class
+          state: 'idle',
       }));
       // Broadcast only the NEW player's characters to existing players in the room
       client.to(zoneId).emit('playerJoined', { characters: newPlayerCharacterStates }); // Send array of characters
@@ -539,113 +544,79 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
 
   @SubscribeMessage('moveCommand')
   async handleMoveCommand(
-    @MessageBody() data: { target: { x: number; y: number } }, // Remove characterId for now, move the whole party
+    @MessageBody() data: { target: { x: number; y: number } },
     @ConnectedSocket() client: Socket,
-) {
-    const user = client.data.user as User;
-    // Fetch the runtime character data which includes targetX/Y
-    const partyCharacters = this.zoneService.getPlayerCharacters(user.id);
+  ) {
+      const user = client.data.user as User;
+      const partyCharactersData = client.data.selectedCharacters as Character[]; // Get the base Character data
+      const zoneId = client.data.currentZoneId as string;
 
-    if (!user || !partyCharacters || partyCharacters.length === 0) {
-        this.logger.warn(`Move command ignored for user ${user?.username}: No party found`);
-        return;
-    }
+      if (!user || !partyCharactersData || partyCharactersData.length === 0 || !zoneId) {
+          this.logger.warn(`Move command ignored for user ${user?.username}: Invalid state (user, party, or zone).`);
+          return; // Exit early
+      }
 
-    const formationCenter = data.target;
-    const formationOffset = 30; // Pixels - distance from center for flanking characters
+      const formationCenter = data.target;
+      const formationOffset = 30; // Pixels
 
-    // --- Calculate target positions for each character ---
-    const targets: { charId: string, targetX: number, targetY: number }[] = [];
+      // --- Calculate target positions --- 
+      const targets: { charId: string, targetX: number, targetY: number }[] = [];
+      if (partyCharactersData.length > 0) {
+          targets.push({ charId: partyCharactersData[0].id, targetX: formationCenter.x, targetY: formationCenter.y - formationOffset * 0.5 });
+      }
+      if (partyCharactersData.length > 1) {
+          targets.push({ charId: partyCharactersData[1].id, targetX: formationCenter.x - formationOffset, targetY: formationCenter.y + formationOffset * 0.5 });
+      }
+      if (partyCharactersData.length > 2) {
+          targets.push({ charId: partyCharactersData[2].id, targetX: formationCenter.x + formationOffset, targetY: formationCenter.y + formationOffset * 0.5 });
+      }
+      // --------------------------------
 
-    // Simple triangle formation (adjust as needed)
-    if (partyCharacters.length > 0) {
-        // Character 1 (Leader) - Slightly ahead
-        targets.push({
-            charId: partyCharacters[0].id,
-            targetX: formationCenter.x,
-            targetY: formationCenter.y - formationOffset * 0.5 // Adjust vertical offset if needed
-        });
-    }
-    if (partyCharacters.length > 1) {
-        // Character 2 (Left Flank)
-        targets.push({
-            charId: partyCharacters[1].id,
-            targetX: formationCenter.x - formationOffset,
-            targetY: formationCenter.y + formationOffset * 0.5 // Adjust vertical offset if needed
-        });
-    }
-    if (partyCharacters.length > 2) {
-        // Character 3 (Right Flank)
-        targets.push({
-            charId: partyCharacters[2].id,
-            targetX: formationCenter.x + formationOffset,
-            targetY: formationCenter.y + formationOffset * 0.5 // Adjust vertical offset if needed
-        });
-    }
-    // Handle > 3 characters later if needed
+      // --- Use ZoneService to set targets and state --- 
+      for (const target of targets) {
+          const success = this.zoneService.setMovementTarget(
+              zoneId,
+              target.charId,
+              target.targetX,
+              target.targetY
+          );
+          if (!success) {
+              this.logger.warn(`[MoveCmd] Failed to set movement target for char ${target.charId} via ZoneService.`);
+          }
+      }
+      // No need to directly manipulate character state here anymore
+  }
 
-    // --- Update target positions AND anchor points in ZoneService ---
-    for (const target of targets) {
-        const character = partyCharacters.find(c => c.id === target.charId);
-        if (character) {
-            // Set the movement target
-            character.targetX = target.targetX;
-            character.targetY = target.targetY;
-            // Set the anchor point (leash point) to the destination
-            character.anchorX = target.targetX;
-            character.anchorY = target.targetY;
-            // Clear any attack target, movement command overrides attacking
-            character.attackTargetId = null;
-            character.commandState = null; // <-- Clear command state on move
-            character.state = 'moving';
+  @SubscribeMessage('attackCommand')
+  handleAttackCommand(
+      @MessageBody() data: { targetId: string },
+      @ConnectedSocket() client: Socket,
+  ): void {
+      const user = client.data.user as User;
+      const partyCharactersData = client.data.selectedCharacters as Character[]; // Get base Character data
+      const zoneId = client.data.currentZoneId as string;
 
-            // Optional: Log the calculated target
-            this.logger.debug(`MoveCmd: Set state=moving, target/anchor for char ${target.charId} to ${target.targetX}, ${target.targetY}`);
-        } else {
-            this.logger.warn(`MoveCmd: Could not find character ${target.charId} in runtime data for user ${user.id}`);
-        }
-    }
+      if (!user || !partyCharactersData || partyCharactersData.length === 0 || !zoneId) {
+          this.logger.warn(`Attack command ignored for user ${user?.username}: Invalid state (user, party, or zone).`);
+          return;
+      }
 
-    // The actual movement happens in the game loop based on these targets and state
-}
-   @SubscribeMessage('attackCommand')
-    handleAttackCommand(
-        @MessageBody() data: { targetId: string },
-        @ConnectedSocket() client: Socket,
-    ): void {
-        const user = client.data.user as User;
-        const partyCharacters = this.zoneService.getPlayerCharacters(user.id);
-        const zoneId = client.data.currentZoneId; // Use the zone ID stored on the socket
+      const targetEnemyId = data.targetId;
 
-        if (!user || !partyCharacters || partyCharacters.length === 0) {
-            this.logger.warn(`Attack command ignored for user ${user?.username}: No party found`);
-            return;
-        }
-        if (!zoneId) {
-            this.logger.warn(`Attack command ignored for user ${user?.username}: Not currently in a zone`);
-            return;
-        }
-
-        // Validate the target enemy exists in the current zone
-        const targetEnemy = this.zoneService.getEnemyInstanceById(zoneId, data.targetId);
-
-        if (!targetEnemy) {
-            this.logger.warn(`Attack command ignored: Target enemy ${data.targetId} not found in zone ${zoneId}.`);
-            // TODO: Maybe send an acknowledgement back to the client indicating failure?
-            return;
-        }
-
-        // Set the target and state for ALL characters in the party
-        for (const character of partyCharacters) {
-            character.attackTargetId = data.targetId;
-            character.commandState = null; // <-- Clear command state on attack
-            character.state = 'attacking';
-            character.targetX = null;
-            character.targetY = null;
-            this.logger.debug(`AttackCmd: Set state=attacking, target=${data.targetId} for char ${character.id}`);
-        }
-
-        // The actual attacking/movement to target happens in the game loop
+      // --- Use ZoneService to set targets and state --- 
+      // Set the target and state for ALL characters in the party
+      for (const character of partyCharactersData) {
+           const success = this.zoneService.setAttackTarget(
+              zoneId,
+              character.id,
+              targetEnemyId
+          );
+          if (!success) {
+               // ZoneService already logs warnings if enemy/char not found or state change fails
+               this.logger.warn(`[AttackCmd] Failed to set attack target for char ${character.id} via ZoneService (target: ${targetEnemyId}).`);
+          }
+      }
+      // No need to directly manipulate character state here anymore
   }
 
   // --- Handler to request equipment state --- 
@@ -669,10 +640,10 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
        }
 
       try {
-          this.logger.verbose(`User ${user.username} requested equipment for char ${characterId}.`);
+          // User requested equipment data
           const currentEquipment = await this.characterService.getCharacterEquipment(characterId);
           client.emit('equipmentUpdate', { characterId: characterId, equipment: currentEquipment });
-          this.logger.verbose(`Sent equipmentUpdate to ${user.username} after request.`);
+          // Sent equipment update to user
       } catch (error) {
           this.logger.error(`Error fetching equipment for char ${characterId}: ${error.message}`, error.stack);
            // client.emit('equipmentError', { message: 'Failed to load equipment.' });

@@ -2,26 +2,15 @@
 import Phaser from 'phaser';
 import { HealthBar } from './HealthBar'; // Import HealthBar
 import { PhaserSpriteAnimator, StateTextureKeys } from '../graphics/PhaserSpriteAnimator'; // <<< Import Phaser Animator
-
-// Add the interface definition if you don't have it shared elsewhere
-interface ZoneCharacterState {
-    id: string;
-    ownerId: string;
-    ownerName: string;
-    name: string;
-    className: string; // <<<--- ADD CLASS NAME (Ensure backend sends this!)
-    level: number;
-    x: number | null;
-    y: number | null;
-    baseHealth?: number; // <-- Made optional
-    currentHealth?: number; // Also add currentHealth if needed by constructor/logic
-}
+import { ZoneCharacterState } from '../types/zone.types';
+import FloatingCombatText from './FloatingCombatText';
 
 export class CharacterSprite extends Phaser.GameObjects.Sprite {
     characterId: string;
     ownerId: string; // ID of the controlling player
     isPlayerCharacter: boolean; // Is this one of the client's own characters?
     className: string; // <<<--- ADD CLASS NAME PROPERTY
+    attackSpeedMs: number; // <<<--- DECLARE PROPERTY
     // --- Interpolation properties ---
     targetX: number;
     targetY: number;
@@ -32,6 +21,9 @@ export class CharacterSprite extends Phaser.GameObjects.Sprite {
     private healthBar: HealthBar; // Add health bar property
     private animator?: PhaserSpriteAnimator; // <<<--- ADD ANIMATOR (optional for safety)
     private isFacingRight: boolean = true; // <<<--- ADD FACING DIRECTION
+    private isDead = false;
+    private currentState: string = 'idle';
+    private isPlayingAttack: boolean = false; // Flag to prevent state updates during attack anim
 
     private readonly BUBBLE_MAX_WIDTH = 150; // Max width before wrapping
     private readonly BUBBLE_OFFSET_Y = 20;  // Initial offset above sprite center/top
@@ -47,6 +39,8 @@ export class CharacterSprite extends Phaser.GameObjects.Sprite {
         wordWrap: { width: this.BUBBLE_MAX_WIDTH }
     };
     private nameLabel: Phaser.GameObjects.Text;
+    private chatBubble: Phaser.GameObjects.Container | null = null;
+    private chatBubbleTimer: Phaser.Time.TimerEvent | null = null;
 
     constructor(scene: Phaser.Scene, x: number, y: number, texture: string, data: ZoneCharacterState, isPlayer: boolean) {
         // Use placeholder texture initially if idle texture isn't guaranteed yet
@@ -60,6 +54,7 @@ export class CharacterSprite extends Phaser.GameObjects.Sprite {
         this.ownerId = data.ownerId;
         this.isPlayerCharacter = isPlayer;
         this.className = data.className; // <<<--- STORE CLASS NAME
+        this.attackSpeedMs = data.attackSpeed ?? 1500; // Store value
         this.setName(this.characterId); // <<<--- SET UNIQUE NAME FOR ANIMATOR PREFIX
         this.targetX = x;
         this.targetY = y;
@@ -87,6 +82,9 @@ export class CharacterSprite extends Phaser.GameObjects.Sprite {
         // <<<--- SETUP ANIMATOR ---
         this.setupAnimator(scene);
         // <<<---------------------
+
+        this.currentState = data.state || 'idle';
+        this.updateAnimation();
     }
 
     // <<<--- NEW METHOD TO SETUP ANIMATOR ---
@@ -119,7 +117,7 @@ export class CharacterSprite extends Phaser.GameObjects.Sprite {
                 frameWidth,
                 frameHeight,
                 animIntervalMs,
-                this.characterId // Pass characterId as unique prefix
+                this.className // Pass characterId as unique prefix
             );
              console.log(`[CharacterSprite ${this.characterId}] Animator created successfully.`);
              // Animator should set the initial idle animation via its constructor
@@ -220,6 +218,9 @@ export class CharacterSprite extends Phaser.GameObjects.Sprite {
             bubble.x = this.x;
             bubble.y = this.calculateBubbleY(index);
         });
+
+        this.updateChatBubblePosition();
+        this.updateAnimation();
     }
 
     setHealth(currentHealth: number, maxHealth?: number): void {
@@ -297,6 +298,139 @@ export class CharacterSprite extends Phaser.GameObjects.Sprite {
         this.activeBubbles = [];
         this.healthBar.destroy();
         this.animator?.destroy(); // <<<--- DESTROY ANIMATOR
+        this.clearChatBubble(true);
         super.destroy(fromScene);
+    }
+
+    public setCharacterState(newState: string): void {
+        console.log(`[CharacterSprite ${this.characterId}] Setting character state to: ${newState}`);
+        if (this.currentState !== newState && !this.isDead) {
+            this.currentState = newState;
+            this.updateAnimation();
+        } else if (newState === 'dead' && !this.isDead) {
+            this.handleDeath();
+        }
+    }
+
+    private updateAnimation(oldState?: string): void { 
+        // --- ADDED: Don't change animation if a one-shot attack is playing --- 
+        if (this.isPlayingAttack) {
+            return;
+        }
+        // ---------------------------------------------------------------------
+
+        if (this.isDead || !this.scene || !this.active || !this.animator) { 
+            if (this.anims) this.anims.stop();
+            return;
+        }
+
+        const dx = this.targetX - this.x;
+        const dy = this.targetY - this.y;
+        const isMoving = Math.abs(dx) > 1 || Math.abs(dy) > 1; 
+
+        let baseStateKey: string | null = null;
+
+        // --- Removed 'attacking' case - Rely on playAttackAnimationOnce --- 
+        switch (this.currentState) {
+            case 'moving_to_loot':
+            case 'moving':
+                baseStateKey = isMoving ? 'walk' : 'idle'; 
+                break;
+            case 'looting_area': 
+            case 'idle':
+            default:
+                baseStateKey = 'idle';
+                break;
+        }
+
+        // --- Use the Animator --- 
+        if (baseStateKey) {
+            try {
+                 this.animator.playAnimation(baseStateKey, false, true, undefined);
+            } catch (e) {
+                console.error(`[CharacterSprite ${this.characterId}] Error calling animator.playAnimation('${baseStateKey}'):`, e);
+            }
+        } else {
+             console.warn(`[CharacterSprite ${this.characterId}] No valid baseStateKey determined for state: ${this.currentState}. Stopping animation.`);
+             this.animator.stopAnimation(); 
+        }
+       
+        // Update facing direction based on movement
+        if (isMoving) {
+            this.facePosition(this.targetX);
+        }
+    }
+
+    // --- NEW METHOD TO PLAY ATTACK ANIMATION ONCE --- 
+    public playAttackAnimationOnce(): void {
+        // <<<--- DEBUG LOG ENTRY ---
+        console.log(`[CharacterSprite ${this.characterId}] playAttackAnimationOnce called. Current isPlayingAttack: ${this.isPlayingAttack}`);
+        // -------------------------
+
+        if (this.isDead || !this.scene || !this.active || !this.animator) {
+            return; // Cannot play if dead or destroyed
+        }
+
+        const attackStateKey = 'attack';
+        const fullAnimKey = `${this.className}_${attackStateKey}`;
+
+        // Check if the animation exists
+        if (!this.scene.anims.exists(fullAnimKey)) {
+             console.warn(`[CharacterSprite ${this.characterId}] Attack animation key does not exist: ${fullAnimKey}`);
+             return;
+        }
+        
+        console.log(`[CharacterSprite ${this.characterId}] Playing attack animation: ${fullAnimKey}`);
+        this.isPlayingAttack = true; 
+
+        this.animator.playAnimation(attackStateKey, true, false, undefined);
+
+        // --- Listen for completion --- 
+        // Use the sprite's event emitter
+        this.once(Phaser.Animations.Events.ANIMATION_COMPLETE_KEY + fullAnimKey, () => {
+             console.log(`[CharacterSprite ${this.characterId}] Attack animation complete: ${fullAnimKey}`);
+             this.isPlayingAttack = false; 
+             this.updateAnimation(); 
+        });
+
+         // Safety timeout 
+         this.scene.time.delayedCall(this.attackSpeedMs * 1.5, () => { // Now uses declared property
+             if (this.isPlayingAttack) {
+                 console.warn(`[CharacterSprite ${this.characterId}] Attack animation timeout reached. Forcing state update.`);
+                 this.isPlayingAttack = false;
+                 if (this.active) { // Check if sprite still active
+                    this.updateAnimation();
+                 }
+             }
+         });
+    }
+    // ------------------------------------------------
+
+    public handleDeath(): void {
+        if (this.isDead) return;
+        console.log(`[CharacterSprite ${this.characterId}] Handling death visuals.`);
+        this.isDead = true;
+        this.currentState = 'dead';
+        this.setAlpha(0.5);
+        this.stop();
+        this.clearChatBubble(true);
+    }
+
+
+    private updateChatBubblePosition(): void {
+        if (this.chatBubble) {
+            this.chatBubble.setPosition(this.x, this.y + this.BUBBLE_OFFSET_Y);
+        }
+    }
+
+    public clearChatBubble(force: boolean = false): void {
+        if (this.chatBubbleTimer && !force) {
+            this.chatBubbleTimer.remove();
+            this.chatBubbleTimer = null;
+        }
+        if (this.chatBubble) {
+            this.chatBubble.destroy();
+            this.chatBubble = null;
+        }
     }
 }
