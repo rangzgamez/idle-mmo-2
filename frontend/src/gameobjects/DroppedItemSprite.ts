@@ -26,6 +26,10 @@ export class DroppedItemSprite extends Phaser.GameObjects.Sprite {
 
         scene.add.existing(this);
         this.setInteractive(); // Make it clickable
+        
+        // Set depth for visual layering - items render below enemies and players
+        this.setDepth(10);
+        
         // Optional: Scale down item sprites slightly?
         // this.setScale(0.8);
 
