@@ -79,28 +79,26 @@ export default class GameScene extends Phaser.Scene {
     private currentPlayerUsername: string | null = null; // <-- Add property to store username
     private enemySprites: Map<string, EnemySprite> = new Map(); //NEW
     private droppedItemSprites: Map<string, DroppedItemSprite> = new Map(); // <-- Add map for dropped items
+    private recentPlayerAttacks: Map<string, number> = new Map(); // Track recent attacks by player characters (targetId -> timestamp)
+    private screenShakeTween: Phaser.Tweens.Tween | null = null; // Track active screen shake
     constructor() {
         super('GameScene');
     }
 
     // Receive data from the previous scene (CharacterSelectScene)
     init(data: { selectedParty?: any[] }) {
-        console.log('[GameScene.init] Received data:', JSON.stringify(data)); // Log the raw data structure
         this.selectedPartyData = data?.selectedParty || []; // Safely access selectedParty
-        console.log('[GameScene.init] Parsed selectedPartyData:', JSON.stringify(this.selectedPartyData)); // Log parsed data
         this.networkManager = NetworkManager.getInstance();
 
         // <<<--- Populate Player Class Map ---
         this.playerClassMap.clear(); // Clear previous map if scene restarts
         this.selectedPartyData.forEach(char => {
-            console.log('[GameScene.init] Processing character:', char);
             if (char.id && char.class) { // Use 'className' based on previous context
                 this.playerClassMap.set(char.id, char.class.toLowerCase());
             } else {
                 console.warn('[GameScene.init] Selected character data missing id or className:', char);
             }
         });
-        console.log('[GameScene.init] Player class map populated:', this.playerClassMap);
         // <<<-------------------------------
 
         // --- Store current player's username ---
@@ -108,9 +106,7 @@ export default class GameScene extends Phaser.Scene {
         if (this.selectedPartyData.length > 0 && this.selectedPartyData[0].ownerName) {
             // Get username from the ownerName field provided by the backend's selectParty response
             this.currentPlayerUsername = this.selectedPartyData[0].ownerName;
-            console.log(`Stored current player username: ${this.currentPlayerUsername}`);
         } else {
-            console.warn("Could not determine current player username from selectedParty data.");
             // Fallback or error handling if needed, maybe try decoding JWT as a last resort?
             // For now, bubbles for own messages might not work if this fails.
         }
@@ -133,7 +129,6 @@ export default class GameScene extends Phaser.Scene {
         const frameConfig = { frameWidth: 100, frameHeight: 100 }; // !!! UPDATE frame dimensions if different !!!
 
         classesToLoad.forEach(className => {
-            console.log(`[GameScene.preload] Preloading spritesheets for class: ${className}`);
             const basePath = `assets/sprites/characters/${className}/`;
 
             // Define states and their corresponding file names
@@ -152,24 +147,18 @@ export default class GameScene extends Phaser.Scene {
                 // You might want to add error checking here in a real project
                 // to confirm the file actually exists before trying to load it.
                 this.load.spritesheet(key, path, frameConfig);
-                console.log(` - Loading ${state}: key=${key}, path=${path}`);
             }
         });
          // Example error handling during loading
-         this.load.on('fileerror', (key: string, file: Phaser.Loader.File) => {
-            console.error(`[GameScene.preload] Error loading file: ${key} - ${file.url}`);
-         });
         // <<<-------------------------------------
 
         // this.load.tilemapTiledJSON('zone1Map', 'assets/tilemaps/zone1.json');
     }
 
     create() {
-        console.log('GameScene create');
 
         // Check network connection
         if (!this.networkManager.isConnected()) {
-            console.error('GameScene: Network not connected!');
             this.handleDisconnectError('Connection lost. Please log in again.');
             return;
         }
@@ -206,7 +195,6 @@ export default class GameScene extends Phaser.Scene {
 
         // --- Launch UI Scene ---
         // Use scene.launch to run it in parallel with this scene
-        console.log('Launching UIScene...');
         this.scene.launch('UIScene', { selectedParty: this.selectedPartyData });
         this.uiSceneRef = this.scene.get('UIScene') as UIScene; // Get reference
 
@@ -219,7 +207,6 @@ export default class GameScene extends Phaser.Scene {
                 return;
             } else {
                 // Input is NOT focused, emit event to focus it
-                console.log("Enter pressed, focusing chat input.");
                 EventBus.emit('focus-chat-input');
                 event.stopPropagation(); // Prevent other Enter handlers
             }
@@ -228,7 +215,6 @@ export default class GameScene extends Phaser.Scene {
         const zoneId = 'startZone'; // Or determine dynamically
         this.networkManager.sendMessage('enterZone', { zoneId }, (response: { success: boolean; zoneState?: ZoneCharacterState[]; enemyState?: EnemySpawnData[]; message?: string }) => {
             if (response && response.success) {
-                console.log(`Entered zone ${zoneId} successfully. Initial state received.`);
 
                 // Create sprites for OUR characters based on initial data
                 // The server side 'selectParty' callback should have returned our validated characters
@@ -257,12 +243,10 @@ export default class GameScene extends Phaser.Scene {
                  }
 
                  // --- Request Initial Inventory --- 
-                 console.log('[GameScene] Requesting initial inventory...');
                  this.networkManager.sendMessage('requestInventory');
                  // --------------------------------
 
             } else {
-                console.error(`Failed to enter zone ${zoneId}:`, response?.message);
                 // Handle error - maybe go back to character select?
                 this.handleDisconnectError(`Failed to enter zone: ${response?.message}`);
             }
@@ -292,10 +276,8 @@ export default class GameScene extends Phaser.Scene {
                     const enemyId = enemySprite.getData('enemyData')?.id; // Get ID from stored data
                      if (enemyId) {
                         this.networkManager.sendMessage('attackCommand', { targetId: enemyId });
-                        console.log(`Sent attack command for enemy: ${enemyId}`);
                         clickedOnActionable = true;
                     } else {
-                        console.warn('Clicked enemy sprite missing id in data.');
                     }
                 }
             }
@@ -307,7 +289,6 @@ export default class GameScene extends Phaser.Scene {
                         target: { x: worldPoint.x, y: worldPoint.y }
                     });
                 } else {
-                     console.warn("No player character found to send move command for.");
                 }
             }
             // -------------------------
@@ -352,7 +333,6 @@ export default class GameScene extends Phaser.Scene {
         // ------------------------------------------------
     }
     handleChatMessageForBubble(data: ChatMessageData) {
-        console.log('GameScene received chat message for bubble:', data);
 
         let targetSprite: CharacterSprite | undefined;
         // --- Logic to find the target sprite USING senderCharacterId ---
@@ -366,11 +346,9 @@ export default class GameScene extends Phaser.Scene {
             }
         }
         if (targetSprite) {
-            console.log(`Found target sprite ${targetSprite.characterId} for chat bubble from ${data.senderName}.`);
             targetSprite.showChatBubble(data.message);
         } else {
              // This might happen if the character left the zone just before the message arrived
-             console.warn(`Could not find target sprite with ID ${data.senderCharacterId} for chat bubble from ${data.senderName}.`);
         }
     }
     update(time: number, delta: number) {
@@ -378,6 +356,21 @@ export default class GameScene extends Phaser.Scene {
         this.playerCharacters.forEach(char => char.update(time, delta));
         this.otherCharacters.forEach(char => char.update(time, delta));
         this.enemySprites.forEach(sprite => sprite.update(time, delta));
+
+        // --- Cleanup old tracked attacks (prevent memory leaks) ---
+        const now = Date.now();
+        const attackTimeoutMs = 3000; // 3 seconds
+        const sizeBefore = this.recentPlayerAttacks.size;
+        for (const [targetId, timestamp] of this.recentPlayerAttacks.entries()) {
+            if (now - timestamp > attackTimeoutMs) {
+                this.recentPlayerAttacks.delete(targetId);
+            }
+        }
+        const sizeAfter = this.recentPlayerAttacks.size;
+        if (sizeBefore !== sizeAfter) {
+        }
+        // ----------------------------------------------------------
+
         // --- Check for Arrival to Stop Marker Tween (Using Average Position) ---
         if (this.markerFadeTween && this.lastMarkerTarget && this.playerCharacters.size > 0) {
 
@@ -417,9 +410,7 @@ export default class GameScene extends Phaser.Scene {
     // --- Event Handlers ---
 
     handlePlayerJoined(data: ZoneCharacterState) {
-        console.log('Player joined event received:', data);
         if (!data.className) {
-            console.error('[GameScene] Missing className in player joined data:', data);
             return;
         }
         this.createOrUpdateCharacterSprite(data, false);
@@ -499,7 +490,6 @@ export default class GameScene extends Phaser.Scene {
                          // Currently handled by alpha in createOrUpdate?
                          break;
                      default:
-                         console.warn(`[GameScene] Unknown character state received: ${data.state}. Defaulting to idle.`);
                          animState = 'idle';
                  }
 
@@ -519,9 +509,27 @@ export default class GameScene extends Phaser.Scene {
     }
 
     handleEntityDied(data: EntityDeathData) {
+        
         const sprite = this.findSpriteById(data.entityId);
         if (sprite) {
             if (sprite instanceof EnemySprite) {
+                // --- Check for screen shake on player enemy kills ---
+                const recentAttackTime = this.recentPlayerAttacks.get(data.entityId);
+                
+                if (recentAttackTime) {
+                    const timeSinceAttack = Date.now() - recentAttackTime;
+                    
+                    // Trigger screen shake if the attack was within the last 2 seconds
+                    if (timeSinceAttack <= 2000) {
+                        this.triggerScreenShake(8, 300); // Nice subtle shake
+                    } else {
+                    }
+                    // Clean up the tracked attack
+                    this.recentPlayerAttacks.delete(data.entityId);
+                } else {
+                }
+                // --------------------------------------------------------
+
                 // Remove enemy sprite immediately
                 this.enemySprites.delete(data.entityId);
                 sprite.destroy();
@@ -540,7 +548,6 @@ export default class GameScene extends Phaser.Scene {
                  // The character respawn logic is handled server-side based on documentation
             }
         } else {
-            console.warn(`Received entityDied event for unknown ID: ${data.entityId}`);
         }
     }
 
@@ -553,7 +560,6 @@ export default class GameScene extends Phaser.Scene {
     handleDisconnectError(reason: string | any) {
         // Generic handler for disconnects or critical errors
         const message = typeof reason === 'string' ? reason : 'Connection error.';
-        console.error('GameScene Disconnect/Error:', message);
 
         // Prevent multiple redirects
         if (this.scene.isActive()) { // Check if scene is still active
@@ -577,8 +583,7 @@ export default class GameScene extends Phaser.Scene {
         // Assign placeholder if still missing (covers other players missing data, or player lookup failure)
         if (!determinedClassName) {
              if (!isPlayer) {
-                console.error(`[GameScene] Other character data is missing className: ${charData.id}. Assigning placeholder.`);
-             }
+                }
              determinedClassName = 'fighter'; // Assign placeholder
         }
 
@@ -604,7 +609,6 @@ export default class GameScene extends Phaser.Scene {
 
             // Check if class changed (unlikely but possible)
             if (existingSprite.className !== charData.className) {
-                 console.warn(`[GameScene] Character ${charData.id} changed class. Recreating sprite.`);
                  // Easiest way to handle animator change is full recreation
                  existingSprite.destroy();
                  this.createOrUpdateCharacterSprite(charData, isPlayer, posX, posY); // Re-call to create new
@@ -618,11 +622,9 @@ export default class GameScene extends Phaser.Scene {
 
         } else {
             // Create new sprite
-            console.log(`[GameScene] Creating new character sprite: ${charData.id} (${charData.className})`);
 
             // Check if the initial texture is loaded
             if (!this.textures.exists(textureKey)) {
-                console.error(`[GameScene] Texture '${textureKey}' not found for character ${charData.id}. Using placeholder.`);
                 // Fallback to placeholder if idle texture isn't loaded
                 const placeholderTexture = 'playerPlaceholder';
                 const sprite = new CharacterSprite(this, posX, posY, placeholderTexture, charData, isPlayer);
@@ -646,7 +648,6 @@ export default class GameScene extends Phaser.Scene {
     }
 
     shutdownScene() {
-        console.log('GameScene shutting down, removing listeners and clearing data.');
         // Remove EventBus listeners
         EventBus.off('network-disconnect', this.handleDisconnectError, this);
         EventBus.off('player-joined', this.handlePlayerJoined, this);
@@ -675,8 +676,13 @@ export default class GameScene extends Phaser.Scene {
         // Destroy dropped item sprites
         this.droppedItemSprites.forEach(sprite => sprite.destroy());
         this.droppedItemSprites.clear();
+        // Clean up screen shake tracking
+        this.recentPlayerAttacks.clear();
+        if (this.screenShakeTween) {
+            this.screenShakeTween.stop();
+            this.screenShakeTween = null;
+        }
         // --- Stop the UI Scene when GameScene stops ---
-        console.log('Stopping UIScene...');
         this.input.keyboard?.off('keydown-ENTER'); // Clean up listener
         this.uiSceneRef = null; // Clear reference
         this.scene.stop('UIScene');
@@ -684,7 +690,6 @@ export default class GameScene extends Phaser.Scene {
 
     // Called automatically when the scene is shut down
     shutdown() {
-        console.log('GameScene shutting down, removing listeners and clearing data.');
         // Remove EventBus listeners
         EventBus.off('network-disconnect', this.handleDisconnectError, this);
         EventBus.off('player-joined', this.handlePlayerJoined, this);
@@ -713,8 +718,13 @@ export default class GameScene extends Phaser.Scene {
         // Destroy dropped item sprites
         this.droppedItemSprites.forEach(sprite => sprite.destroy());
         this.droppedItemSprites.clear();
+        // Clean up screen shake tracking
+        this.recentPlayerAttacks.clear();
+        if (this.screenShakeTween) {
+            this.screenShakeTween.stop();
+            this.screenShakeTween = null;
+        }
         // --- Stop the UI Scene when GameScene stops ---
-        console.log('Stopping UIScene...');
         this.input.keyboard?.off('keydown-ENTER'); // Clean up listener
         this.uiSceneRef = null; // Clear reference
         this.scene.stop('UIScene');
@@ -723,7 +733,6 @@ export default class GameScene extends Phaser.Scene {
     // +++ ADDED: Reusable enemy sprite creation logic +++
     private createEnemySprite(enemyData: EnemySpawnData) {
         if (this.enemySprites.has(enemyData.id)) {
-            console.warn(`Enemy sprite with ID ${enemyData.id} already exists. Ignoring spawn event.`);
             return;
         }
 
@@ -740,11 +749,9 @@ export default class GameScene extends Phaser.Scene {
         if (knownTemplates[enemyData.templateId]) {
             spriteKey = knownTemplates[enemyData.templateId];
         } else {
-            console.warn(`No specific sprite key found for enemy template ID ${enemyData.templateId}. Using default '${spriteKey}'.`);
         }
         // --------------------------------------------------
 
-        console.log(`Creating new enemy sprite: ${enemyData.name} (ID: ${enemyData.id}, Sprite: ${spriteKey}) at (${enemyData.position.x}, ${enemyData.position.y})`);
 
         const newEnemy = new EnemySprite(
             this,
@@ -765,13 +772,24 @@ export default class GameScene extends Phaser.Scene {
     // +++ ADDED: Handler for Combat Action Visuals +++
     private handleCombatAction(data: CombatActionData) {
         // <<<--- DEBUG LOG ENTRY ---
-        console.log(`[GameScene] handleCombatAction called for attacker ${data.attackerId}, target ${data.targetId}, damage ${data.damage}`);
         // -------------------------
 
         // Find the attacker sprite (could be player or other character)
         const attackerSprite = this.playerCharacters.get(data.attackerId) || this.otherCharacters.get(data.attackerId);
         // Find the target sprite (could be enemy or character)
         const targetSprite = this.findSpriteById(data.targetId); // Use helper
+
+        // --- Track player attacks on enemies for screen shake ---
+        const isPlayerAttacker = this.playerCharacters.has(data.attackerId);
+        const isEnemyTarget = this.enemySprites.has(data.targetId);
+        
+        
+        if (isPlayerAttacker && isEnemyTarget) {
+            // Track this attack with current timestamp (for 2 second window)
+            const timestamp = Date.now();
+            this.recentPlayerAttacks.set(data.targetId, timestamp);
+        }
+        // --------------------------------------------------------
 
         // --- ADDED: Play attacker's animation --- 
         if (attackerSprite instanceof CharacterSprite) { // Ensure it's a character
@@ -787,16 +805,13 @@ export default class GameScene extends Phaser.Scene {
         // Show floating combat text
         if (targetSprite && data.damage) { // Checks if targetSprite exists AND data.damage is truthy (>0)
              // <<<--- DEBUG LOG ---
-             console.log(`[GameScene] Showing floating text for target ${data.targetId}: damage=${data.damage}`);
              // ------------------
              this.showFloatingText(targetSprite.x, targetSprite.y - targetSprite.displayHeight * 0.6, `-${data.damage}`, '#ff0000'); // Uses RED color
         } else {
              // <<<--- DEBUG LOG ---
              if (!targetSprite) {
-                 console.log(`[GameScene] No floating text: Target sprite not found for ID ${data.targetId}.`);
              }
              if (!data.damage) {
-                 console.log(`[GameScene] No floating text: Damage is 0 or missing for target ${data.targetId}. Damage value:`, data.damage);
              }
              // ------------------
         }
@@ -804,16 +819,12 @@ export default class GameScene extends Phaser.Scene {
 
     // --- New Event Handlers for Items ---
     private handleItemsDropped(data: ItemsDroppedPayload) {
-        console.log('[GameScene] handleItemsDropped triggered with data:', data); // <-- ADD LOG HERE
         if (!data || !Array.isArray(data.items)) {
-            console.warn('Received invalid itemsDropped data:', data);
             return;
         }
-        console.log('Received items dropped:', data.items);
 
         data.items.forEach(itemData => {
             if (this.droppedItemSprites.has(itemData.id)) {
-                console.warn(`Item sprite ${itemData.id} already exists, skipping.`);
                 return;
             }
             try {
@@ -821,13 +832,10 @@ export default class GameScene extends Phaser.Scene {
                  const itemSprite = new DroppedItemSprite(this, itemData);
                  itemSprite.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
                      if (pointer.button === 0) { // Only react to left click
-                        console.log(`Attempting to pick up item: ${itemData.itemName} (${itemData.id})`);
                         this.networkManager.sendMessage('pickupItemCommand', { itemId: itemData.id }, (response) => {
                             if (response && response.success) {
-                                console.log(`Pickup successful for item ${itemData.id}`);
                                 // Sprite removal will be handled by 'itemPickedUp' event
                             } else {
-                                console.warn(`Pickup failed for item ${itemData.id}:`, response?.message);
                                 // Optionally show feedback to the player in UIScene
                                 this.uiSceneRef?.showTemporaryMessage(`Cannot pick up: ${response?.message || 'Error'}`);
                             }
@@ -836,14 +844,12 @@ export default class GameScene extends Phaser.Scene {
                  });
                 this.droppedItemSprites.set(itemData.id, itemSprite);
             } catch (error) {
-                console.error(`Failed to create sprite for item ${itemData.id} with key ${itemData.spriteKey}:`, error);
             }
         });
     }
 
     private handleItemPickedUp(data: { itemId: string }) {
         if (!data || !data.itemId) {
-            console.warn('Received invalid itemPickedUp data:', data);
             return;
         }
         const sprite = this.droppedItemSprites.get(data.itemId);
@@ -851,14 +857,12 @@ export default class GameScene extends Phaser.Scene {
             sprite.destroy();
             this.droppedItemSprites.delete(data.itemId);
         } else {
-            console.warn(`Could not find sprite to remove for picked up item ID: ${data.itemId}`);
         }
     }
 
     // --- ADD Handler for clicking dropped items ---
     private handleDroppedItemClicked(itemId: string) {
         if (!itemId) {
-            console.warn('Dropped item clicked event received invalid item ID.');
             return;
         }
         this.networkManager.sendMessage('pickup_item', { itemId });
@@ -893,7 +897,6 @@ export default class GameScene extends Phaser.Scene {
             if (typeof charSprite.setLevel === 'function') {
                 charSprite.setLevel(payload.newLevel);
             } else {
-                console.warn(`CharacterSprite ${payload.characterId} missing setLevel method?`);
             }
             charSprite.setHealth(payload.newBaseStats.health, payload.newBaseStats.health); // Update max and current HP
             
@@ -946,7 +949,6 @@ export default class GameScene extends Phaser.Scene {
             itemSprite.destroy(); // This will remove the sprite and any associated elements (tooltip, etc.)
             this.droppedItemSprites.delete(data.itemId);
         } else {
-            console.warn(`[GameScene] Could not find sprite for despawned item ${data.itemId}`);
         }
     }
 
@@ -969,6 +971,72 @@ export default class GameScene extends Phaser.Scene {
             duration: duration,
             ease: 'Quad.easeOut',
             onComplete: () => { text.destroy(); }
+        });
+    }
+
+    // Screen shake functionality for game juice
+    private triggerScreenShake(intensity: number = 10, duration: number = 300) {
+        
+        // Stop any existing screen shake
+        if (this.screenShakeTween) {
+            this.screenShakeTween.stop();
+            this.screenShakeTween = null;
+        }
+
+        const camera = this.cameras.main;
+        
+        // IMPORTANT: Temporarily disable camera follow during shake
+        const wasFollowing = camera.followTarget;
+        if (wasFollowing) {
+            camera.stopFollow();
+        }
+        
+        const originalX = camera.scrollX;
+        const originalY = camera.scrollY;
+        
+        
+        let updateCount = 0;
+        
+        // Create shake effect - we need to animate a dummy object and manually update camera
+        const shakeTarget = { x: 0, y: 0 };
+        
+        
+        this.screenShakeTween = this.tweens.add({
+            targets: shakeTarget,
+            x: 1, // Dummy animation - we'll ignore this value
+            duration: duration,
+            ease: 'Power2',
+            yoyo: false,
+            repeat: 0,
+            onStart: () => {
+            },
+            onUpdate: (tween: Phaser.Tweens.Tween) => {
+                updateCount++;
+                // Calculate diminishing shake intensity over time
+                const progress = tween.progress;
+                const currentIntensity = intensity * (1 - progress);
+                
+                // Random offset within intensity range
+                const offsetX = (Math.random() - 0.5) * currentIntensity;
+                const offsetY = (Math.random() - 0.5) * currentIntensity;
+                
+                const newX = originalX + offsetX;
+                const newY = originalY + offsetY;
+                
+                camera.setScroll(newX, newY);
+                
+            },
+            onComplete: () => {
+                // Restore camera follow if it was active
+                if (wasFollowing) {
+                    camera.startFollow(wasFollowing, true, 0.1, 0.1);
+                } else {
+                    // Only restore position if not following
+                    camera.setScroll(originalX, originalY);
+                }
+                
+                this.screenShakeTween = null;
+            }
         });
     }
 

@@ -104,7 +104,6 @@ export class CharacterSprite extends Phaser.GameObjects.Sprite {
 
         // Check if essential idle texture was loaded
         if (!scene.textures.exists(textureKeys.idle)) {
-            console.error(`[CharacterSprite ${this.characterId}] Idle texture '${textureKeys.idle}' not found! Cannot create animator.`);
             return; // Don't create animator if basic texture is missing
         }
 
@@ -119,10 +118,8 @@ export class CharacterSprite extends Phaser.GameObjects.Sprite {
                 animIntervalMs,
                 this.className // Pass characterId as unique prefix
             );
-             console.log(`[CharacterSprite ${this.characterId}] Animator created successfully.`);
              // Animator should set the initial idle animation via its constructor
         } catch (error) {
-             console.error(`[CharacterSprite ${this.characterId}] Failed to create PhaserSpriteAnimator:`, error);
         }
     }
     // <<<------------------------------------
@@ -282,7 +279,6 @@ export class CharacterSprite extends Phaser.GameObjects.Sprite {
         try {
              this.animator.playAnimation(state, forceRestart, ignoreIfPlaying);
         } catch (error) {
-            console.error(`[CharacterSprite ${this.characterId}] Error setting animation to '${state}':`, error);
         }
     }
     // <<<---------------------------------------
@@ -303,7 +299,6 @@ export class CharacterSprite extends Phaser.GameObjects.Sprite {
     }
 
     public setCharacterState(newState: string): void {
-        console.log(`[CharacterSprite ${this.characterId}] Setting character state to: ${newState}`);
         if (this.currentState !== newState && !this.isDead) {
             this.currentState = newState;
             this.updateAnimation();
@@ -348,10 +343,8 @@ export class CharacterSprite extends Phaser.GameObjects.Sprite {
             try {
                  this.animator.playAnimation(baseStateKey, false, true, undefined);
             } catch (e) {
-                console.error(`[CharacterSprite ${this.characterId}] Error calling animator.playAnimation('${baseStateKey}'):`, e);
             }
         } else {
-             console.warn(`[CharacterSprite ${this.characterId}] No valid baseStateKey determined for state: ${this.currentState}. Stopping animation.`);
              this.animator.stopAnimation(); 
         }
        
@@ -364,7 +357,6 @@ export class CharacterSprite extends Phaser.GameObjects.Sprite {
     // --- NEW METHOD TO PLAY ATTACK ANIMATION ONCE --- 
     public playAttackAnimationOnce(): void {
         // <<<--- DEBUG LOG ENTRY ---
-        console.log(`[CharacterSprite ${this.characterId}] playAttackAnimationOnce called. Current isPlayingAttack: ${this.isPlayingAttack}`);
         // -------------------------
 
         if (this.isDead || !this.scene || !this.active || !this.animator) {
@@ -376,11 +368,9 @@ export class CharacterSprite extends Phaser.GameObjects.Sprite {
 
         // Check if the animation exists
         if (!this.scene.anims.exists(fullAnimKey)) {
-             console.warn(`[CharacterSprite ${this.characterId}] Attack animation key does not exist: ${fullAnimKey}`);
              return;
         }
         
-        console.log(`[CharacterSprite ${this.characterId}] Playing attack animation: ${fullAnimKey}`);
         this.isPlayingAttack = true; 
 
         this.animator.playAnimation(attackStateKey, true, false, undefined);
@@ -388,7 +378,6 @@ export class CharacterSprite extends Phaser.GameObjects.Sprite {
         // --- Listen for completion --- 
         // Use the sprite's event emitter
         this.once(Phaser.Animations.Events.ANIMATION_COMPLETE_KEY + fullAnimKey, () => {
-             console.log(`[CharacterSprite ${this.characterId}] Attack animation complete: ${fullAnimKey}`);
              this.isPlayingAttack = false; 
              this.updateAnimation(); 
         });
@@ -396,7 +385,6 @@ export class CharacterSprite extends Phaser.GameObjects.Sprite {
          // Safety timeout 
          this.scene.time.delayedCall(this.attackSpeedMs * 1.5, () => { // Now uses declared property
              if (this.isPlayingAttack) {
-                 console.warn(`[CharacterSprite ${this.characterId}] Attack animation timeout reached. Forcing state update.`);
                  this.isPlayingAttack = false;
                  if (this.active) { // Check if sprite still active
                     this.updateAnimation();
@@ -408,7 +396,6 @@ export class CharacterSprite extends Phaser.GameObjects.Sprite {
 
     public handleDeath(): void {
         if (this.isDead) return;
-        console.log(`[CharacterSprite ${this.characterId}] Handling death visuals.`);
         this.isDead = true;
         this.currentState = 'dead';
         this.setAlpha(0.5);
