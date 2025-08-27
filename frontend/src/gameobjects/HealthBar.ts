@@ -22,6 +22,7 @@ export class HealthBar {
         this.value = maxValue; // Start at full health
 
         scene.add.existing(this.bar);
+        this.bar.setDepth(100); // Render above all sprites
         this.draw();
     }
 
@@ -78,6 +79,10 @@ export class HealthBar {
         if (innerWidth > 0) {
              this.bar.fillRect(this.x - this.width / 2, this.y - this.height / 2, innerWidth, this.height);
         }
+    }
+
+    setVisible(visible: boolean): void {
+        this.bar.setVisible(visible);
     }
 
     destroy(): void {

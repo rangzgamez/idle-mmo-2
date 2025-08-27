@@ -20,7 +20,7 @@ export class EnemySprite extends Phaser.GameObjects.Sprite {
         this.targetX = x;
         this.targetY = y;
 
-        // Example Name Label
+        // Example Name Label - initially hidden
         this.nameLabel = scene.add.text(0, 0, name, {
             fontSize: '12px',
             color: '#ffffff',
@@ -28,16 +28,23 @@ export class EnemySprite extends Phaser.GameObjects.Sprite {
             strokeThickness: 3,
         });
         this.nameLabel.setOrigin(0.5); // Center the label
+        this.nameLabel.setVisible(false); // Hidden by default
+        this.nameLabel.setDepth(100); // Render above all sprites
         this.updateNameLabelPosition(); //Initial position
         // TODO: Get max health from enemyData when backend provides it
         const maxHealth = enemyData?.baseHealth ?? 50; // Placeholder max health
         this.healthBar = new HealthBar(scene, this.x, this.y - 30, 40, 5, maxHealth);
+        this.healthBar.setVisible(false); // Hidden by default - only show when damaged
         this.updateHealthBarPosition();
         this.setHealth(maxHealth); // Initialize health
         //Set enemy type metadata, so we know if it's enemy on attack click
         this.setData('type', 'enemy');
 
         this.setData("enemyData", enemyData);
+        
+        // Setup hover interactions for conditional UI visibility
+        this.setInteractive();
+        this.setupHoverInteractions();
     }
 
     update(time: number, delta: number): void {
@@ -56,6 +63,11 @@ export class EnemySprite extends Phaser.GameObjects.Sprite {
     setHealth(currentHealth: number, maxHealth?: number): void {
         if (this.healthBar) {
             this.healthBar.setHealth(currentHealth, maxHealth);
+            
+            // Show health bar only when damaged (health < max)
+            const currentMaxHealth = maxHealth || this.healthBar.getMaxHealth();
+            const shouldShowHealthBar = currentHealth < currentMaxHealth;
+            this.healthBar.setVisible(shouldShowHealthBar);
         }
     }
 
@@ -71,6 +83,23 @@ export class EnemySprite extends Phaser.GameObjects.Sprite {
         // Position the label above the sprite (adjust offset as needed)
         this.nameLabel.x = this.x;
         this.nameLabel.y = this.y - 20;
+    }
+    
+    // Setup hover interactions for showing/hiding name labels
+    private setupHoverInteractions(): void {
+        this.on('pointerover', () => {
+            if (!this.isDying && this.nameLabel) {
+                this.nameLabel.setVisible(true);
+                this.setTint(0xff6666); // Red tinting on hover
+            }
+        });
+        
+        this.on('pointerout', () => {
+            if (this.nameLabel) {
+                this.nameLabel.setVisible(false);
+                this.clearTint(); // Remove tinting when not hovering
+            }
+        });
     }
 
     // Death animation - visual effects only (backend handles movement)
