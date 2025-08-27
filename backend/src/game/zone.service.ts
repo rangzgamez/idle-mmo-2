@@ -1033,11 +1033,11 @@ export class ZoneService implements OnModuleInit {
             this.logger.warn(`[setAttackTarget] Character ${characterId} could not be located in zone ${zoneId}`);
             return false;
         }
-         // Validate the target enemy exists in the current zone
+         // Validate the target enemy exists and is targetable (not dying) in the current zone
          const targetEnemy = this.getEnemyInstanceById(zoneId, targetEnemyId);
-         if (!targetEnemy) {
-             this.logger.warn(`[setAttackTarget] Target enemy ${targetEnemyId} not found in zone ${zoneId}.`);
-             // If the target is gone, maybe set the character back to idle?
+         if (!targetEnemy || targetEnemy.isDying) {
+             this.logger.warn(`[setAttackTarget] Target enemy ${targetEnemyId} not found or is dying in zone ${zoneId}.`);
+             // If the target is gone or dying, set the character back to idle
              this.setCharacterState(zoneId, characterId, 'idle'); 
              return false;
          }

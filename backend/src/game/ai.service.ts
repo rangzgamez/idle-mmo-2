@@ -30,8 +30,8 @@ export class AIService {
   updateEnemyAI(enemy: EnemyInstance, zoneId: string): AIAction {
     const now = Date.now();
   
-    // --- Always check if dead first ---
-    if (enemy.currentHealth <= 0) {
+    // --- Always check if dead or dying first ---
+    if (enemy.currentHealth <= 0 || enemy.isDying) {
         if (enemy.aiState !== 'DEAD') {
              this.zoneService.setEnemyAiState(zoneId, enemy.id, 'DEAD');
              enemy.aiState = 'DEAD'; // Update local state
