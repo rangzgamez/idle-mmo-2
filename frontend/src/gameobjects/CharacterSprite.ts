@@ -68,6 +68,7 @@ export class CharacterSprite extends Phaser.GameObjects.Sprite {
             color: isPlayer ? '#00ff00' : '#ffffff',
             align: 'center',
         }).setOrigin(0.5);
+        this.nameLabel.setDepth(100); // Render above all sprites
         this.updateNameLabelPosition(); // Use helper
 
         if (!isPlayer) {
