@@ -84,4 +84,72 @@ export class MovementService {
             return { newPosition: { x: newX, y: newY }, reachedTarget: false };
         }
     }
+
+    /**
+     * Checks if a circular collision occurs between a point and a list of obstacles.
+     * 
+     * @param position Position to check for collision
+     * @param obstacles Array of obstacle positions  
+     * @param entityRadius Radius of the moving entity
+     * @param obstacleRadius Radius of each obstacle
+     * @returns true if collision detected, false otherwise
+     */
+    public checkCircularCollision(
+        position: Point,
+        obstacles: Point[],
+        entityRadius: number,
+        obstacleRadius: number
+    ): boolean {
+        const combinedRadius = entityRadius + obstacleRadius;
+        
+        for (const obstacle of obstacles) {
+            const distance = this.calculateDistance(position, obstacle);
+            if (distance < combinedRadius) {
+                return true; // Collision detected
+            }
+        }
+        
+        return false; // No collision
+    }
+
+    /**
+     * Simulates movement with collision detection against obstacles.
+     * If the intended movement would cause a collision, the entity stops at the current position.
+     * 
+     * @param currentPosition Current position of the entity
+     * @param targetPosition Target position (can be null)
+     * @param speed Movement speed in pixels per second
+     * @param deltaTime Time elapsed in seconds
+     * @param obstacles Array of obstacle positions to check collision against
+     * @param entityRadius Radius of the moving entity
+     * @param obstacleRadius Radius of each obstacle
+     * @returns MovementResult with collision-aware position
+     */
+    public simulateMovementWithCollision(
+        currentPosition: Point,
+        targetPosition: Point | null,
+        speed: number,
+        deltaTime: number,
+        obstacles: Point[],
+        entityRadius: number,
+        obstacleRadius: number
+    ): MovementResult {
+        // First, get the intended movement without collision
+        const intendedMovement = this.simulateMovement(currentPosition, targetPosition, speed, deltaTime);
+        
+        // If we wouldn't move anyway, no need to check collision
+        if (intendedMovement.newPosition.x === currentPosition.x && intendedMovement.newPosition.y === currentPosition.y) {
+            return intendedMovement;
+        }
+        
+        // Check if the new position would cause a collision
+        if (this.checkCircularCollision(intendedMovement.newPosition, obstacles, entityRadius, obstacleRadius)) {
+            // Collision detected - stop at current position
+            this.logger.debug(`Movement blocked by collision. Stopping at current position: (${currentPosition.x}, ${currentPosition.y})`);
+            return { newPosition: currentPosition, reachedTarget: false };
+        }
+        
+        // No collision - return the intended movement
+        return intendedMovement;
+    }
 }

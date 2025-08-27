@@ -54,6 +54,10 @@ export const GameConfig = {
     
     // Movement precision
     MOVEMENT_EPSILON: 0.1, // Consider reached if within this distance
+    
+    // Collision detection
+    PLAYER_COLLISION_RADIUS: 25, // Player collision radius in pixels
+    ENEMY_COLLISION_RADIUS: 20,  // Enemy collision radius in pixels
   },
 
   // === Security ===

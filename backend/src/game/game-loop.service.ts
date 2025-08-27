@@ -421,11 +421,27 @@ export class GameLoopService implements OnApplicationShutdown {
                         // Get enemy speed from entity data (assuming it exists)
                          const enemySpeed = enemy.baseSpeed || 75; // Use default if not set
 
-                         const enemyMoveResult: MovementResult = this.movementService.simulateMovement(
+                         // Get all player positions for collision detection
+                         const playerPositions: Point[] = [];
+                         for (const [playerId, playerData] of this.connectedPlayers.entries()) {
+                             const playerCharacters = playerData.characters;
+                             for (const character of playerCharacters) {
+                                 const charState = this.zoneService.getCharacterStateById(zoneId, character.id);
+                                 if (charState && charState.positionX !== null && charState.positionY !== null) {
+                                     playerPositions.push({ x: charState.positionX, y: charState.positionY });
+                                 }
+                             }
+                         }
+
+                         // Use collision-aware movement for enemies
+                         const enemyMoveResult: MovementResult = this.movementService.simulateMovementWithCollision(
                              enemyCurrentPos,
                              enemyTargetPos,
                              enemySpeed,
-                             deltaTime
+                             deltaTime,
+                             playerPositions, // Obstacles to avoid
+                             GameConfig.COMBAT.ENEMY_COLLISION_RADIUS,
+                             GameConfig.COMBAT.PLAYER_COLLISION_RADIUS
                          );
 
                          if (enemyMoveResult.newPosition.x !== enemy.position.x || enemyMoveResult.newPosition.y !== enemy.position.y) {

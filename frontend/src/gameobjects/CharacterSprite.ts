@@ -49,6 +49,9 @@ export class CharacterSprite extends Phaser.GameObjects.Sprite {
         super(scene, x, y, scene.textures.exists(initialTextureKey) ? initialTextureKey : texture); // Use idle if exists, else placeholder
         scene.add.existing(this);
         scene.physics.add.existing(this); // Add basic physics body
+        
+        // Set depth for visual layering - players should render on top
+        this.setDepth(30); // Highest priority sprites
 
         this.characterId = data.id;
         this.ownerId = data.ownerId;

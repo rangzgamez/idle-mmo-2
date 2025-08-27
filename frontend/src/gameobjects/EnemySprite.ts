@@ -14,6 +14,9 @@ export class EnemySprite extends Phaser.GameObjects.Sprite {
         this.scene.add.existing(this);
         scene.physics.add.existing(this);
         (this.body as Phaser.Physics.Arcade.Body).setCollideWorldBounds(true); // CORRECT LINE
+        
+        // Set depth for visual layering - enemies render below players
+        this.setDepth(20);
         this.targetX = x;
         this.targetY = y;
 
