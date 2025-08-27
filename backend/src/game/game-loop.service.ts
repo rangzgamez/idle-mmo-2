@@ -172,73 +172,103 @@ export class GameLoopService implements OnApplicationShutdown {
                         }
                         // --------------------------------------
 
-                        // Handle target death (enemy removal)
+                        // Handle target death (enemy knockback & dying state)
                         if (tickResult.targetDied) {
                             const deadEnemyId = tickResult.enemyHealthUpdates.find(upd => upd.health <= 0)?.id;
                             if(deadEnemyId) {
-                                this.logger.debug(`[ITEM DROP] Enemy died: ${deadEnemyId}`);
+                                this.logger.debug(`[ENEMY DEATH] Enemy died: ${deadEnemyId}`);
                                 const deadEnemyInstance = this.zoneService.getEnemyInstanceById(zoneId, deadEnemyId);
                                 
-                                // --- Log instance data before loot check ---
                                 if (deadEnemyInstance) {
-                                        this.logger.debug(`[ITEM DROP] Found dead enemy: ${deadEnemyInstance.name} (${deadEnemyInstance.id}), LootTableID: ${deadEnemyInstance.lootTableId}`);
-                                } else {
-                                    this.logger.debug(`[ITEM DROP] Could not find enemy instance for ${deadEnemyId} in zone ${zoneId}`);
-                                }
-                                // -----------------------------------------
-
-                                // --- Loot Drop Calculation ---
-                                if (deadEnemyInstance && deadEnemyInstance.lootTableId) {
-                                    this.logger.debug(`[ITEM DROP] Enemy has loot table ${deadEnemyInstance.lootTableId}, calculating drops...`);
-                                    const droppedLoot = await this.lootService.calculateLootDrops(deadEnemyInstance.lootTableId);
-                                    if (droppedLoot.length > 0) {
-                                        this.logger.debug(`[ITEM DROP] Loot calculated: ${droppedLoot.length} items dropped`);
-                                        // Create and add dropped items to the zone
-                                        const dropTime = now;
-                                        const despawnTime = dropTime + this.ITEM_DESPAWN_TIME_MS;
-                                        for (const loot of droppedLoot) {
-                                            const droppedItem: DroppedItem = {
-                                                id: uuidv4(),
-                                                itemTemplateId: loot.itemTemplate.id,
-                                                itemName: loot.itemTemplate.name,
-                                                itemType: loot.itemTemplate.itemType,
-                                                position: { ...deadEnemyInstance.position }, // Copy position
-                                                quantity: loot.quantity,
-                                                timeDropped: dropTime,
-                                                despawnTime: despawnTime,
-                                            };
-                                            const added = this.zoneService.addDroppedItem(zoneId, droppedItem);
-                                            if (added) {
-                                                this.logger.debug(`[ITEM DROP] Added item ${droppedItem.itemName} (${droppedItem.id}) at (${droppedItem.position.x}, ${droppedItem.position.y})`);
-                                                // Queue the broadcast event
-                                                const itemPayload = {
-                                                    id: droppedItem.id,
-                                                    itemTemplateId: droppedItem.itemTemplateId,
-                                                    itemName: droppedItem.itemName,
-                                                    itemType: droppedItem.itemType,
-                                                    spriteKey: loot.itemTemplate.spriteKey, // Get spriteKey from template
-                                                    position: droppedItem.position,
-                                                    quantity: droppedItem.quantity,
+                                    this.logger.debug(`[ENEMY DEATH] Dead enemy data: ${deadEnemyInstance.name}, position: (${deadEnemyInstance.position.x}, ${deadEnemyInstance.position.y})`);
+                                    
+                                    // --- Calculate Knockback Direction ---
+                                    const killerPosition = { x: character.positionX, y: character.positionY };
+                                    const enemyPosition = deadEnemyInstance.position;
+                                    
+                                    // Calculate direction vector (killer -> enemy)
+                                    const directionX = enemyPosition.x - killerPosition.x;
+                                    const directionY = enemyPosition.y - killerPosition.y;
+                                    const magnitude = Math.sqrt(directionX * directionX + directionY * directionY);
+                                    
+                                    // Normalize direction (handle case where killer and enemy are at same position)
+                                    const normalizedDirection = magnitude > 0 
+                                        ? { x: directionX / magnitude, y: directionY / magnitude }
+                                        : { x: Math.random() - 0.5, y: Math.random() - 0.5 }; // Random direction if overlapping
+                                    
+                                    // --- Mark Enemy as Dying with Knockback ---
+                                    deadEnemyInstance.isDying = true;
+                                    deadEnemyInstance.deathTimestamp = now;
+                                    deadEnemyInstance.knockbackState = {
+                                        startTime: now,
+                                        direction: normalizedDirection,
+                                        distance: 80, // Knockback distance in pixels
+                                        duration: 300, // 300ms knockback animation
+                                        originalPosition: { ...enemyPosition }
+                                    };
+                                    
+                                    // Clear AI state to prevent further actions
+                                    deadEnemyInstance.aiState = 'DEAD';
+                                    deadEnemyInstance.currentTargetId = null;
+                                    
+                                    this.logger.debug(`[ENEMY DEATH] Initialized knockback for ${deadEnemyInstance.name}: direction=(${normalizedDirection.x.toFixed(2)}, ${normalizedDirection.y.toFixed(2)}), distance=80px`);
+                                    
+                                    // --- Handle Loot Drop ---
+                                    if (deadEnemyInstance.lootTableId) {
+                                        this.logger.debug(`[ITEM DROP] Calculating loot for enemy ${deadEnemyInstance.name} with table ${deadEnemyInstance.lootTableId}`);
+                                        const droppedLoot = await this.lootService.calculateLootDrops(deadEnemyInstance.lootTableId);
+                                        if (droppedLoot.length > 0) {
+                                            this.logger.debug(`[ITEM DROP] Loot calculated: ${droppedLoot.length} items dropped`);
+                                            // Create and add dropped items to the zone
+                                            const dropTime = now;
+                                            const despawnTime = dropTime + this.ITEM_DESPAWN_TIME_MS;
+                                            for (const loot of droppedLoot) {
+                                                const droppedItem: DroppedItem = {
+                                                    id: uuidv4(),
+                                                    itemTemplateId: loot.itemTemplate.id,
+                                                    itemName: loot.itemTemplate.name,
+                                                    itemType: loot.itemTemplate.itemType,
+                                                    position: { ...deadEnemyInstance.position }, // Copy position
+                                                    quantity: loot.quantity,
+                                                    timeDropped: dropTime,
+                                                    despawnTime: despawnTime,
                                                 };
-                                                this.logger.debug(`[ITEM DROP] Queueing broadcast for item ${itemPayload.itemName} (${itemPayload.id})`);
-                                                this.broadcastService.queueItemDropped(zoneId, itemPayload);
-                                                // Item drop event queued
-                                            } else {
-                                                 this.logger.error(`Failed to add dropped item ${droppedItem.itemName} (${droppedItem.id}) to zone ${zoneId}`);
+                                                const added = this.zoneService.addDroppedItem(zoneId, droppedItem);
+                                                if (added) {
+                                                    this.logger.debug(`[ITEM DROP] Added item ${droppedItem.itemName} (${droppedItem.id}) at (${droppedItem.position.x}, ${droppedItem.position.y})`);
+                                                    // Queue the broadcast event
+                                                    const itemPayload = {
+                                                        id: droppedItem.id,
+                                                        itemTemplateId: droppedItem.itemTemplateId,
+                                                        itemName: droppedItem.itemName,
+                                                        itemType: droppedItem.itemType,
+                                                        spriteKey: loot.itemTemplate.spriteKey, // Get spriteKey from template
+                                                        position: droppedItem.position,
+                                                        quantity: droppedItem.quantity,
+                                                    };
+                                                    this.logger.debug(`[ITEM DROP] Queueing broadcast for item ${itemPayload.itemName} (${itemPayload.id})`);
+                                                    this.broadcastService.queueItemDropped(zoneId, itemPayload);
+                                                    // Item drop event queued
+                                                } else {
+                                                     this.logger.error(`Failed to add dropped item ${droppedItem.itemName} (${droppedItem.id}) to zone ${zoneId}`);
+                                                }
                                             }
+                                        } else {
+                                            this.logger.debug(`[ITEM DROP] No loot calculated for enemy ${deadEnemyInstance.name} from table ${deadEnemyInstance.lootTableId}`);
                                         }
                                     } else {
-                                        this.logger.debug(`[ITEM DROP] No loot calculated for enemy ${deadEnemyInstance.name} from table ${deadEnemyInstance.lootTableId}`);
+                                        this.logger.debug(`[ITEM DROP] Enemy ${deadEnemyInstance.name} died but has no loot table`);
                                     }
-                                } else if (deadEnemyInstance) {
-                                     this.logger.debug(`[ITEM DROP] Enemy ${deadEnemyInstance.name} died but has no loot table`);
+                                    
+                                    // --- Queue Death Event (Visual Effects) ---
+                                    this.broadcastService.queueDeath(zoneId, { entityId: deadEnemyId, type: 'enemy' });
+                                    
+                                    // NOTE: Enemy is NOT removed from zone - it stays as a "dying" enemy for 10 seconds
+                                    this.logger.debug(`[ENEMY DEATH] Enemy ${deadEnemyInstance.name} marked as dying, will decay in 10 seconds`);
+                                    
                                 } else {
-                                    this.logger.warn(`Could not find dead enemy instance ${deadEnemyId} in zone ${zoneId} for loot calculation.`);
+                                    this.logger.warn(`Could not find dead enemy instance ${deadEnemyId} in zone ${zoneId} for death handling.`);
                                 }
-                                // -------------------------
-                                
-                                this.broadcastService.queueDeath(zoneId, { entityId: deadEnemyId, type: 'enemy' });
-                                this.zoneService.removeEnemy(zoneId, deadEnemyId); // Remove dead enemy from zone state
                             } else {
                                 this.logger.warn(`Character ${character.id} reported targetDied, but couldn't find dead enemy ID in health updates.`);
                             }
@@ -297,9 +327,50 @@ export class GameLoopService implements OnApplicationShutdown {
                  // Fetch fresh list in case some died from player attacks earlier in the tick
                  const currentEnemies = this.zoneService.getZoneEnemies(zoneId);
                 for (const enemy of currentEnemies) {
-                    if (enemy.currentHealth <= 0) continue; // Skip dead enemies
+                    // --- Process Dying Enemies (Knockback Physics) ---
+                    if (enemy.isDying) {
+                        let positionChanged = false;
+                        
+                        // Handle knockback animation if active
+                        if (enemy.knockbackState) {
+                            const knockback = enemy.knockbackState;
+                            const elapsed = now - knockback.startTime;
+                            
+                            if (elapsed <= knockback.duration) {
+                                // Calculate eased progress (ease-out effect: fast -> slow)
+                                const progress = elapsed / knockback.duration;
+                                const easedProgress = 1 - Math.pow(1 - progress, 3); // Cubic ease-out
+                                
+                                // Calculate new position
+                                const offsetDistance = knockback.distance * easedProgress;
+                                const newX = knockback.originalPosition.x + (knockback.direction.x * offsetDistance);
+                                const newY = knockback.originalPosition.y + (knockback.direction.y * offsetDistance);
+                                
+                                // Update enemy position
+                                if (Math.abs(enemy.position.x - newX) > 0.1 || Math.abs(enemy.position.y - newY) > 0.1) {
+                                    enemy.position.x = newX;
+                                    enemy.position.y = newY;
+                                    positionChanged = true;
+                                }
+                            } else {
+                                // Knockback animation completed, remove state
+                                enemy.knockbackState = undefined;
+                                this.logger.debug(`[ENEMY DEATH] Knockback completed for ${enemy.name} (${enemy.id})`);
+                            }
+                        }
+                        
+                        // Send position update if knockback moved the enemy
+                        if (positionChanged) {
+                            const updateData = { id: enemy.id, x: enemy.position.x, y: enemy.position.y };
+                            this.broadcastService.queueEntityUpdate(zoneId, updateData);
+                        }
+                        
+                        continue; // Skip AI processing for dying enemies
+                    }
 
-                     // --- Enemy State Processing ---
+                    if (enemy.currentHealth <= 0) continue; // Skip dead enemies (legacy check)
+
+                     // --- Enemy State Processing (Living Enemies Only) ---
                      const enemyTickResult: EnemyTickResult = await this.enemyStateService.processEnemyTick(
                          enemy, // Pass mutable enemy object
                          zoneId,
@@ -410,6 +481,15 @@ export class GameLoopService implements OnApplicationShutdown {
                             // Queue the despawn event for broadcast
                             this.broadcastService.queueItemDespawned(zoneId, removed.id);
                         }
+                    }
+                }
+
+                // --- Dying Enemy Cleanup Check ---
+                const dyingEnemies = this.zoneService.getZoneEnemies(zoneId).filter(e => e.isDying);
+                for (const dyingEnemy of dyingEnemies) {
+                    if (dyingEnemy.deathTimestamp && (now - dyingEnemy.deathTimestamp) >= 10000) { // 10 seconds
+                        this.logger.debug(`[ENEMY DEATH] Cleaning up decayed enemy ${dyingEnemy.name} (${dyingEnemy.id}) after 10 seconds`);
+                        this.zoneService.removeEnemy(zoneId, dyingEnemy.id);
                     }
                 }
 

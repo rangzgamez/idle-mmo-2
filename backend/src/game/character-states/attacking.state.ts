@@ -38,8 +38,8 @@ export class AttackingState implements ICharacterState {
 
         const targetEnemy = zoneService.getEnemyInstanceById(zoneId, character.attackTargetId);
 
-        if (!targetEnemy || targetEnemy.currentHealth <= 0) {
-            this.logger.debug(`Character ${character.id}'s target ${character.attackTargetId} is dead or gone. Transitioning to idle.`);
+        if (!targetEnemy || targetEnemy.currentHealth <= 0 || targetEnemy.isDying) {
+            this.logger.debug(`Character ${character.id}'s target ${character.attackTargetId} is dead, dying, or gone. Transitioning to idle.`);
             character.attackTargetId = null;
             zoneService.setCharacterState(zoneId, character.id, 'idle');
             character.targetX = null;

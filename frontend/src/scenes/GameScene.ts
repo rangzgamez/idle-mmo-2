@@ -522,17 +522,34 @@ export default class GameScene extends Phaser.Scene {
                     // Trigger screen shake if the attack was within the last 2 seconds
                     if (timeSinceAttack <= 2000) {
                         this.triggerScreenShake(8, 300); // Nice subtle shake
-                    } else {
                     }
                     // Clean up the tracked attack
                     this.recentPlayerAttacks.delete(data.entityId);
-                } else {
                 }
                 // --------------------------------------------------------
 
-                // Remove enemy sprite immediately
-                this.enemySprites.delete(data.entityId);
-                sprite.destroy();
+                // Start death animation instead of immediate destruction
+                sprite.startDeathAnimation();
+                
+                // Set timer to destroy sprite after 10 seconds (with fade out)
+                this.time.delayedCall(10000, () => {
+                    if (sprite && sprite.active) {
+                        // Fade out before destroying
+                        this.tweens.add({
+                            targets: sprite,
+                            alpha: 0,
+                            duration: 500,
+                            ease: 'Power2.easeOut',
+                            onComplete: () => {
+                                if (this.enemySprites.has(data.entityId)) {
+                                    this.enemySprites.delete(data.entityId);
+                                    sprite.destroy();
+                                }
+                            }
+                        });
+                    }
+                });
+                
             } else if (sprite instanceof CharacterSprite) {
                 // Handle character death visually (e.g., fade out, play death animation)
                 sprite.setAlpha(0.4); // Example: Fade slightly
@@ -547,7 +564,6 @@ export default class GameScene extends Phaser.Scene {
                  }
                  // The character respawn logic is handled server-side based on documentation
             }
-        } else {
         }
     }
 

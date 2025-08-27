@@ -25,4 +25,15 @@ export interface EnemyInstance {
     anchorY?: number; // Original spawn point Y (nest center)
     wanderRadius?: number; // Radius the enemy can wander within its nest
     currentTargetId?: string | null; // ID of the character the enemy is currently focused on
+    
+    // --- Death & Knockback State ---
+    isDying?: boolean; // Whether the enemy is in death animation phase
+    deathTimestamp?: number; // When the enemy died (for decay timer)
+    knockbackState?: {
+        startTime: number; // When knockback animation started
+        direction: { x: number; y: number }; // Unit vector direction for knockback
+        distance: number; // Total knockback distance in pixels
+        duration: number; // Duration of knockback animation in milliseconds
+        originalPosition: { x: number; y: number }; // Starting position for knockback calculation
+    };
 }

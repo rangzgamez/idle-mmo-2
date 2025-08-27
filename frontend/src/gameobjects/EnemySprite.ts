@@ -7,6 +7,7 @@ export class EnemySprite extends Phaser.GameObjects.Sprite {
     private nameLabel: Phaser.GameObjects.Text; // Example Label
     private spriteKey: string;
     private healthBar: HealthBar; // Add health bar property
+    private isDying: boolean = false; // Track death animation state
     constructor(scene: Phaser.Scene, x: number, y: number, spriteKey:string, name: string, enemyData?:any) {
         super(scene, x, y, spriteKey); // Ensure spriteKey is passed correctly
         this.spriteKey = spriteKey
@@ -40,11 +41,19 @@ export class EnemySprite extends Phaser.GameObjects.Sprite {
         // Interpolate position
         this.x = Phaser.Math.Linear(this.x, this.targetX, 0.1);
         this.y = Phaser.Math.Linear(this.y, this.targetY, 0.1);
-        this.updateHealthBarPosition(); // Keep health bar position updated
-        this.updateNameLabelPosition();
+        
+        // Only update UI elements if they still exist (not destroyed due to death)
+        if (this.healthBar) {
+            this.updateHealthBarPosition(); // Keep health bar position updated
+        }
+        if (this.nameLabel) {
+            this.updateNameLabelPosition();
+        }
     }
     setHealth(currentHealth: number, maxHealth?: number): void {
-        this.healthBar.setHealth(currentHealth, maxHealth);
+        if (this.healthBar) {
+            this.healthBar.setHealth(currentHealth, maxHealth);
+        }
     }
 
     private updateHealthBarPosition(): void {
@@ -61,9 +70,43 @@ export class EnemySprite extends Phaser.GameObjects.Sprite {
         this.nameLabel.y = this.y - 20;
     }
 
+    // Death animation - visual effects only (backend handles movement)
+    public startDeathAnimation(): void {
+        if (this.isDying) return; // Prevent multiple calls
+        
+        this.isDying = true;
+        
+        // Make non-interactive immediately
+        this.disableInteractive();
+        this.removeAllListeners(); // Remove click/pointer events
+        
+        // Instant visual death effects (no tweening)
+        this.scaleY = -1; // Flip upside down instantly
+        this.setTint(0x333333); // Dim to ~20% brightness instantly
+        
+        // Immediately destroy health bar and name label
+        if (this.healthBar) {
+            this.healthBar.destroy();
+            this.healthBar = null as any;
+        }
+        if (this.nameLabel) {
+            this.nameLabel.destroy();
+            this.nameLabel = null as any;
+        }
+    }
+    
+    // Check if enemy is in dying state
+    public getIsDying(): boolean {
+        return this.isDying;
+    }
+
      destroy(fromScene?: boolean): void {
-        this.healthBar.destroy(); // Destroy health bar
-        this.nameLabel.destroy(); //Destroy attached components
+        if (this.healthBar) {
+            this.healthBar.destroy(); // Destroy health bar
+        }
+        if (this.nameLabel) {
+            this.nameLabel.destroy(); // Destroy attached components
+        }
         return super.destroy(fromScene);
     }
 }
