@@ -43,6 +43,29 @@ interface CharacterStateChangeData {
 }
 // <--- END ADD
 
+// Add interfaces for spell casting events
+interface SpellCastData {
+    casterId: string;
+    abilityId: string;
+    abilityName: string;
+    targetX: number;
+    targetY: number;
+    radius?: number;
+}
+
+interface SpellDamageData {
+    abilityId: string;
+    abilityName: string;
+    targetX: number;
+    targetY: number;
+    radius: number;
+    damage: number;
+    affectedEnemies: Array<{
+        enemyId: string;
+        damage: number;
+    }>;
+}
+
 type SpawnData = EnemyInstance; // The full enemy instance data for a new spawn
 
 @Injectable()
@@ -60,6 +83,10 @@ export class BroadcastService {
     // ---> ADD State Change Queue
     private characterStateChangeQueue: Map<string, CharacterStateChangeData[]> = new Map();
     // <--- END ADD
+    
+    // Add spell casting event queues
+    private spellCastQueue: Map<string, SpellCastData[]> = new Map();
+    private spellDamageQueue: Map<string, SpellDamageData[]> = new Map();
 
     // Inject Logger through the constructor
     constructor(private readonly logger: Logger) {
@@ -162,6 +189,15 @@ export class BroadcastService {
     }
     // <--- END ADD
 
+    // Add methods to queue spell casting events
+    queueSpellCast(zoneId: string, spellCastData: SpellCastData): void {
+        this.getQueue(this.spellCastQueue, zoneId).push(spellCastData);
+    }
+
+    queueSpellDamage(zoneId: string, spellDamageData: SpellDamageData): void {
+        this.getQueue(this.spellDamageQueue, zoneId).push(spellDamageData);
+    }
+
     // --- Broadcasting Method ---
 
     /**
@@ -185,6 +221,10 @@ export class BroadcastService {
         // ---> ADD Flushing for State Changes
         const stateChanges = this.characterStateChangeQueue.get(zoneId);
         // <--- END ADD
+
+        // Add spell casting event flushing
+        const spellCasts = this.spellCastQueue.get(zoneId);
+        const spellDamages = this.spellDamageQueue.get(zoneId);
 
         // Emit events only if there's data for them
         if (updates && updates.length > 0) {
@@ -250,6 +290,21 @@ export class BroadcastService {
             this.characterStateChangeQueue.delete(zoneId); // Clear queue
         }
         // <--- END ADD
+
+        // Add spell casting event emission
+        if (spellCasts && spellCasts.length > 0) {
+            spellCasts.forEach(spellCast => {
+                this.server?.to(zoneId).emit('spellCast', spellCast);
+            });
+            this.spellCastQueue.delete(zoneId);
+        }
+
+        if (spellDamages && spellDamages.length > 0) {
+            spellDamages.forEach(spellDamage => {
+                this.server?.to(zoneId).emit('spellDamage', spellDamage);
+            });
+            this.spellDamageQueue.delete(zoneId);
+        }
     }
 
     // ---> ADD Helper function getQueue if it doesn't exist

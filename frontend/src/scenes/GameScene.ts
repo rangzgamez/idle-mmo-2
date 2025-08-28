@@ -7,6 +7,9 @@ import UIScene from './UIScene';
 import { EnemySprite } from '../gameobjects/EnemySprite';
 import { DroppedItemSprite, DroppedItemData } from '../gameobjects/DroppedItemSprite';
 import { ZoneCharacterState } from '../types/zone.types';
+import { BackgroundManager } from '../gameobjects/BackgroundManager';
+import { LoadingScreen } from '../gameobjects/LoadingScreen';
+import { AbilityManager } from '../game/AbilityManager';
 
 // Add the interface definitions if not shared
 interface EntityUpdateData { id: string; x?: number | null; y?: number | null; health?: number | null; state?: string; }
@@ -80,15 +83,29 @@ export default class GameScene extends Phaser.Scene {
     private enemySprites: Map<string, EnemySprite> = new Map(); //NEW
     private droppedItemSprites: Map<string, DroppedItemSprite> = new Map(); // <-- Add map for dropped items
     private recentPlayerAttacks: Map<string, number> = new Map(); // Track recent attacks by player characters (targetId -> timestamp)
+    private recentSpellCasts: Map<string, number> = new Map(); // Track recent spell casts (spellId -> timestamp) for screen shake
     private screenShakeTween: Phaser.Tweens.Tween | null = null; // Track active screen shake
+    private backgroundManager: BackgroundManager | null = null; // Background elements manager
+    private loadingScreen: LoadingScreen | null = null; // Loading screen for background initialization
+    private abilityManager: AbilityManager | null = null; // Manage abilities
+    private isTargeting: boolean = false; // Track targeting mode
+    private targetingAbilityId: string | null = null; // Current ability being targeted
+    private abilityIndicator: Phaser.GameObjects.Arc | null = null; // AoE targeting indicator
     constructor() {
         super('GameScene');
     }
 
-    // Receive data from the previous scene (CharacterSelectScene)
-    init(data: { selectedParty?: any[] }) {
-        this.selectedPartyData = data?.selectedParty || []; // Safely access selectedParty
+    // Receive data from the previous scene (LoadScene)
+    init(data: { selectedParty?: any[], zoneState?: any[], enemyState?: any[], backgroundData?: any }) {
+        this.selectedPartyData = data?.selectedParty || [];
         this.networkManager = NetworkManager.getInstance();
+        
+        // If background data is provided from LoadScene, use it
+        if (data?.backgroundData?.backgroundManager) {
+            this.backgroundManager = data.backgroundData.backgroundManager;
+            // Transfer the background manager to this scene
+            this.backgroundManager.scene = this;
+        }
 
         // <<<--- Populate Player Class Map ---
         this.playerClassMap.clear(); // Clear previous map if scene restarts
@@ -171,6 +188,23 @@ export default class GameScene extends Phaser.Scene {
         // collisionLayer?.setCollisionByProperty({ collides: true });
         // Add simple background color for now
         this.cameras.main.setBackgroundColor('#5a8f37'); // Greenish background
+        
+        // --- Setup World Bounds ---
+        const worldWidth = 4000;
+        const worldHeight = 4000;
+        this.physics.world.setBounds(0, 0, worldWidth, worldHeight);
+        this.cameras.main.setBounds(0, 0, worldWidth, worldHeight);
+        
+        // Background manager should already be initialized from LoadScene
+        if (!this.backgroundManager) {
+            console.warn('No background manager provided - creating fallback');
+            this.backgroundManager = new BackgroundManager(this, worldWidth, worldHeight);
+            // Initialize it quickly without loading screen
+            this.backgroundManager.initialize();
+        } else {
+            console.log(`Using pre-generated background with ${this.backgroundManager.getElementCount()} elements`);
+        }
+        // --------------------------------------------------
 
         // --- Register EventBus Listeners ---
         EventBus.on('network-disconnect', this.handleDisconnectError, this);
@@ -181,6 +215,8 @@ export default class GameScene extends Phaser.Scene {
         EventBus.on('entity-died', this.handleEntityDied, this); // <-- ADD LISTENER FOR DEATHS
         EventBus.on('enemy-spawned', this.handleEnemySpawned, this); // +++ ADD LISTENER +++
         EventBus.on('combat-action', this.handleCombatAction, this); // +++ ADD LISTENER for ATTACK VISUAL +++
+        EventBus.on('spell-cast', this.handleSpellCast, this); // ADD LISTENER for SPELL VISUAL
+        EventBus.on('spell-damage', this.handleSpellDamage, this); // ADD LISTENER for SPELL DAMAGE VISUAL
         EventBus.on('items-dropped', this.handleItemsDropped, this); // <-- ADD LISTENER for dropped items
         EventBus.on('item-picked-up', this.handleItemPickedUp, this); // <-- ADD LISTENER for item pickup confirmation
         EventBus.on('item-despawned', this.handleItemDespawned, this); // <-- ADD LISTENER for item despawn
@@ -192,6 +228,11 @@ export default class GameScene extends Phaser.Scene {
         EventBus.on('character-state-update', this.handleCharacterStateUpdates, this);
         // <--- END ADD
         // -----------------------------------------
+
+        // --- Initialize Ability Manager ---
+        this.abilityManager = new AbilityManager(this.networkManager);
+        // Load abilities asynchronously after scene setup
+        this.loadAbilitiesAsync();
 
         // --- Launch UI Scene ---
         // Use scene.launch to run it in parallel with this scene
@@ -211,46 +252,77 @@ export default class GameScene extends Phaser.Scene {
                 event.stopPropagation(); // Prevent other Enter handlers
             }
         });
-        // --- Send 'enterZone' request ---
-        const zoneId = 'startZone'; // Or determine dynamically
-        this.networkManager.sendMessage('enterZone', { zoneId }, (response: { success: boolean; zoneState?: ZoneCharacterState[]; enemyState?: EnemySpawnData[]; message?: string }) => {
-            if (response && response.success) {
 
-                // Create sprites for OUR characters based on initial data
-                // The server side 'selectParty' callback should have returned our validated characters
-                this.selectedPartyData.forEach(charData => {
-                     // Use actual position if provided by server, otherwise default
-                     const startX = charData.positionX ?? 150;
-                     const startY = charData.positionY ?? 150;
-                     this.createOrUpdateCharacterSprite(charData, true, startX, startY);
-                });
-
-                // Create sprites for OTHER players already in the zone
-                response.zoneState?.forEach(charData => {
-                    this.createOrUpdateCharacterSprite(charData, false);
-                });
-
-                // Create sprites for existing ENEMIES in the zone
-                response.enemyState?.forEach(enemyData => {
-                    this.createEnemySprite(enemyData);
-                });
-
-                 // Make camera follow the first player character
-                 const firstPlayerChar = Array.from(this.playerCharacters.values())[0];
-                 if(firstPlayerChar) {
-                     this.cameras.main.startFollow(firstPlayerChar, true, 0.1, 0.1); // Smooth follow
-                     this.cameras.main.setZoom(1.7); // Zoom in a bit
-                 }
-
-                 // --- Request Initial Inventory --- 
-                 this.networkManager.sendMessage('requestInventory');
-                 // --------------------------------
-
-            } else {
-                // Handle error - maybe go back to character select?
-                this.handleDisconnectError(`Failed to enter zone: ${response?.message}`);
-            }
+        // --- Ability Key Listeners ---
+        this.input.keyboard?.on('keydown-Q', (event: KeyboardEvent) => {
+            this.handleAbilityKey('Q');
         });
+        // Check if we have initial data from LoadScene
+        const initData = this.scene.settings.data as any;
+        if (initData && initData.zoneState && initData.enemyState) {
+            console.log('Using initial data from LoadScene');
+            
+            // Create sprites for OUR characters based on initial data
+            this.selectedPartyData.forEach(charData => {
+                const startX = charData.positionX ?? 150;
+                const startY = charData.positionY ?? 150;
+                this.createOrUpdateCharacterSprite(charData, true, startX, startY);
+            });
+
+            // Create sprites for OTHER players already in the zone
+            initData.zoneState.forEach((charData: any) => {
+                this.createOrUpdateCharacterSprite(charData, false);
+            });
+
+            // Create sprites for existing ENEMIES in the zone
+            initData.enemyState.forEach((enemyData: any) => {
+                this.createEnemySprite(enemyData);
+            });
+
+            // Make camera follow the first player character
+            const firstPlayerChar = Array.from(this.playerCharacters.values())[0];
+            if(firstPlayerChar) {
+                this.cameras.main.startFollow(firstPlayerChar, true, 0.1, 0.1); // Smooth follow
+                this.cameras.main.setZoom(1.7); // Zoom in a bit
+            }
+
+            // Request Initial Inventory
+            this.networkManager.sendMessage('requestInventory');
+            
+        } else {
+            console.warn('No initial data from LoadScene - entering zone manually');
+            
+            // Fallback: enter zone manually (this should not happen in normal flow)
+            const zoneId = 'startZone';
+            this.networkManager.sendMessage('enterZone', { zoneId }, (response: { success: boolean; zoneState?: ZoneCharacterState[]; enemyState?: EnemySpawnData[]; message?: string }) => {
+                if (response && response.success) {
+                    // Handle as before...
+                    this.selectedPartyData.forEach(charData => {
+                        const startX = charData.positionX ?? 150;
+                        const startY = charData.positionY ?? 150;
+                        this.createOrUpdateCharacterSprite(charData, true, startX, startY);
+                    });
+
+                    response.zoneState?.forEach(charData => {
+                        this.createOrUpdateCharacterSprite(charData, false);
+                    });
+
+                    response.enemyState?.forEach(enemyData => {
+                        this.createEnemySprite(enemyData);
+                    });
+
+                    const firstPlayerChar = Array.from(this.playerCharacters.values())[0];
+                    if(firstPlayerChar) {
+                        this.cameras.main.startFollow(firstPlayerChar, true, 0.1, 0.1);
+                        this.cameras.main.setZoom(1.7);
+                    }
+
+                    this.networkManager.sendMessage('requestInventory');
+                } else {
+                    this.handleDisconnectError(`Failed to enter zone: ${response?.message}`);
+                }
+            });
+        }
 
         // --- Setup Input for Movement ---
         this.input.on(Phaser.Input.Events.POINTER_DOWN, (pointer: Phaser.Input.Pointer, gameObjects: Phaser.GameObjects.GameObject[]) => {
@@ -258,6 +330,13 @@ export default class GameScene extends Phaser.Scene {
             if (pointer.button !== 0) return;
 
             const worldPoint = pointer.positionToCamera(this.cameras.main) as Phaser.Math.Vector2;
+
+            // Check if we're in targeting mode
+            if (this.isTargeting && this.targetingAbilityId && this.abilityManager) {
+                this.castAbilityAtTarget(this.targetingAbilityId, worldPoint.x, worldPoint.y);
+                this.exitTargetingMode();
+                return;
+            }
 
             // Store the target location for the arrival check
             if (!this.lastMarkerTarget) {
@@ -292,6 +371,14 @@ export default class GameScene extends Phaser.Scene {
                 }
             }
             // -------------------------
+        });
+
+        // --- Setup Mouse Move for Targeting Indicator ---
+        this.input.on(Phaser.Input.Events.POINTER_MOVE, (pointer: Phaser.Input.Pointer) => {
+            if (this.isTargeting && this.abilityIndicator) {
+                const worldPoint = pointer.positionToCamera(this.cameras.main) as Phaser.Math.Vector2;
+                this.abilityIndicator.setPosition(worldPoint.x, worldPoint.y);
+            }
         });
 
         // Start UIScene in parallel if needed
@@ -356,6 +443,12 @@ export default class GameScene extends Phaser.Scene {
         this.playerCharacters.forEach(char => char.update(time, delta));
         this.otherCharacters.forEach(char => char.update(time, delta));
         this.enemySprites.forEach(sprite => sprite.update(time, delta));
+        
+        // Update background display based on camera position
+        if (this.backgroundManager && this.backgroundManager.isReady()) {
+            const camera = this.cameras.main;
+            this.backgroundManager.update(camera.scrollX + camera.width / 2, camera.scrollY + camera.height / 2, camera.width, camera.height);
+        }
 
         // --- Cleanup old tracked attacks (prevent memory leaks) ---
         const now = Date.now();
@@ -520,7 +613,8 @@ export default class GameScene extends Phaser.Scene {
                     const timeSinceAttack = Date.now() - recentAttackTime;
                     
                     // Trigger screen shake if the attack was within the last 2 seconds
-                    if (timeSinceAttack <= 2000) {
+                    // and no screen shake is already happening
+                    if (timeSinceAttack <= 2000 && !this.screenShakeTween) {
                         this.triggerScreenShake(8, 300); // Nice subtle shake
                     }
                     // Clean up the tracked attack
@@ -673,6 +767,8 @@ export default class GameScene extends Phaser.Scene {
         EventBus.off('entity-died', this.handleEntityDied, this);
         EventBus.off('enemy-spawned', this.handleEnemySpawned, this);
         EventBus.off('combat-action', this.handleCombatAction, this);
+        EventBus.off('spell-cast', this.handleSpellCast, this);
+        EventBus.off('spell-damage', this.handleSpellDamage, this);
         EventBus.off('items-dropped', this.handleItemsDropped, this);
         EventBus.off('item-picked-up', this.handleItemPickedUp, this);
         EventBus.off('item-despawned', this.handleItemDespawned, this);
@@ -692,6 +788,19 @@ export default class GameScene extends Phaser.Scene {
         // Destroy dropped item sprites
         this.droppedItemSprites.forEach(sprite => sprite.destroy());
         this.droppedItemSprites.clear();
+        
+        // Clean up background manager
+        if (this.backgroundManager) {
+            this.backgroundManager.destroy();
+            this.backgroundManager = null;
+        }
+        
+        // Clean up loading screen
+        if (this.loadingScreen) {
+            this.loadingScreen.hide();
+            this.loadingScreen = null;
+        }
+        
         // Clean up screen shake tracking
         this.recentPlayerAttacks.clear();
         if (this.screenShakeTween) {
@@ -700,7 +809,13 @@ export default class GameScene extends Phaser.Scene {
         }
         // --- Stop the UI Scene when GameScene stops ---
         this.input.keyboard?.off('keydown-ENTER'); // Clean up listener
+        this.input.keyboard?.off('keydown-Q'); // Clean up ability listeners
         this.uiSceneRef = null; // Clear reference
+        this.abilityManager = null; // Clear ability manager
+        if (this.abilityIndicator) {
+            this.abilityIndicator.destroy();
+            this.abilityIndicator = null;
+        }
         this.scene.stop('UIScene');
     }
 
@@ -715,6 +830,8 @@ export default class GameScene extends Phaser.Scene {
         EventBus.off('entity-died', this.handleEntityDied, this);
         EventBus.off('enemy-spawned', this.handleEnemySpawned, this);
         EventBus.off('combat-action', this.handleCombatAction, this);
+        EventBus.off('spell-cast', this.handleSpellCast, this);
+        EventBus.off('spell-damage', this.handleSpellDamage, this);
         EventBus.off('items-dropped', this.handleItemsDropped, this);
         EventBus.off('item-picked-up', this.handleItemPickedUp, this);
         EventBus.off('item-despawned', this.handleItemDespawned, this);
@@ -734,6 +851,19 @@ export default class GameScene extends Phaser.Scene {
         // Destroy dropped item sprites
         this.droppedItemSprites.forEach(sprite => sprite.destroy());
         this.droppedItemSprites.clear();
+        
+        // Clean up background manager
+        if (this.backgroundManager) {
+            this.backgroundManager.destroy();
+            this.backgroundManager = null;
+        }
+        
+        // Clean up loading screen
+        if (this.loadingScreen) {
+            this.loadingScreen.hide();
+            this.loadingScreen = null;
+        }
+        
         // Clean up screen shake tracking
         this.recentPlayerAttacks.clear();
         if (this.screenShakeTween) {
@@ -742,7 +872,13 @@ export default class GameScene extends Phaser.Scene {
         }
         // --- Stop the UI Scene when GameScene stops ---
         this.input.keyboard?.off('keydown-ENTER'); // Clean up listener
+        this.input.keyboard?.off('keydown-Q'); // Clean up ability listeners
         this.uiSceneRef = null; // Clear reference
+        this.abilityManager = null; // Clear ability manager
+        if (this.abilityIndicator) {
+            this.abilityIndicator.destroy();
+            this.abilityIndicator = null;
+        }
         this.scene.stop('UIScene');
     }
 
@@ -818,18 +954,9 @@ export default class GameScene extends Phaser.Scene {
             // ... (existing tint logic) ...
         }
 
-        // Show floating combat text
-        if (targetSprite && data.damage) { // Checks if targetSprite exists AND data.damage is truthy (>0)
-             // <<<--- DEBUG LOG ---
-             // ------------------
-             this.showFloatingText(targetSprite.x, targetSprite.y - targetSprite.displayHeight * 0.6, `-${data.damage}`, '#ff0000'); // Uses RED color
-        } else {
-             // <<<--- DEBUG LOG ---
-             if (!targetSprite) {
-             }
-             if (!data.damage) {
-             }
-             // ------------------
+        // Show floating combat text using consolidated method
+        if (data.damage && data.targetId) {
+            this.showDamageOnEntity(data.targetId, data.damage, '#ff0000'); // Red for normal combat damage
         }
     }
 
@@ -1076,4 +1203,129 @@ export default class GameScene extends Phaser.Scene {
         });
     }
     // <--- END ADD
+
+    // --- Async ability loading method ---
+    private loadAbilitiesAsync() {
+        console.log('🎯 GameScene: Starting ability loading...');
+        if (this.abilityManager) {
+            this.abilityManager.loadAbilities();
+            console.log('🎯 GameScene: Ability loading requested');
+        }
+    }
+
+    // --- Ability System Methods ---
+    private handleAbilityKey(key: string) {
+        if (!this.abilityManager) {
+            console.log('🎯 Q Key: AbilityManager is null!');
+            return;
+        }
+        
+        // For now, hardcode Q key to Rain of Arrows ability
+        if (key === 'Q') {
+            const abilities = this.abilityManager.getAllAbilities();
+            console.log('🎯 Q Key: Available abilities count:', abilities.length);
+            console.log('🎯 Q Key: Ability names:', abilities.map(a => a.name));
+            
+            const rainOfArrows = abilities.find(ability => ability.name === 'Rain of Arrows');
+            
+            if (rainOfArrows && this.abilityManager.canCastAbility(rainOfArrows.id)) {
+                console.log('🎯 Q Key: Entering targeting mode for Rain of Arrows');
+                this.enterTargetingMode(rainOfArrows.id);
+            } else if (rainOfArrows) {
+                console.log(`🎯 Q Key: Rain of Arrows is on cooldown (${Math.ceil(this.abilityManager.getRemainingCooldown(rainOfArrows.id) / 1000)}s remaining)`);
+            } else {
+                console.log('🎯 Q Key: Rain of Arrows ability not found - abilities may not have loaded yet');
+            }
+        }
+    }
+
+    private enterTargetingMode(abilityId: string) {
+        if (!this.abilityManager) return;
+        
+        const ability = this.abilityManager.getAbility(abilityId);
+        if (!ability) return;
+
+        this.isTargeting = true;
+        this.targetingAbilityId = abilityId;
+        
+        // Create AoE indicator if the ability has a radius
+        if (ability.radius) {
+            this.createAbilityIndicator(ability.radius);
+        }
+        
+        console.log(`Targeting mode: ${ability.name} (Click to cast)`);
+    }
+
+    private exitTargetingMode() {
+        this.isTargeting = false;
+        this.targetingAbilityId = null;
+        
+        if (this.abilityIndicator) {
+            this.abilityIndicator.destroy();
+            this.abilityIndicator = null;
+        }
+    }
+
+    private createAbilityIndicator(radius: number) {
+        if (this.abilityIndicator) {
+            this.abilityIndicator.destroy();
+        }
+        
+        // Create a semi-transparent circle indicator
+        this.abilityIndicator = this.add.circle(0, 0, radius, 0xff0000, 0.3);
+        this.abilityIndicator.setStrokeStyle(2, 0xff0000, 1);
+        this.abilityIndicator.setDepth(10);
+    }
+
+    private castAbilityAtTarget(abilityId: string, targetX: number, targetY: number) {
+        if (!this.abilityManager) return;
+        
+        const success = this.abilityManager.castAbility(abilityId, targetX, targetY);
+        if (success) {
+            const ability = this.abilityManager.getAbility(abilityId);
+            console.log(`Cast ${ability?.name} at (${Math.round(targetX)}, ${Math.round(targetY)})`);
+        }
+    }
+
+    // --- Common Damage Display Methods ---
+    private showDamageOnEntity(entityId: string, damage: number, color: string = '#ff0000'): void {
+        const sprite = this.findSpriteById(entityId);
+        if (sprite) {
+            this.showFloatingText(
+                sprite.x, 
+                sprite.y - sprite.displayHeight * 0.6, 
+                `-${damage}`, 
+                color
+            );
+        }
+    }
+
+    // --- Spell Event Handlers ---
+    private handleSpellCast(data: any): void {
+        console.log('🎯 Spell Cast Visual:', data);
+        // Future: Add spell casting animations/particles at target location
+        // Could show a brief flash/explosion at (data.targetX, data.targetY)
+    }
+
+    private handleSpellDamage(data: any): void {
+        console.log('🎯 Spell Damage Visual:', data);
+        
+        // Track this spell cast for screen shake on enemy deaths
+        const spellId = `${data.abilityId}-${Date.now()}`;
+        this.recentSpellCasts.set(spellId, Date.now());
+        
+        // Show damage numbers for each affected enemy
+        if (data.affectedEnemies && Array.isArray(data.affectedEnemies)) {
+            data.affectedEnemies.forEach((enemy: any) => {
+                this.showDamageOnEntity(enemy.enemyId, enemy.damage, '#ff6600'); // Orange for spell damage
+                // Track that this enemy was hit by this spell (for screen shake on death)
+                this.recentPlayerAttacks.set(enemy.enemyId, Date.now());
+            });
+            
+            console.log(`Showed spell damage for ${data.affectedEnemies.length} enemies`);
+        }
+
+        // TODO: Add spell impact visual effects at (data.targetX, data.targetY)
+        // Could show particles, explosion animation, etc.
+    }
 }

@@ -4,6 +4,7 @@ import BootScene from './scenes/BootScene';
 import PreloadScene from './scenes/PreloadScene';
 import LoginScene from './scenes/LoginScene';
 import CharacterSelectScene from './scenes/CharacterSelectScene';
+import LoadScene from './scenes/LoadScene';
 import GameScene from './scenes/GameScene';
 import UIScene from './scenes/UIScene';
 
@@ -27,6 +28,7 @@ const config: Phaser.Types.Core.GameConfig = {
         PreloadScene,
         LoginScene,
         CharacterSelectScene,
+        LoadScene,
         GameScene,
         UIScene,
         // Add other scenes here as you create them

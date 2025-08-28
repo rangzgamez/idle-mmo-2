@@ -489,8 +489,8 @@ export default class CharacterSelectScene extends Phaser.Scene {
             if (response && response.success) {
                 console.log('Server confirmed party selection:', response.characters);
                  this.setStatus(''); // Clear status
-                 // Transition to GameScene, passing selected character data (optional, GameScene can also rely on server state)
-                 this.scene.start('GameScene', { selectedParty: response.characters });
+                 // Transition to LoadScene, which will handle world generation before GameScene
+                 this.scene.start('LoadScene', { selectedParty: response.characters });
             } else {
                  console.error('Server failed to select party:', response);
                  this.setStatus('Server error selecting party. Please try again.', true);

@@ -172,107 +172,8 @@ export class GameLoopService implements OnApplicationShutdown {
                         }
                         // --------------------------------------
 
-                        // Handle target death (enemy knockback & dying state)
-                        if (tickResult.targetDied) {
-                            const deadEnemyId = tickResult.enemyHealthUpdates.find(upd => upd.health <= 0)?.id;
-                            if(deadEnemyId) {
-                                this.logger.debug(`[ENEMY DEATH] Enemy died: ${deadEnemyId}`);
-                                const deadEnemyInstance = this.zoneService.getEnemyInstanceById(zoneId, deadEnemyId);
-                                
-                                if (deadEnemyInstance) {
-                                    this.logger.debug(`[ENEMY DEATH] Dead enemy data: ${deadEnemyInstance.name}, position: (${deadEnemyInstance.position.x}, ${deadEnemyInstance.position.y})`);
-                                    
-                                    // --- Calculate Knockback Direction ---
-                                    const killerPosition = { x: character.positionX, y: character.positionY };
-                                    const enemyPosition = deadEnemyInstance.position;
-                                    
-                                    // Calculate direction vector (killer -> enemy)
-                                    const directionX = enemyPosition.x - killerPosition.x;
-                                    const directionY = enemyPosition.y - killerPosition.y;
-                                    const magnitude = Math.sqrt(directionX * directionX + directionY * directionY);
-                                    
-                                    // Normalize direction (handle case where killer and enemy are at same position)
-                                    const normalizedDirection = magnitude > 0 
-                                        ? { x: directionX / magnitude, y: directionY / magnitude }
-                                        : { x: Math.random() - 0.5, y: Math.random() - 0.5 }; // Random direction if overlapping
-                                    
-                                    // --- Mark Enemy as Dying with Knockback ---
-                                    deadEnemyInstance.isDying = true;
-                                    deadEnemyInstance.deathTimestamp = now;
-                                    deadEnemyInstance.knockbackState = {
-                                        startTime: now,
-                                        direction: normalizedDirection,
-                                        distance: 80, // Knockback distance in pixels
-                                        duration: 300, // 300ms knockback animation
-                                        originalPosition: { ...enemyPosition }
-                                    };
-                                    
-                                    // Clear AI state to prevent further actions
-                                    deadEnemyInstance.aiState = 'DEAD';
-                                    deadEnemyInstance.currentTargetId = null;
-                                    
-                                    this.logger.debug(`[ENEMY DEATH] Initialized knockback for ${deadEnemyInstance.name}: direction=(${normalizedDirection.x.toFixed(2)}, ${normalizedDirection.y.toFixed(2)}), distance=80px`);
-                                    
-                                    // --- Handle Loot Drop ---
-                                    if (deadEnemyInstance.lootTableId) {
-                                        this.logger.debug(`[ITEM DROP] Calculating loot for enemy ${deadEnemyInstance.name} with table ${deadEnemyInstance.lootTableId}`);
-                                        const droppedLoot = await this.lootService.calculateLootDrops(deadEnemyInstance.lootTableId);
-                                        if (droppedLoot.length > 0) {
-                                            this.logger.debug(`[ITEM DROP] Loot calculated: ${droppedLoot.length} items dropped`);
-                                            // Create and add dropped items to the zone
-                                            const dropTime = now;
-                                            const despawnTime = dropTime + this.ITEM_DESPAWN_TIME_MS;
-                                            for (const loot of droppedLoot) {
-                                                const droppedItem: DroppedItem = {
-                                                    id: uuidv4(),
-                                                    itemTemplateId: loot.itemTemplate.id,
-                                                    itemName: loot.itemTemplate.name,
-                                                    itemType: loot.itemTemplate.itemType,
-                                                    position: { ...deadEnemyInstance.position }, // Copy position
-                                                    quantity: loot.quantity,
-                                                    timeDropped: dropTime,
-                                                    despawnTime: despawnTime,
-                                                };
-                                                const added = this.zoneService.addDroppedItem(zoneId, droppedItem);
-                                                if (added) {
-                                                    this.logger.debug(`[ITEM DROP] Added item ${droppedItem.itemName} (${droppedItem.id}) at (${droppedItem.position.x}, ${droppedItem.position.y})`);
-                                                    // Queue the broadcast event
-                                                    const itemPayload = {
-                                                        id: droppedItem.id,
-                                                        itemTemplateId: droppedItem.itemTemplateId,
-                                                        itemName: droppedItem.itemName,
-                                                        itemType: droppedItem.itemType,
-                                                        spriteKey: loot.itemTemplate.spriteKey, // Get spriteKey from template
-                                                        position: droppedItem.position,
-                                                        quantity: droppedItem.quantity,
-                                                    };
-                                                    this.logger.debug(`[ITEM DROP] Queueing broadcast for item ${itemPayload.itemName} (${itemPayload.id})`);
-                                                    this.broadcastService.queueItemDropped(zoneId, itemPayload);
-                                                    // Item drop event queued
-                                                } else {
-                                                     this.logger.error(`Failed to add dropped item ${droppedItem.itemName} (${droppedItem.id}) to zone ${zoneId}`);
-                                                }
-                                            }
-                                        } else {
-                                            this.logger.debug(`[ITEM DROP] No loot calculated for enemy ${deadEnemyInstance.name} from table ${deadEnemyInstance.lootTableId}`);
-                                        }
-                                    } else {
-                                        this.logger.debug(`[ITEM DROP] Enemy ${deadEnemyInstance.name} died but has no loot table`);
-                                    }
-                                    
-                                    // --- Queue Death Event (Visual Effects) ---
-                                    this.broadcastService.queueDeath(zoneId, { entityId: deadEnemyId, type: 'enemy' });
-                                    
-                                    // NOTE: Enemy is NOT removed from zone - it stays as a "dying" enemy for 10 seconds
-                                    this.logger.debug(`[ENEMY DEATH] Enemy ${deadEnemyInstance.name} marked as dying, will decay in 10 seconds`);
-                                    
-                                } else {
-                                    this.logger.warn(`Could not find dead enemy instance ${deadEnemyId} in zone ${zoneId} for death handling.`);
-                                }
-                            } else {
-                                this.logger.warn(`Character ${character.id} reported targetDied, but couldn't find dead enemy ID in health updates.`);
-                            }
-                        }
+                        // NOTE: Enemy death effects (knockback, loot, animations) are now handled 
+                        // in CombatService.applyEnemyDeathEffects() for consistency across all damage sources
 
                         // --- Movement Simulation (Refactored) ---
                          let needsPositionUpdate = false;
@@ -423,26 +324,34 @@ export class GameLoopService implements OnApplicationShutdown {
 
                          // Get all player positions for collision detection
                          const playerPositions: Point[] = [];
-                         for (const [playerId, playerData] of this.connectedPlayers.entries()) {
-                             const playerCharacters = playerData.characters;
-                             for (const character of playerCharacters) {
-                                 const charState = this.zoneService.getCharacterStateById(zoneId, character.id);
-                                 if (charState && charState.positionX !== null && charState.positionY !== null) {
-                                     playerPositions.push({ x: charState.positionX, y: charState.positionY });
-                                 }
-                             }
-                         }
+                         // TODO: Fix connectedPlayers reference
+                         // for (const [playerId, playerData] of this.connectedPlayers.entries()) {
+                         //     const playerCharacters = playerData.characters;
+                         //     for (const character of playerCharacters) {
+                         //         const charState = this.zoneService.getCharacterStateById(zoneId, character.id);
+                         //         if (charState && charState.positionX !== null && charState.positionY !== null) {
+                         //             playerPositions.push({ x: charState.positionX, y: charState.positionY });
+                         //         }
+                         //     }
+                         // }
 
                          // Use collision-aware movement for enemies
-                         const enemyMoveResult: MovementResult = this.movementService.simulateMovementWithCollision(
+                         const enemyMoveResult: MovementResult = this.movementService.simulateMovement(
                              enemyCurrentPos,
                              enemyTargetPos,
                              enemySpeed,
-                             deltaTime,
-                             playerPositions, // Obstacles to avoid
-                             GameConfig.COMBAT.ENEMY_COLLISION_RADIUS,
-                             GameConfig.COMBAT.PLAYER_COLLISION_RADIUS
+                             deltaTime
                          );
+                         // TODO: Re-enable collision detection
+                         // const enemyMoveResult: MovementResult = this.movementService.simulateMovementWithCollision(
+                         //     enemyCurrentPos,
+                         //     enemyTargetPos,
+                         //     enemySpeed,
+                         //     deltaTime,
+                         //     playerPositions, // Obstacles to avoid
+                         //     GameConfig.COMBAT.ENEMY_COLLISION_RADIUS,
+                         //     GameConfig.COMBAT.PLAYER_COLLISION_RADIUS
+                         // );
 
                          if (enemyMoveResult.newPosition.x !== enemy.position.x || enemyMoveResult.newPosition.y !== enemy.position.y) {
                             enemyNeedsPositionUpdate = true;
