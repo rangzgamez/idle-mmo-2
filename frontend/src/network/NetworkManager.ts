@@ -260,6 +260,23 @@ export class NetworkManager {
         });
         // ---> END ADD <---
 
+        // Add abilities data listener
+        this.socket.on('abilitiesData', (data: { abilities: any[] }) => {
+            console.log('[NetworkManager] Received "abilitiesData" event:', data);
+            EventBus.emit('abilities-loaded', data);
+        });
+
+        // Add spell casting event listeners
+        this.socket.on('spellCast', (data: any) => {
+            console.log('[NetworkManager] Received "spellCast" event:', data);
+            EventBus.emit('spell-cast', data);
+        });
+
+        this.socket.on('spellDamage', (data: any) => {
+            console.log('[NetworkManager] Received "spellDamage" event:', data);
+            EventBus.emit('spell-damage', data);
+        });
+
         // Existing listeners (keep if needed)
         // this.socket.on('chatMessage', (data) => { /* ... */ });
     }

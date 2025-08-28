@@ -4,12 +4,14 @@ import { AppModule } from '../../app.module';
 import { UserService } from '../../user/user.service';
 import { EnemyService } from '../../enemy/enemy.service';
 import { ItemService } from '../../item/item.service';
+import { AbilityService } from '../../abilities/ability.service';
 import { Repository } from 'typeorm';
 import { ItemTemplate } from '../../item/item.entity';
 import { Enemy } from '../../enemy/enemy.entity';
 import { LootTable } from '../../loot/loot-table.entity';
 import { LootTableEntry } from '../../loot/loot-table-entry.entity';
 import { ItemType, EquipmentSlot } from '../../item/item.types';
+import { AbilityType, TargetType } from '../../abilities/ability.entity';
 import { getRepositoryToken } from '@nestjs/typeorm';
 
 async function seed() {
@@ -18,6 +20,7 @@ async function seed() {
   const userService = app.get(UserService);
   const enemyService = app.get(EnemyService);
   const itemService = app.get(ItemService);
+  const abilityService = app.get(AbilityService);
   
   // Get repositories directly for create operations
   const itemRepository = app.get<Repository<ItemTemplate>>(getRepositoryToken(ItemTemplate));
@@ -300,6 +303,42 @@ async function seed() {
       }
     }
 
+    // =========================
+    // 6. CREATE ABILITIES
+    // =========================
+    console.log('⚡ Creating abilities...');
+
+    const abilities = [
+      {
+        name: 'Rain of Arrows',
+        type: AbilityType.DAMAGE,
+        targetType: TargetType.AOE,
+        radius: 100,
+        damage: 50,
+        cooldown: 5000, // 5 seconds in milliseconds
+        manaCost: 20,
+        castTime: 1000, // 1 second cast time
+        icon: 'rain_of_arrows',
+      },
+    ];
+
+    for (const abilityData of abilities) {
+      try {
+        // Check if ability already exists
+        const existingAbility = await abilityService.findByName(abilityData.name);
+        
+        if (existingAbility) {
+          console.log(`⚠️  Ability ${abilityData.name} already exists, skipping...`);
+          continue;
+        }
+
+        await abilityService.create(abilityData);
+        console.log(`✅ Created ability: ${abilityData.name}`);
+      } catch (error) {
+        console.log(`❌ Failed to create ability ${abilityData.name}:`, error.message);
+      }
+    }
+
     console.log('🎉 Database seeding completed successfully!');
     console.log('');
     console.log('📊 Summary:');
@@ -307,6 +346,7 @@ async function seed() {
     console.log(`⚔️  Character Classes: Auto-seeded by service`);
     console.log(`🗡️  Items: ${itemTemplates.length}`);
     console.log(`👹 Enemies: ${enemies.length}`);
+    console.log(`⚡ Abilities: ${abilities.length}`);
     console.log('');
     console.log('🎮 You can now:');
     console.log('• Login with any test user (player1/password123, etc.)');

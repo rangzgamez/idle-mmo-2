@@ -24,6 +24,8 @@ import { InventoryService } from '../inventory/inventory.service'; // Import Inv
 import { BroadcastService } from './broadcast.service'; // Import BroadcastService
 import { calculateDistance } from './utils/geometry.utils'; // Import distance util
 import { EquipmentSlot } from '../item/item.types'; // <-- Import EquipmentSlot
+import { AbilityService } from '../abilities/ability.service'; // Import AbilityService
+import { CombatService } from './combat.service'; // Import CombatService
 
 // Add pickup range constant
 // const ITEM_PICKUP_RANGE = 50; // pixels // No longer used for initial command
@@ -48,6 +50,13 @@ interface DropInventoryItemPayload {
 interface EquipItemPayload {
   inventoryItemId: string;
   characterId: string;
+}
+
+// Cast spell payload
+interface CastSpellPayload {
+  abilityId: string;
+  targetX: number;
+  targetY: number;
 }
 interface UnequipItemPayload {
   characterId: string;
@@ -76,6 +85,8 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     private gameLoopService: GameLoopService, // Inject GameLoopService
     private inventoryService: InventoryService, // Inject InventoryService
     private broadcastService: BroadcastService, // Inject BroadcastService
+    private abilityService: AbilityService, // Inject AbilityService
+    private combatService: CombatService, // Inject CombatService
   ) {}
 
   afterInit(server: Server) {
@@ -769,4 +780,128 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
           throw new WsException('Failed to sort inventory.');
       }
   }
+
+  // =========================
+  // SPELL CASTING
+  // =========================
+  @SubscribeMessage('requestAbilities')
+  async handleRequestAbilities(
+    @ConnectedSocket() client: Socket,
+  ): Promise<void> {
+    try {
+      const abilities = await this.abilityService.findAll();
+      client.emit('abilitiesData', { abilities });
+      this.logger.log(`Sent ${abilities.length} abilities to client`);
+    } catch (error) {
+      this.logger.error(`Failed to fetch abilities: ${error.message}`);
+      client.emit('abilitiesData', { abilities: [] });
+    }
+  }
+
+  @SubscribeMessage('castSpell')
+  async handleCastSpell(
+    @MessageBody() data: CastSpellPayload,
+    @ConnectedSocket() client: Socket,
+  ): Promise<{ success: boolean; message?: string }> {
+    this.logger.log(`🎯 SPELL CAST: Received castSpell from user, data:`, JSON.stringify(data));
+    const user = client.data.user as User;
+    const zoneId = client.data.currentZoneId as string;
+
+    if (!user) {
+      this.logger.error(`Cast spell: User not authenticated`);
+      return { success: false, message: 'Not authenticated' };
+    }
+
+    if (!zoneId) {
+      this.logger.error(`Cast spell: User ${user.id} not in any zone`);
+      return { success: false, message: 'Not in a zone' };
+    }
+
+    const { abilityId, targetX, targetY } = data;
+
+    try {
+      // Validate ability exists
+      const ability = await this.abilityService.findById(abilityId);
+      if (!ability) {
+        return { success: false, message: 'Ability not found' };
+      }
+
+      // Get user's characters in the zone
+      const userCharacters = this.zoneService.getPlayerCharactersInZone(zoneId, user.id);
+      this.logger.log(`🎯 SPELL CAST: Found ${userCharacters?.length || 0} characters in zone for user ${user.username}`);
+      
+      if (!userCharacters || userCharacters.length === 0) {
+        return { success: false, message: 'No characters in zone' };
+      }
+
+      // For now, use the first character to cast the spell
+      const caster = userCharacters[0];
+
+      this.logger.log(`🎯 SPELL CAST: User ${user.username} casting ${ability.name} at (${targetX}, ${targetY}) with character ${caster.id}`);
+
+      // Validate cast range if needed (for future implementation)
+      // const distance = calculateDistance(caster.position, { x: targetX, y: targetY });
+      // if (distance > maxCastRange) return { success: false, message: 'Target too far' };
+
+      // Apply spell damage using consolidated CombatService
+      this.logger.log(`🎯 SPELL CAST: Applying spell damage via CombatService`);
+      const spellResults = await this.combatService.handleSpellDamage(
+        caster,
+        targetX,
+        targetY,
+        ability.radius || 100,
+        ability.damage || 50,
+        zoneId
+      );
+
+      // Send spell damage events if any enemies were hit
+      if (spellResults.length > 0) {
+        const spellDamageData = {
+          abilityId: ability.id,
+          abilityName: ability.name,
+          targetX,
+          targetY,
+          radius: ability.radius || 100,
+          damage: ability.damage || 50,
+          affectedEnemies: spellResults.map(result => ({
+            enemyId: result.enemyId,
+            damage: result.damageDealt
+          }))
+        };
+
+        this.broadcastService.queueSpellDamage(zoneId, spellDamageData);
+        this.server.to(zoneId).emit('spellDamage', spellDamageData);
+        this.logger.log(`🎯 SPELL DAMAGE: ${spellResults.length} enemies hit, damage events sent`);
+      }
+
+      // Queue visual event
+      this.broadcastService.queueSpellCast(zoneId, {
+        casterId: caster.id,
+        abilityId: ability.id,
+        abilityName: ability.name,
+        targetX,
+        targetY,
+        radius: ability.radius,
+      });
+
+      // TEMPORARY: Also send directly to test
+      this.server.to(zoneId).emit('spellCast', {
+        casterId: caster.id,
+        abilityId: ability.id,
+        abilityName: ability.name,
+        targetX,
+        targetY,
+        radius: ability.radius,
+      });
+      this.logger.log(`🎯 SPELL CAST: Damage applied and visual event sent`);
+
+      return { success: true };
+
+    } catch (error) {
+      this.logger.error(`Error casting spell: ${error.message}`);
+      return { success: false, message: 'Spell casting failed' };
+    }
+  }
+
+  // Spell damage now handled by CombatService for consistency
 }

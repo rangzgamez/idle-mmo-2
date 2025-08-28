@@ -15,9 +15,10 @@ import { SpawningService } from './spawning.service'; // <-- Add this import
 import { BroadcastService } from './broadcast.service'; // <-- Add this import
 import { InventoryModule } from 'src/inventory/inventory.module';
 import { LootModule } from 'src/loot/loot.module';
+import { AbilityModule } from '../abilities/ability.module'; // Import AbilityModule
 
 @Module({
-  imports: [UserModule, CharacterModule, EnemyModule, InventoryModule, LootModule], // Make services available for injection
+  imports: [UserModule, CharacterModule, EnemyModule, InventoryModule, LootModule, AbilityModule], // Make services available for injection
   providers: [
     GameGateway,
     ZoneService,
