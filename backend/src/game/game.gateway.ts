@@ -803,7 +803,6 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     @MessageBody() data: CastSpellPayload,
     @ConnectedSocket() client: Socket,
   ): Promise<{ success: boolean; message?: string }> {
-    this.logger.log(`🎯 SPELL CAST: Received castSpell from user, data:`, JSON.stringify(data));
     const user = client.data.user as User;
     const zoneId = client.data.currentZoneId as string;
 
@@ -820,7 +819,7 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     const { abilityId, targetX, targetY } = data;
 
     try {
-      // Validate ability exists
+      // Basic validation - ability exists
       const ability = await this.abilityService.findById(abilityId);
       if (!ability) {
         return { success: false, message: 'Ability not found' };
@@ -828,8 +827,6 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
 
       // Get user's characters in the zone
       const userCharacters = this.zoneService.getPlayerCharactersInZone(zoneId, user.id);
-      this.logger.log(`🎯 SPELL CAST: Found ${userCharacters?.length || 0} characters in zone for user ${user.username}`);
-      
       if (!userCharacters || userCharacters.length === 0) {
         return { success: false, message: 'No characters in zone' };
       }
@@ -837,68 +834,19 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
       // For now, use the first character to cast the spell
       const caster = userCharacters[0];
 
-      this.logger.log(`🎯 SPELL CAST: User ${user.username} casting ${ability.name} at (${targetX}, ${targetY}) with character ${caster.id}`);
-
-      // Validate cast range if needed (for future implementation)
-      // const distance = calculateDistance(caster.position, { x: targetX, y: targetY });
-      // if (distance > maxCastRange) return { success: false, message: 'Target too far' };
-
-      // Apply spell damage using consolidated CombatService
-      this.logger.log(`🎯 SPELL CAST: Applying spell damage via CombatService`);
-      const spellResults = await this.combatService.handleSpellDamage(
-        caster,
-        targetX,
-        targetY,
-        ability.radius || 100,
-        ability.damage || 50,
-        zoneId
-      );
-
-      // Send spell damage events if any enemies were hit
-      if (spellResults.length > 0) {
-        const spellDamageData = {
-          abilityId: ability.id,
-          abilityName: ability.name,
-          targetX,
-          targetY,
-          radius: ability.radius || 100,
-          damage: ability.damage || 50,
-          affectedEnemies: spellResults.map(result => ({
-            enemyId: result.enemyId,
-            damage: result.damageDealt
-          }))
-        };
-
-        this.broadcastService.queueSpellDamage(zoneId, spellDamageData);
-        this.server.to(zoneId).emit('spellDamage', spellDamageData);
-        this.logger.log(`🎯 SPELL DAMAGE: ${spellResults.length} enemies hit, damage events sent`);
+      // Queue spell cast for processing by game loop (like move/attack commands)
+      const success = this.zoneService.queueSpellCast(zoneId, caster.id, abilityId, targetX, targetY);
+      
+      if (success) {
+        this.logger.log(`🎯 SPELL QUEUED: User ${user.username} queued ${ability.name} at (${targetX}, ${targetY}) with character ${caster.id}`);
+        return { success: true };
+      } else {
+        this.logger.warn(`🎯 SPELL QUEUE FAILED: Could not queue spell for character ${caster.id}`);
+        return { success: false, message: 'Failed to queue spell cast' };
       }
 
-      // Queue visual event
-      this.broadcastService.queueSpellCast(zoneId, {
-        casterId: caster.id,
-        abilityId: ability.id,
-        abilityName: ability.name,
-        targetX,
-        targetY,
-        radius: ability.radius,
-      });
-
-      // TEMPORARY: Also send directly to test
-      this.server.to(zoneId).emit('spellCast', {
-        casterId: caster.id,
-        abilityId: ability.id,
-        abilityName: ability.name,
-        targetX,
-        targetY,
-        radius: ability.radius,
-      });
-      this.logger.log(`🎯 SPELL CAST: Damage applied and visual event sent`);
-
-      return { success: true };
-
     } catch (error) {
-      this.logger.error(`Error casting spell: ${error.message}`);
+      this.logger.error(`Error queueing spell cast: ${error.message}`);
       return { success: false, message: 'Spell casting failed' };
     }
   }

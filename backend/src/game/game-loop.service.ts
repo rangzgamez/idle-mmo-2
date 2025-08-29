@@ -1,6 +1,6 @@
 import { Injectable, Logger, OnApplicationShutdown } from '@nestjs/common';
 import { Server } from 'socket.io';
-import { ZoneService, RuntimeCharacterData } from './zone.service';
+import { ZoneService, RuntimeCharacterData, QueuedSpellCast } from './zone.service';
 import { CombatService } from './combat.service';
 import { AIService } from './ai.service';
 import { EnemyInstance } from './interfaces/enemy-instance.interface';
@@ -13,6 +13,7 @@ import { LootService } from '../loot/loot.service';
 import { v4 as uuidv4 } from 'uuid';
 import { DroppedItem } from './interfaces/dropped-item.interface';
 import { InventoryService } from '../inventory/inventory.service';
+import { AbilityService } from '../abilities/ability.service';
 
 @Injectable()
 export class GameLoopService implements OnApplicationShutdown {
@@ -38,6 +39,7 @@ export class GameLoopService implements OnApplicationShutdown {
         private broadcastService: BroadcastService,
         private lootService: LootService,
         private inventoryService: InventoryService,
+        private abilityService: AbilityService,
     ) {}
 
     // Method to start the loop, called by GameGateway
@@ -223,6 +225,12 @@ export class GameLoopService implements OnApplicationShutdown {
 
                     } // End character loop
                 } // End player loop
+
+                // --- Process Queued Spell Casts ---
+                const queuedSpells = this.zoneService.getAndClearQueuedSpells(zoneId);
+                for (const spell of queuedSpells) {
+                    await this.processSpellCast(spell, zoneId, now);
+                }
 
                 // --- Enemy AI, State & Movement Processing (Refactored) ---
                  // Fetch fresh list in case some died from player attacks earlier in the tick
@@ -438,4 +446,92 @@ export class GameLoopService implements OnApplicationShutdown {
     }
 
     // --- Helper Functions ---
+
+    /**
+     * Processes a single spell cast, applying damage and generating events.
+     * This ensures spell damage uses the same consolidated flow as normal attacks.
+     */
+    private async processSpellCast(spell: QueuedSpellCast, zoneId: string, now: number): Promise<void> {
+        try {
+            // Get the caster character
+            const caster = this.zoneService.getCharacterStateById(zoneId, spell.casterId);
+            if (!caster) {
+                this.logger.warn(`[ProcessSpell] Caster ${spell.casterId} not found in zone ${zoneId}`);
+                return;
+            }
+
+            // Get the ability data
+            const ability = await this.abilityService.findById(spell.abilityId);
+            if (!ability) {
+                this.logger.warn(`[ProcessSpell] Ability ${spell.abilityId} not found`);
+                return;
+            }
+
+            this.logger.log(`🎯 PROCESSING SPELL: ${caster.name} casting ${ability.name} at (${spell.targetX}, ${spell.targetY})`);
+
+            // Apply spell damage using consolidated CombatService
+            const spellResults = await this.combatService.handleSpellDamage(
+                caster,
+                spell.targetX,
+                spell.targetY,
+                ability.radius || 100,
+                ability.damage || 50,
+                zoneId
+            );
+
+            // --- Generate Enemy Health Updates (like normal attacks) ---
+            const enemyHealthUpdates: Array<{ id: string; health: number }> = [];
+            for (const result of spellResults) {
+                enemyHealthUpdates.push({
+                    id: result.enemyId,
+                    health: result.targetCurrentHealth
+                });
+            }
+
+            // Queue enemy health updates (same as normal combat)
+            enemyHealthUpdates.forEach(enemyUpdate => {
+                const enemy = this.zoneService.getEnemyInstanceById(zoneId, enemyUpdate.id);
+                const updatePayload = { 
+                    id: enemyUpdate.id, 
+                    x: enemy?.position.x, 
+                    y: enemy?.position.y,
+                    health: enemyUpdate.health 
+                };
+                this.broadcastService.queueEntityUpdate(zoneId, updatePayload);
+            });
+
+            // Send spell damage events for visual effects (immediately for screen shake timing)
+            if (spellResults.length > 0) {
+                const spellDamageData = {
+                    abilityId: ability.id,
+                    abilityName: ability.name,
+                    targetX: spell.targetX,
+                    targetY: spell.targetY,
+                    radius: ability.radius || 100,
+                    damage: ability.damage || 50,
+                    affectedEnemies: spellResults.map(result => ({
+                        enemyId: result.enemyId,
+                        damage: result.damageDealt
+                    }))
+                };
+                
+                // Queue spell damage events (will be sent with other events at end of tick)
+                this.broadcastService.queueSpellDamage(zoneId, spellDamageData);
+                this.logger.log(`🎯 SPELL PROCESSED: ${spellResults.length} enemies hit, events sent immediately`);
+            }
+
+            // Queue visual spell cast event
+            this.broadcastService.queueSpellCast(zoneId, {
+                casterId: caster.id,
+                abilityId: ability.id,
+                abilityName: ability.name,
+                targetX: spell.targetX,
+                targetY: spell.targetY,
+                radius: ability.radius,
+            });
+
+        } catch (error) {
+            this.logger.error(`[ProcessSpell] Error processing spell ${spell.id}: ${error.message}`, error.stack);
+        }
+    }
 }

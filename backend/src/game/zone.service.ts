@@ -37,13 +37,23 @@ export interface ZoneCharacterState {
     // Add other necessary display fields? Max Health?
 }
 
-// Interface for the overall zone state
+// Interface for queued spell casts
+export interface QueuedSpellCast {
+    id: string; // Unique ID for this spell cast
+    casterId: string; // Character ID who cast the spell
+    abilityId: string; // Ability ID
+    targetX: number;
+    targetY: number;
+    timestamp: number; // When the spell was queued
+}
 
+// Interface for the overall zone state
 interface ZoneState {
     players: Map<string, PlayerInZone>; // Existing player state
     enemies: Map<string, EnemyInstance>; // Enemy instances, keyed by id
     nests: Map<string, SpawnNest>; // <-- ADD Nests map
     droppedItems: Map<string, DroppedItem>; // <-- ADD Dropped Items map
+    queuedSpells: QueuedSpellCast[]; // <-- ADD Spell cast queue
     // Add items map/list later
 }
 // Export this interface so CombatService can use it
@@ -103,6 +113,7 @@ export class ZoneService implements OnModuleInit {
             enemies: new Map(),
             nests: new Map(), // Initialize empty nests map
             droppedItems: new Map(), // <-- Initialize dropped items map
+            queuedSpells: [], // <-- Initialize spell cast queue
         });
     }
 
@@ -181,7 +192,8 @@ export class ZoneService implements OnModuleInit {
                  players: new Map(),
                  enemies: new Map(),
                  nests: new Map(),
-                 droppedItems: new Map() // <-- Initialize dropped items for new zone
+                 droppedItems: new Map(), // <-- Initialize dropped items for new zone
+                 queuedSpells: [] // <-- Initialize spell cast queue for new zone
             });
         }
         const zone = this.zones.get(zoneId)!;
@@ -1053,5 +1065,60 @@ export class ZoneService implements OnModuleInit {
 
         this.logger.debug(`[ZoneService] Set attack target for ${characterId} to ${targetEnemyId} and state to 'attacking'`);
         return true;
+    }
+
+    /**
+     * Queues a spell cast to be processed by the game loop.
+     * @param zoneId The ID of the zone.
+     * @param casterId The ID of the character casting the spell.
+     * @param abilityId The ID of the ability being cast.
+     * @param targetX The X coordinate of the target.
+     * @param targetY The Y coordinate of the target.
+     * @returns True if the spell was successfully queued, false otherwise.
+     */
+    queueSpellCast(zoneId: string, casterId: string, abilityId: string, targetX: number, targetY: number): boolean {
+        const zone = this.zones.get(zoneId);
+        if (!zone) {
+            this.logger.warn(`[queueSpellCast] Zone not found: ${zoneId}`);
+            return false;
+        }
+
+        // Validate the caster exists in the zone
+        const caster = this.findCharacterInZoneById(zone, casterId);
+        if (!caster) {
+            this.logger.warn(`[queueSpellCast] Character ${casterId} could not be located in zone ${zoneId}`);
+            return false;
+        }
+
+        // TODO: Add validation for ability existence, cooldowns, mana costs, etc.
+
+        const spellCast: QueuedSpellCast = {
+            id: uuidv4(),
+            casterId,
+            abilityId,
+            targetX,
+            targetY,
+            timestamp: Date.now()
+        };
+
+        zone.queuedSpells.push(spellCast);
+        this.logger.debug(`[ZoneService] Queued spell cast ${spellCast.id} for character ${casterId} in zone ${zoneId}`);
+        return true;
+    }
+
+    /**
+     * Gets and clears all queued spell casts for processing by the game loop.
+     * @param zoneId The ID of the zone.
+     * @returns Array of queued spell casts.
+     */
+    getAndClearQueuedSpells(zoneId: string): QueuedSpellCast[] {
+        const zone = this.zones.get(zoneId);
+        if (!zone) {
+            return [];
+        }
+
+        const spells = [...zone.queuedSpells]; // Copy the array
+        zone.queuedSpells = []; // Clear the queue
+        return spells;
     }
 }

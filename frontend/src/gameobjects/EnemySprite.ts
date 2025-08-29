@@ -67,7 +67,7 @@ export class EnemySprite extends Phaser.GameObjects.Sprite {
             // Show health bar only when damaged (health < max)
             const currentMaxHealth = maxHealth || this.healthBar.getMaxHealth();
             const shouldShowHealthBar = currentHealth < currentMaxHealth;
-            this.healthBar.setVisible(true);
+            this.healthBar.setVisible(shouldShowHealthBar);
         }
     }
 

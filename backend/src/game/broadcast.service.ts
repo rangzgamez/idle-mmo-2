@@ -239,6 +239,15 @@ export class BroadcastService {
             this.combatActionQueue.delete(zoneId); // Clear queue
         }
 
+        // IMPORTANT: Send spell damage events BEFORE death events 
+        // so frontend can track enemies as "recently attacked" before processing deaths
+        if (spellDamages && spellDamages.length > 0) {
+            spellDamages.forEach(spellDamage => {
+                this.server?.to(zoneId).emit('spellDamage', spellDamage);
+            });
+            this.spellDamageQueue.delete(zoneId);
+        }
+
         if (deaths && deaths.length > 0) {
              // Client expects individual 'entityDied' events
             deaths.forEach(death => {
@@ -299,12 +308,7 @@ export class BroadcastService {
             this.spellCastQueue.delete(zoneId);
         }
 
-        if (spellDamages && spellDamages.length > 0) {
-            spellDamages.forEach(spellDamage => {
-                this.server?.to(zoneId).emit('spellDamage', spellDamage);
-            });
-            this.spellDamageQueue.delete(zoneId);
-        }
+        // Note: spellDamages are now emitted earlier in the function (before deaths)
     }
 
     // ---> ADD Helper function getQueue if it doesn't exist
